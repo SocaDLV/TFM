@@ -1,0 +1,6 @@
+*.o
+*.out
+*.trc
+*.log
+__pycache__/
+TFMresults/
