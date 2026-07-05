@@ -1,5 +1,5 @@
 model:
-  model_name: mixtral
+  model_name: deepseekV3
 
 system:
   gpu_gen: B100 # e.g. A100, H100, B100, B200 (currently only support 4 generation)
@@ -27,7 +27,7 @@ system:
     decode_mode: on
 
 serving:
-  max_batch_size: 128
+  max_batch_size: 32
   max_process_token: 0
 
 simulation:

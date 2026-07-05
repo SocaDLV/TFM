@@ -12,6 +12,8 @@
 #include "scheduler/sequence.h"
 #include "dram/power.h"
 
+#include <fstream>
+
 namespace llm_system {
 
 class Device : public std::enable_shared_from_this<Device> {
@@ -19,6 +21,11 @@ class Device : public std::enable_shared_from_this<Device> {
   friend class Cluster;
 
  public:
+
+  ~Device();
+  std::ofstream tfm_trace_file;
+  void log_tfm_event(time_ns start, time_ns end, const std::string& event_type, const std::string& details);
+
   using Ptr = std::shared_ptr<Device>;
 
   [[nodiscard]] static Ptr Create(SystemConfig config, int device_total_rank,

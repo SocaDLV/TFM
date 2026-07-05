@@ -77,14 +77,28 @@ void ModuleGraph::sync_devices() {
     if (!input->timeboard_synced) {
       Device::Ptr device;
       time_ns time = 0;
+      
+      // 1. Calculan el tiempo de la GPU más atrasada (lenta)
       for (Tensor::Ptr tensor : dependency_tensor_list) {
         device = tensor->get_device();
         time_ns device_time = device->get_time();
         time = std::max(time, device_time);
       }
+      
+      // 2. Obligan a todas a saltar a ese tiempo (Sincronización)
       for (Tensor::Ptr tensor : dependency_tensor_list) {
         tensor->timeboard_synced = true;
         device = tensor->get_device();
+        
+        // --- INICIO AÑADIDO TFM: LOG DE STALL ---
+        time_ns current_device_time = device->get_time();
+        if (time > current_device_time) {
+            // Si el tiempo máximo es mayor que mi tiempo actual, significa que me toca esperar
+            std::string details = "Waiting for sync. Jumped from " + std::to_string(current_device_time);
+            device->log_tfm_event(current_device_time, time, "NETWORK_STALL", details);
+        }
+        // --- FIN AÑADIDO TFM ---
+        
         device->set_time(time);
       }
       input->timeboard_synced = false;
@@ -305,6 +319,30 @@ void TopModuleGraph::set_pop_status() {
   status.memory_size += exec_status.memory_size;
 
   status.opb = exec_status.opb;
+
+// --- INICIO AÑADIDO TFM: LOG DE EJECUCIÓN (CÓMPUTO/MEMORIA) ---
+  if (device != nullptr) {
+      time_ns end_time = status.device_time;
+      time_ns start_time = end_time - exec_status.total_duration;
+      
+      std::string layer_name = "UNKNOWN_LAYER";
+      if (*current_module != nullptr) {
+          // AÇÒ EVITA L'EXPLOSIÓ: Comprovem si és un node POP abans de demanar-li el nom
+          if (!(*current_module)->is_pop()) {
+              layer_name = (*current_module)->get_name();
+          } else {
+              layer_name = "POP_OPERATION";
+          }
+      }
+      
+      std::string details = "ProcType:" + std::to_string((int)exec_status.processor_type) + 
+                            "|Comp_ns:" + std::to_string(exec_status.compute_duration) + 
+                            "|Mem_ns:" + std::to_string(exec_status.memory_duration);
+      
+      device->log_tfm_event(start_time, end_time, layer_name, details);
+  }
+  // --- FIN AÑADIDO TFM ---
+
 }
 
 void TopModuleGraph::print_graph() {

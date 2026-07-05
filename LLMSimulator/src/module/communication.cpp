@@ -2,32 +2,9 @@
 #include "scheduler/scheduler.h"
 
 #include "common/assert.h"
-
-#include <fstream>
-#include <chrono>
-#include <iomanip>
-#include <sstream>
 // AllReduce //
 
 namespace llm_system {
-
-// --- INICIO CÓDIGO TFM: Generador de nombre con timestamp ---
-std::string get_trace_filename() {
-    static std::string filename = "";
-    // Si es la primera vez que se llama en esta ejecución, calculamos la hora
-    if (filename.empty()) {
-        auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::stringstream ss;
-        // Formato: traces/raw_network_trace_YYMMDD_HHMMSS.trc
-        ss << "traces/raw_network_trace_" 
-           << std::put_time(std::localtime(&time), "%y%m%d_%H%M%S") 
-           << ".trc";
-        filename = ss.str();
-    }
-    return filename; // Las siguientes veces devolverá el mismo nombre
-}
-// --- FIN CÓDIGO TFM ---
 
 AllReduce::AllReduce(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
@@ -163,43 +140,18 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst / e_tp_dg) * e_tp_dg;
       int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
 
-      // --- INICIO CÓDIGO TFM: Variable para la traza de este destino específico ---
-      int tokens_to_this_dst = 0;
-      // ---------------------------------------------------------------------------
-
       if((int)(dst / 8) == src_node){ 
         // intra node
         for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
           intra_node_comm_token += sequences_metadata->local_num_token_in_expert[e_id]; // to the experts in a dst device
-          tokens_to_this_dst += sequences_metadata->local_num_token_in_expert[e_id];    // TFM: Contamos para la traza
         }
       }
       else{ 
         // inter node
         for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
           inter_node_comm_token += sequences_metadata->local_num_token_in_expert[e_id];
-          tokens_to_this_dst += sequences_metadata->local_num_token_in_expert[e_id];    // TFM: Contamos para la traza
         }
       }
-
-      // --- INICIO CÓDIGO TFM: Generación de la traza a fichero ---
-      // --- INICIO CÓDIGO TFM: Generación de la traza a fichero (SCATTER) ---
-      if (tokens_to_this_dst > 0 && src != dst) {
-          std::ofstream trace_file(get_trace_filename(), std::ios_base::app);
-          int bytes_sent = tokens_to_this_dst * k * input->precision_byte / ne_tp_dg;
-          std::string link_type = ((int)(dst / 8) == src_node) ? "INTRA_NODE" : "INTER_NODE";
-          
-          // Capturamos el reloj actual del dispositivo en nanosegundos
-          long long current_time_ns = device->status.device_time;
-          
-          trace_file << "[" << this->module_map_name << "] TIME_NS:" << current_time_ns 
-                     << " TYPE_OP:MoEScatter"
-                     << " SRC:" << src << " DST:" << dst 
-                     << " BYTES:" << bytes_sent << " LINK:" << link_type << "\n";
-          
-          trace_file.close();
-      }
-      // --- FIN CÓDIGO TFM ---
     }
   }
 
@@ -448,43 +400,18 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       int dst_device_rank = dst_dp_idx * ne_tp_dg;
       int dst_node = dst_device_rank / device->config.num_device;
 
-      // --- INICIO CÓDIGO TFM: Variable para la traza de Gather ---
-      int tokens_to_this_dst = 0;
-      // -----------------------------------------------------------
-
       if(dst_node == src_node){ 
         // intra node
         for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
           intra_node_comm_token += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id]; // to orig device from the experts in a src device
-          tokens_to_this_dst += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id]; // TFM
         }
       }
       else{ 
         // inter node
         for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
           inter_node_comm_token += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id];
-          tokens_to_this_dst += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id]; // TFM
         }
       }
-
-      // --- INICIO CÓDIGO TFM: Generación de la traza a fichero (GATHER) ---
-      if (tokens_to_this_dst > 0) {
-          std::ofstream trace_file(get_trace_filename(), std::ios_base::app);
-          int bytes_sent = tokens_to_this_dst * k * input->precision_byte / ne_tp_dg;
-          std::string link_type = (dst_node == src_node) ? "INTRA_NODE" : "INTER_NODE";
-          
-          // Capturamos el reloj actual del dispositivo en nanosegundos
-          long long current_time_ns = device->status.device_time;
-
-          trace_file << "[" << this->module_map_name << "] TIME_NS:" << current_time_ns 
-                     << " TYPE_OP:MoEGather"
-                     << " SRC:" << src_device_rank << " DST:" << dst_device_rank 
-                     << " BYTES:" << bytes_sent << " LINK:" << link_type << "\n";
-          
-          trace_file.close();
-      }
-      
-      // --- FIN CÓDIGO TFM ---
     }
   }
 

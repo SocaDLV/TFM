@@ -1,9 +1,9 @@
-#include <cstdint>
 #ifndef RAMULATOR_BASE_UTILS_H
 #define RAMULATOR_BASE_UTILS_H
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 namespace Ramulator {
 

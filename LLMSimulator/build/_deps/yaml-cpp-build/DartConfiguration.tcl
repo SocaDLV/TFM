@@ -11,7 +11,7 @@ BuildDirectory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/_deps/yaml-cpp-b
 CostDataFile: 
 
 # Site is something like machine.domain, i.e. pragmatic.crd
-Site: 192.168.1.138
+Site: fedora.fritz.box
 
 # Build name is osname-revision-compiler, i.e. Linux-2.4.2-2smp-c++
 BuildName: Linux-c++

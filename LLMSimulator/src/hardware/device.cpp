@@ -60,6 +60,15 @@ Device::Device(SystemConfig config, int device_total_rank, Cluster_ptr cluster)
   mmap_controller = MMapController::Create(memory_config);
   use_ramulator = config.use_ramulator;
   perform_execution = false;
+
+  // --- INICIO AÑADIDO TFM ---
+  std::string filename = "TFM_device_" + std::to_string(device_total_rank) + ".trc";
+  tfm_trace_file.open(filename, std::ios::out);
+  if (tfm_trace_file.is_open()) {
+      tfm_trace_file << "START_NS,END_NS,DURATION,TYPE,DETAILS\n";
+  }
+  // --- FIN AÑADIDO TFM ---
+
 }
 
 void Device::set_dependency() { top_module_graph->set_dependency(); }
@@ -220,6 +229,22 @@ void Device::initializeDRAM(int ProcessorType, DramEnergy dramEnergy) {
   dramEnergy.kALL_WRITE_energy_j_ *= num_pseudo_ch;
 
   top_module_graph->initializeDRAM(ProcessorType, dramEnergy);
+}
+
+void Device::log_tfm_event(time_ns start, time_ns end, const std::string& event_type, const std::string& details) {
+    if (tfm_trace_file.is_open() && end >= start) {
+        tfm_trace_file << start << "," 
+                       << end << "," 
+                       << (end - start) << ","
+                       << event_type << ","
+                       << details << std::endl; // <--- std::endl força el guardat immediat al disc
+    }
+}
+
+Device::~Device() {
+    if (tfm_trace_file.is_open()) {
+        tfm_trace_file.close();
+    }
 }
 
 };  // namespace llm_system
