@@ -2,85 +2,41 @@
 #include "scheduler/scheduler.h"
 #include "common/assert.h"
 
-// --- INICIO CÓDIGO TFM: BOOKSIM CO-SIMULATION MANAGER ---
+// --- INICIO CÓDIGO TFM: ORÁCULO DE BOOKSIM2 ---
 #include <map>
 #include <vector>
 #include <string>
-#include <cmath>
-#include <iostream>
+#include <unordered_set>
 
-// Enlace con la API de BookSim2
 extern void BookSim_Initialize(const char* config_file);
 extern void BookSim_InjectPacket(int src, int dst, int size_in_flits);
 extern void BookSim_AdvanceCycle();
 extern bool BookSim_CheckReceived(int& src, int& dst);
 
-struct BookSimTraffic {
-    int src;
-    int dst;
-    int flits;
-};
-
 class BookSimCoSimManager {
 public:
     static std::map<std::string, int> calls_per_module;
-    static std::map<std::string, std::vector<BookSimTraffic>> traffic_per_module;
-    static std::map<std::string, std::vector<llm_system::Device::Ptr>> devices_per_module;
+    static std::map<std::string, double> cached_latency;
+    static int total_injected;
+    static int total_received;
     static bool initialized;
 
     static void Init() {
         if (!initialized) {
-            // ATENCIÓN: Asegúrate de que test.cfg tiene el número de nodos correcto (ej. k=8, n=1 para 8 GPUs)
             BookSim_Initialize("test.cfg"); 
             initialized = true;
+            total_injected = 0;
+            total_received = 0;
         }
-    }
-
-    static void TriggerBarrier(const std::string& mod_name) {
-        Init();
-        
-        int total_injected = 0;
-        // 1. Inyectar todo el tráfico de la capa simultáneamente
-        for(auto& t : traffic_per_module[mod_name]) {
-            BookSim_InjectPacket(t.src, t.dst, t.flits);
-            total_injected++;
-        }
-        
-        // 2. Simular la red hasta que todos los paquetes hayan aterrizado
-        int total_received = 0;
-        int cycles = 0;
-        while(total_received < total_injected) {
-            BookSim_AdvanceCycle();
-            cycles++;
-            int arr_src, arr_dst;
-            while(BookSim_CheckReceived(arr_src, arr_dst)) {
-                total_received++;
-            }
-        }
-        
-        // 3. Aplicar la latencia real a todas las GPUs (Asumimos 1 ciclo de BookSim = 1 ns, ajustable si es necesario)
-        time_ns network_latency = cycles * 1.0; 
-        
-        for(auto& dev : devices_per_module[mod_name]) {
-            dev->status.device_time += network_latency;
-            // Para mantener consistencia con los streams internos del simulador
-            dev->status.high_time += network_latency;
-            dev->status.low_time += network_latency;
-        }
-        
-        // 4. Limpieza de estructuras para la siguiente capa
-        traffic_per_module.erase(mod_name);
-        devices_per_module.erase(mod_name);
-        calls_per_module.erase(mod_name);
     }
 };
 
 std::map<std::string, int> BookSimCoSimManager::calls_per_module;
-std::map<std::string, std::vector<BookSimTraffic>> BookSimCoSimManager::traffic_per_module;
-std::map<std::string, std::vector<llm_system::Device::Ptr>> BookSimCoSimManager::devices_per_module;
+std::map<std::string, double> BookSimCoSimManager::cached_latency;
+int BookSimCoSimManager::total_injected = 0;
+int BookSimCoSimManager::total_received = 0;
 bool BookSimCoSimManager::initialized = false;
 // --- FIN CÓDIGO TFM ---
-
 
 namespace llm_system {
 
@@ -172,55 +128,99 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
     return output;
   }
 
-  int src = device->device_total_rank;
+  BookSimCoSimManager::Init();
+
+  int total_num_device = device->config.num_device * device->config.num_node;
   int ne_tp_dg = device->model_config.ne_tp_dg;
   int e_tp_dg = device->model_config.e_tp_dg;
-  int total_num_device = device->config.num_device * device->config.num_node;
+  std::string layer_name = this->name;
+  double network_latency_ns = 0.0;
 
-  std::vector<int> tp_sharing_device_list = {};
-  int device_list_offset = src / ne_tp_dg * ne_tp_dg;
-  for(int device_idx = device_list_offset; device_idx < device_list_offset + ne_tp_dg; device_idx++){
-    tp_sharing_device_list.push_back(device_idx);
+  // --- INICIO CÓDIGO TFM: ORÁCULO SCATTER ---
+  if (BookSimCoSimManager::calls_per_module[layer_name] == 0) {
+      // Somos la GPU 0 en llegar. Predecimos el tráfico de todo el clúster.
+      int MTU = 256;          
+      int HEADER_SIZE = 24;   
+      int FLIT_SIZE = 32;     
+
+      for(int src = 0; src < total_num_device; src++) {
+          int src_dp_idx = src / ne_tp_dg;
+          std::vector<int> tp_sharing_device_list = {};
+          int device_list_offset = src / ne_tp_dg * ne_tp_dg;
+          for(int device_idx = device_list_offset; device_idx < device_list_offset + ne_tp_dg; device_idx++){
+            tp_sharing_device_list.push_back(device_idx);
+          }
+          std::unordered_set<int> set_tp_devices(tp_sharing_device_list.begin(), tp_sharing_device_list.end());
+
+          for(int dst = 0; dst < total_num_device; dst++) {
+              if(set_tp_devices.count(dst) == 0 && src != dst) {
+                  int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst / e_tp_dg) * e_tp_dg;
+                  int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
+                  
+                  int tokens_to_dst = 0;
+                  for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
+                      tokens_to_dst += sequences_metadata->scheduler->running_queue[src_dp_idx]->local_num_token_in_expert[e_id];
+                  }
+
+                  long bytes_to_dst = (long)tokens_to_dst * k * input->precision_byte / ne_tp_dg;
+
+                  if (bytes_to_dst > 0) {
+                      int num_packets = (bytes_to_dst + MTU - 1) / MTU;
+                      for (int p = 0; p < num_packets; p++) {
+                          long payload = (p == num_packets - 1) ? (bytes_to_dst % MTU) : MTU;
+                          if (payload == 0) payload = MTU;
+                          int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
+                          
+                          BookSim_InjectPacket(src, dst, flits);
+                          BookSimCoSimManager::total_injected++;
+                      }
+                  }
+              }
+          }
+      }
+
+      // Simulamos toda la capa en BookSim2 de golpe
+      int cycles = 0;
+      int arr_src, arr_dst;
+      while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
+          BookSim_AdvanceCycle();
+          cycles++;
+          while(BookSim_CheckReceived(arr_src, arr_dst)) {
+              BookSimCoSimManager::total_received++;
+          }
+      }
+
+      // Guardamos el resultado en caché (1 ciclo = 1 ns)
+      BookSimCoSimManager::cached_latency[layer_name] = cycles * 1.0;
   }
-  std::unordered_set<int> set_tp_devices(tp_sharing_device_list.begin(), tp_sharing_device_list.end());
 
-  // --- INICIO CÓDIGO TFM: EXTRACCIÓN DE DATOS Y PACKETIZATION ---
-  int MTU = 256;          // Maximum Transmission Unit (Payload)
-  int HEADER_SIZE = 24;   // Cabeceras de red por paquete
-  int FLIT_SIZE = 32;     // Tamaño del Flit físico de BookSim2
+  // Todas las GPUs (incluida la 0) leen la caché
+  network_latency_ns = BookSimCoSimManager::cached_latency[layer_name];
 
-  for(int dst = 0; dst < total_num_device; dst++) {
-    if(set_tp_devices.count(dst) == 0 && src != dst) {
-      int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst / e_tp_dg) * e_tp_dg;
-      int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
-      
-      int tokens_to_dst = 0;
-      for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
-        tokens_to_dst += sequences_metadata->local_num_token_in_expert[e_id];
-      }
-
-      long bytes_to_dst = (long)tokens_to_dst * k * input->precision_byte / ne_tp_dg;
-
-      if (bytes_to_dst > 0) {
-        int num_packets = (bytes_to_dst + MTU - 1) / MTU;
-        for (int p = 0; p < num_packets; p++) {
-            long payload = (p == num_packets - 1) ? (bytes_to_dst % MTU) : MTU;
-            if (payload == 0) payload = MTU;
-            int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
-            
-            BookSimCoSimManager::traffic_per_module[this->name].push_back({src, dst, flits});
-        }
-      }
+  // Aplicar latencia al reloj. Esto se guardará de forma NATIVA en el .trc
+  if (input->parallel_execution && !device->config.communication_hiding) {
+    if (input->isPerformHigh()) {
+      device->status.high_time += network_latency_ns;
+    } else {
+      device->status.low_time += network_latency_ns;
     }
   }
+  device->status.device_time += network_latency_ns;
 
-  // Registro del dispositivo en la barrera
-  BookSimCoSimManager::devices_per_module[this->name].push_back(device);
-  BookSimCoSimManager::calls_per_module[this->name]++;
+  // --- INICIO AÑADIDO PARA LOGGER ---
+  time_ns start_time = device->status.device_time - network_latency_ns;
+  time_ns end_time = device->status.device_time;
+  std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
+  device->log_tfm_event(start_time, end_time, layer_name, details);
+  // --- FIN AÑADIDO PARA LOGGER ---
 
-  // ¿Han llegado todas las GPUs a esta capa? Si es así, disparamos BookSim2.
-  if (BookSimCoSimManager::calls_per_module[this->name] == total_num_device) {
-      BookSimCoSimManager::TriggerBarrier(this->name);
+  // Gestionar el ciclo de vida del Oráculo
+  BookSimCoSimManager::calls_per_module[layer_name]++;
+  if (BookSimCoSimManager::calls_per_module[layer_name] == total_num_device) {
+      BookSimCoSimManager::calls_per_module[layer_name] = 0;
+      BookSimCoSimManager::cached_latency.erase(layer_name);
+      BookSimCoSimManager::total_injected = 0;
+      BookSimCoSimManager::total_received = 0;
   }
   // --- FIN CÓDIGO TFM ---
 
@@ -244,57 +244,95 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
     return input_vec;
   }
 
-  int dst = device->device_total_rank; // En Gather, la GPU actual es el destino
   int e_tp_dg = device->model_config.e_tp_dg;
   int ne_tp_dg = device->model_config.ne_tp_dg;
   int total_num_device = device->config.num_device * device->config.num_node;
+  std::string layer_name = this->name;
+  double network_latency_ns = 0.0;
 
-  std::vector<int> e_tp_sharing_device_list = {};
-  int device_list_offset = dst / e_tp_dg * e_tp_dg;
-  for(int device_idx = device_list_offset; device_idx < device_list_offset + e_tp_dg; device_idx++){
-    e_tp_sharing_device_list.push_back(device_idx);
+  // --- INICIO CÓDIGO TFM: ORÁCULO GATHER ---
+  if (BookSimCoSimManager::calls_per_module[layer_name] == 0) {
+      int MTU = 256;          
+      int HEADER_SIZE = 24;   
+      int FLIT_SIZE = 32;     
+
+      for(int dst = 0; dst < total_num_device; dst++) {
+          int dst_dp_idx = dst / ne_tp_dg;
+          std::vector<int> e_tp_sharing_device_list = {};
+          int device_list_offset = dst / e_tp_dg * e_tp_dg;
+          for(int device_idx = device_list_offset; device_idx < device_list_offset + e_tp_dg; device_idx++){
+            e_tp_sharing_device_list.push_back(device_idx);
+          }
+          std::unordered_set<int> set_e_tp_devices(e_tp_sharing_device_list.begin(), e_tp_sharing_device_list.end());
+
+          for(int src = 0; src < total_num_device; src++) {
+              if(set_e_tp_devices.count(src) == 0 && src != dst) { 
+                  int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (src / e_tp_dg) * e_tp_dg;
+                  int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
+
+                  int tokens_from_src = 0;
+                  for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++){
+                    tokens_from_src += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id];
+                  }
+
+                  long bytes_from_src = 1.0 * tokens_from_src * k * input->precision_byte / e_tp_dg / ne_tp_dg;
+
+                  if ((device->model_config.model_name == "deepseekV3") && device->model_config.precision_byte == 1){
+                    bytes_from_src *= 2;
+                  }
+
+                  if (bytes_from_src > 0) {
+                      int num_packets = (bytes_from_src + MTU - 1) / MTU;
+                      for (int p = 0; p < num_packets; p++) {
+                          long payload = (p == num_packets - 1) ? (bytes_from_src % MTU) : MTU;
+                          if (payload == 0) payload = MTU;
+                          int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
+                          
+                          BookSim_InjectPacket(src, dst, flits);
+                          BookSimCoSimManager::total_injected++;
+                      }
+                  }
+              }
+          }
+      }
+
+      int cycles = 0;
+      int arr_src, arr_dst;
+      while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
+          BookSim_AdvanceCycle();
+          cycles++;
+          while(BookSim_CheckReceived(arr_src, arr_dst)) {
+              BookSimCoSimManager::total_received++;
+          }
+      }
+
+      BookSimCoSimManager::cached_latency[layer_name] = cycles * 1.0;
   }
-  std::unordered_set<int> set_e_tp_devices(e_tp_sharing_device_list.begin(), e_tp_sharing_device_list.end());
 
-  // --- INICIO CÓDIGO TFM: EXTRACCIÓN DE DATOS Y PACKETIZATION ---
-  int MTU = 256;          
-  int HEADER_SIZE = 24;   
-  int FLIT_SIZE = 32;     
+  network_latency_ns = BookSimCoSimManager::cached_latency[layer_name];
 
-  for(int src = 0; src < total_num_device; src++) {
-    if(set_e_tp_devices.count(src) == 0 && src != dst) { 
-      int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (src / e_tp_dg) * e_tp_dg;
-      int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
-
-      int tokens_from_src = 0;
-      for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++){
-        tokens_from_src += sequences_metadata->local_num_token_in_expert[e_id];
-      }
-
-      long bytes_from_src = 1.0 * tokens_from_src * k * input->precision_byte / e_tp_dg / ne_tp_dg;
-
-      if ((device->model_config.model_name == "deepseekV3") && device->model_config.precision_byte == 1){
-        bytes_from_src *= 2;
-      }
-
-      if (bytes_from_src > 0) {
-        int num_packets = (bytes_from_src + MTU - 1) / MTU;
-        for (int p = 0; p < num_packets; p++) {
-            long payload = (p == num_packets - 1) ? (bytes_from_src % MTU) : MTU;
-            if (payload == 0) payload = MTU;
-            int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
-            
-            BookSimCoSimManager::traffic_per_module[this->name].push_back({src, dst, flits});
-        }
-      }
+  if (input->parallel_execution && !device->config.communication_hiding) {
+    if (input->isPerformHigh()) {
+      device->status.high_time += network_latency_ns;
+    } else {
+      device->status.low_time += network_latency_ns;
     }
   }
+  device->status.device_time += network_latency_ns;
 
-  BookSimCoSimManager::devices_per_module[this->name].push_back(device);
-  BookSimCoSimManager::calls_per_module[this->name]++;
+  // --- INICIO AÑADIDO PARA LOGGER ---
+  time_ns start_time = device->status.device_time - network_latency_ns;
+  time_ns end_time = device->status.device_time;
+  std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
+  device->log_tfm_event(start_time, end_time, layer_name, details);
+  // --- FIN AÑADIDO PARA LOGGER ---
 
-  if (BookSimCoSimManager::calls_per_module[this->name] == total_num_device) {
-      BookSimCoSimManager::TriggerBarrier(this->name);
+  BookSimCoSimManager::calls_per_module[layer_name]++;
+  if (BookSimCoSimManager::calls_per_module[layer_name] == total_num_device) {
+      BookSimCoSimManager::calls_per_module[layer_name] = 0;
+      BookSimCoSimManager::cached_latency.erase(layer_name);
+      BookSimCoSimManager::total_injected = 0;
+      BookSimCoSimManager::total_received = 0;
   }
   // --- FIN CÓDIGO TFM ---
 
