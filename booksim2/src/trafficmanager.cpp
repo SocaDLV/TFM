@@ -40,15 +40,6 @@
 #include "vc.hpp"
 #include "packet_reply_info.hpp"
 
-// --- INICIO AÑADIDO TFM ---
-#include <queue>
-struct TracePacket { int cycle; int src; int dst; int flits; };
-std::queue<TracePacket> trace_queue;
-bool trace_loaded = false;
-int g_trace_dst = -1;
-int g_trace_size = -1;
-// --- FIN AÑADIDO TFM ---
-
 TrafficManager * TrafficManager::New(Configuration const & config,
                                      vector<Network *> const & net)
 {
@@ -797,15 +788,10 @@ void TrafficManager::_GeneratePacket( int source, int stype,
     assert(stype!=0);
 
     Flit::FlitType packet_type = Flit::ANY_TYPE;
-    // --- INICIO AÑADIDO TFM ---
-    int size = (g_trace_size != -1) ? g_trace_size : _GetNextPacketSize(cl); 
+    int size = _GetNextPacketSize(cl); //input size 
     int pid = _cur_pid++;
     assert(_cur_pid);
-    int packet_destination = (g_trace_dst != -1) ? g_trace_dst : _traffic_pattern[cl]->dest(source);
-    // --- FIN AÑADIDO TFM ---    
-
-
-
+    int packet_destination = _traffic_pattern[cl]->dest(source);
     bool record = false;
     bool watch = gWatchOut && (_packets_to_watch.count(pid) > 0);
     if(_use_read_write[cl]){
@@ -849,9 +835,10 @@ void TrafficManager::_GeneratePacket( int source, int stype,
         Error( err.str( ) );
     }
 
-    // --- INICIO MODIFICACIÓN TFM ---
-    record = true; 
-    // --- FIN MODIFICACIÓN TFM ---
+    if ( ( _sim_state == running ) ||
+         ( ( _sim_state == draining ) && ( time < _drain_time ) ) ) {
+        record = _measure_stats[cl];
+    }
 
     int subnetwork = ((packet_type == Flit::ANY_TYPE) ? 
                       RandomInt(_subnets-1) :
@@ -966,39 +953,6 @@ void TrafficManager::_Inject(){
 
 void TrafficManager::_Step( )
 {
-    // --- INICIO AÑADIDO TFM ---
-    if (!trace_loaded) {
-        // Ruta relativa desde booksim2/src/ hasta tu carpeta middleware
-        ifstream trace_file("../../middleware/booksim2_output_files/booksim_trace.txt");
-        if (trace_file.is_open()) {
-            int c, s, d, f;
-            while (trace_file >> c >> s >> d >> f) {
-                trace_queue.push({c, s, d, f});
-            }
-            trace_file.close();
-            cout << "\n[TFM] Traza cargada con exito: " << trace_queue.size() << " paquetes.\n\n";
-        } else {
-            cout << "\n[ERROR TFM] No se pudo abrir booksim_trace.txt\n";
-            exit(1);
-        }
-        trace_loaded = true;
-    }
-
-    // Inyectamos todos los paquetes que correspondan al ciclo actual (_time)
-    while (!trace_queue.empty() && trace_queue.front().cycle <= _time) {
-        TracePacket p = trace_queue.front();
-        trace_queue.pop();
-        
-        g_trace_dst = p.dst;
-        g_trace_size = p.flits;
-        // source, stype (1 = write), class (0), time
-        _GeneratePacket(p.src, 1, 0, _time);
-        
-        g_trace_dst = -1;
-        g_trace_size = -1;
-    }
-    // --- FIN AÑADIDO TFM ---
-
     bool flits_in_flight = false;
     for(int c = 0; c < _classes; ++c) {
         flits_in_flight |= !_total_in_flight_flits[c].empty();
@@ -1051,7 +1005,7 @@ void TrafficManager::_Step( )
     }
   
     if ( !_empty_network ) {
-       _Inject(); //Comentado y Descomentado por TFM: Solo queremos trafico de nuestra traza real (LLM)
+        _Inject();
     }
 
     for(int subnet = 0; subnet < _subnets; ++subnet) {
