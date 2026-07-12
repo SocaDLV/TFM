@@ -12,6 +12,8 @@ include_directories(src/dram/ramulator2/src)
 add_subdirectory(src)
 add_subdirectory(eval)
 
+# TFM: Importar BookSim2 (co-simulación)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../booksim2 ${CMAKE_CURRENT_BINARY_DIR}/booksim2_build)
 
 target_link_libraries(
     llm_system
@@ -21,6 +23,8 @@ target_link_libraries(
     PRIVATE module
     PRIVATE model
     PRIVATE scheduler
+    # TFM: Añadimos booksim2
+    booksim2
 )
 
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR})

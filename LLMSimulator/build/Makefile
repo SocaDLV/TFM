@@ -754,6 +754,19 @@ run/fast:
 	$(MAKE) $(MAKESILENT) -f eval/CMakeFiles/run.dir/build.make eval/CMakeFiles/run.dir/build
 .PHONY : run/fast
 
+#=============================================================================
+# Target rules for targets named booksim2
+
+# Build rule for target.
+booksim2: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 booksim2
+.PHONY : booksim2
+
+# fast build rule for target.
+booksim2/fast:
+	$(MAKE) $(MAKESILENT) -f booksim2_build/CMakeFiles/booksim2.dir/build.make booksim2_build/CMakeFiles/booksim2.dir/build
+.PHONY : booksim2/fast
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -796,6 +809,7 @@ help:
 	@echo "... NightlySubmit"
 	@echo "... NightlyTest"
 	@echo "... NightlyUpdate"
+	@echo "... booksim2"
 	@echo "... dram"
 	@echo "... hardware"
 	@echo "... llm_system"

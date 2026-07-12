@@ -145,6 +145,7 @@ libllm_system.so: src/scheduler/CMakeFiles/scheduler.dir/sequence.cpp.o
 libllm_system.so: CMakeFiles/llm_system.dir/build.make
 libllm_system.so: CMakeFiles/llm_system.dir/compiler_depend.ts
 libllm_system.so: src/dram/libdram.a
+libllm_system.so: booksim2_build/libbooksim2.a
 libllm_system.so: _deps/yaml-cpp-build/libyaml-cpp.a
 libllm_system.so: _deps/spdlog-build/libspdlog.a
 libllm_system.so: CMakeFiles/llm_system.dir/link.txt

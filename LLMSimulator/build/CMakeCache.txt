@@ -23,6 +23,15 @@ ARGPARSE_LONG_VERSION_ARG_ONLY:BOOL=OFF
 //Build the testing tree.
 BUILD_TESTING:BOOL=ON
 
+//Value Computed by CMake
+BookSim2_BINARY_DIR:STATIC=/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build
+
+//Value Computed by CMake
+BookSim2_IS_TOP_LEVEL:STATIC=OFF
+
+//Value Computed by CMake
+BookSim2_SOURCE_DIR:STATIC=/home/igilolt/Escritorio/TFM/booksim2
+
 //Path to a program.
 CMAKE_ADDR2LINE:FILEPATH=/usr/bin/addr2line
 
@@ -670,7 +679,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=22
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=23
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP

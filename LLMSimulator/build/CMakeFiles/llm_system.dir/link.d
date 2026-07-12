@@ -34,6 +34,7 @@ libllm_system.so: \
   src/scheduler/CMakeFiles/scheduler.dir/scheduler.cpp.o \
   src/scheduler/CMakeFiles/scheduler.dir/sequence.cpp.o \
   src/dram/libdram.a \
+  booksim2_build/libbooksim2.a \
   _deps/yaml-cpp-build/libyaml-cpp.a \
   _deps/spdlog-build/libspdlog.a \
   /usr/lib/gcc/x86_64-redhat-linux/15/libstdc++.so \
@@ -130,6 +131,8 @@ src/scheduler/CMakeFiles/scheduler.dir/scheduler.cpp.o:
 src/scheduler/CMakeFiles/scheduler.dir/sequence.cpp.o:
 
 src/dram/libdram.a:
+
+booksim2_build/libbooksim2.a:
 
 _deps/yaml-cpp-build/libyaml-cpp.a:
 

@@ -66,23 +66,27 @@ CMAKE_BINARY_DIR = /home/igilolt/Escritorio/TFM/LLMSimulator/build
 all: CMakeFiles/llm_system.dir/all
 all: src/all
 all: eval/all
+all: booksim2_build/all
 .PHONY : all
 
 # The main recursive "codegen" target.
 codegen: CMakeFiles/llm_system.dir/codegen
 codegen: src/codegen
 codegen: eval/codegen
+codegen: booksim2_build/codegen
 .PHONY : codegen
 
 # The main recursive "preinstall" target.
 preinstall: src/preinstall
 preinstall: eval/preinstall
+preinstall: booksim2_build/preinstall
 .PHONY : preinstall
 
 # The main recursive "clean" target.
 clean: CMakeFiles/llm_system.dir/clean
 clean: src/clean
 clean: eval/clean
+clean: booksim2_build/clean
 .PHONY : clean
 
 #=============================================================================
@@ -169,6 +173,25 @@ _deps/yaml-cpp-build/clean: _deps/yaml-cpp-build/CMakeFiles/ContinuousMemCheck.d
 _deps/yaml-cpp-build/clean: _deps/yaml-cpp-build/CMakeFiles/ContinuousSubmit.dir/clean
 _deps/yaml-cpp-build/clean: _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/clean
 .PHONY : _deps/yaml-cpp-build/clean
+
+#=============================================================================
+# Directory level rules for directory booksim2_build
+
+# Recursive "all" directory target.
+booksim2_build/all: booksim2_build/CMakeFiles/booksim2.dir/all
+.PHONY : booksim2_build/all
+
+# Recursive "codegen" directory target.
+booksim2_build/codegen: booksim2_build/CMakeFiles/booksim2.dir/codegen
+.PHONY : booksim2_build/codegen
+
+# Recursive "preinstall" directory target.
+booksim2_build/preinstall:
+.PHONY : booksim2_build/preinstall
+
+# Recursive "clean" directory target.
+booksim2_build/clean: booksim2_build/CMakeFiles/booksim2.dir/clean
+.PHONY : booksim2_build/clean
 
 #=============================================================================
 # Directory level rules for directory eval
@@ -593,14 +616,15 @@ CMakeFiles/llm_system.dir/all: src/dram/ramulator2/src/memory_system/CMakeFiles/
 CMakeFiles/llm_system.dir/all: src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/all
 CMakeFiles/llm_system.dir/all: src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/all
 CMakeFiles/llm_system.dir/all: src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/all
+CMakeFiles/llm_system.dir/all: booksim2_build/CMakeFiles/booksim2.dir/all
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/llm_system.dir/build.make CMakeFiles/llm_system.dir/depend
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/llm_system.dir/build.make CMakeFiles/llm_system.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=16 "Built target llm_system"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num= "Built target llm_system"
 .PHONY : CMakeFiles/llm_system.dir/all
 
 # Build rule for subdir invocation for target.
 CMakeFiles/llm_system.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 98
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 99
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 CMakeFiles/llm_system.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : CMakeFiles/llm_system.dir/rule
@@ -612,7 +636,7 @@ llm_system: CMakeFiles/llm_system.dir/rule
 # codegen rule for target.
 CMakeFiles/llm_system.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/llm_system.dir/build.make CMakeFiles/llm_system.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=16 "Finished codegen for target llm_system"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num= "Finished codegen for target llm_system"
 .PHONY : CMakeFiles/llm_system.dir/codegen
 
 # clean rule for target.
@@ -627,12 +651,12 @@ CMakeFiles/llm_system.dir/clean:
 src/hardware/CMakeFiles/hardware.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/hardware/CMakeFiles/hardware.dir/build.make src/hardware/CMakeFiles/hardware.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/hardware/CMakeFiles/hardware.dir/build.make src/hardware/CMakeFiles/hardware.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=8,9,10,11,12,13,14,15 "Built target hardware"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=37,38,39,40,41,42 "Built target hardware"
 .PHONY : src/hardware/CMakeFiles/hardware.dir/all
 
 # Build rule for subdir invocation for target.
 src/hardware/CMakeFiles/hardware.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 8
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 6
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/hardware/CMakeFiles/hardware.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/hardware/CMakeFiles/hardware.dir/rule
@@ -644,7 +668,7 @@ hardware: src/hardware/CMakeFiles/hardware.dir/rule
 # codegen rule for target.
 src/hardware/CMakeFiles/hardware.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/hardware/CMakeFiles/hardware.dir/build.make src/hardware/CMakeFiles/hardware.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=8,9,10,11,12,13,14,15 "Finished codegen for target hardware"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=37,38,39,40,41,42 "Finished codegen for target hardware"
 .PHONY : src/hardware/CMakeFiles/hardware.dir/codegen
 
 # clean rule for target.
@@ -659,12 +683,12 @@ src/hardware/CMakeFiles/hardware.dir/clean:
 src/module/CMakeFiles/module.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/module/CMakeFiles/module.dir/build.make src/module/CMakeFiles/module.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/module/CMakeFiles/module.dir/build.make src/module/CMakeFiles/module.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=18,19,20,21,22,23,24,25,26,27,28,29,30,31,32 "Built target module"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=44,45,46,47,48,49,50,51,52,53 "Built target module"
 .PHONY : src/module/CMakeFiles/module.dir/all
 
 # Build rule for subdir invocation for target.
 src/module/CMakeFiles/module.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 15
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 10
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/module/CMakeFiles/module.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/module/CMakeFiles/module.dir/rule
@@ -676,7 +700,7 @@ module: src/module/CMakeFiles/module.dir/rule
 # codegen rule for target.
 src/module/CMakeFiles/module.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/module/CMakeFiles/module.dir/build.make src/module/CMakeFiles/module.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=18,19,20,21,22,23,24,25,26,27,28,29,30,31,32 "Finished codegen for target module"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=44,45,46,47,48,49,50,51,52,53 "Finished codegen for target module"
 .PHONY : src/module/CMakeFiles/module.dir/codegen
 
 # clean rule for target.
@@ -691,7 +715,7 @@ src/module/CMakeFiles/module.dir/clean:
 src/model/CMakeFiles/model.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/model/CMakeFiles/model.dir/build.make src/model/CMakeFiles/model.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/model/CMakeFiles/model.dir/build.make src/model/CMakeFiles/model.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=17 "Built target model"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=43 "Built target model"
 .PHONY : src/model/CMakeFiles/model.dir/all
 
 # Build rule for subdir invocation for target.
@@ -708,7 +732,7 @@ model: src/model/CMakeFiles/model.dir/rule
 # codegen rule for target.
 src/model/CMakeFiles/model.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/model/CMakeFiles/model.dir/build.make src/model/CMakeFiles/model.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=17 "Finished codegen for target model"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=43 "Finished codegen for target model"
 .PHONY : src/model/CMakeFiles/model.dir/codegen
 
 # clean rule for target.
@@ -723,7 +747,7 @@ src/model/CMakeFiles/model.dir/clean:
 src/scheduler/CMakeFiles/scheduler.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/scheduler/CMakeFiles/scheduler.dir/build.make src/scheduler/CMakeFiles/scheduler.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/scheduler/CMakeFiles/scheduler.dir/build.make src/scheduler/CMakeFiles/scheduler.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=69 "Built target scheduler"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=79 "Built target scheduler"
 .PHONY : src/scheduler/CMakeFiles/scheduler.dir/all
 
 # Build rule for subdir invocation for target.
@@ -740,7 +764,7 @@ scheduler: src/scheduler/CMakeFiles/scheduler.dir/rule
 # codegen rule for target.
 src/scheduler/CMakeFiles/scheduler.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/scheduler/CMakeFiles/scheduler.dir/build.make src/scheduler/CMakeFiles/scheduler.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=69 "Finished codegen for target scheduler"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=79 "Finished codegen for target scheduler"
 .PHONY : src/scheduler/CMakeFiles/scheduler.dir/codegen
 
 # clean rule for target.
@@ -763,12 +787,12 @@ src/dram/CMakeFiles/dram.dir/all: src/dram/ramulator2/src/dram/CMakeFiles/ramula
 src/dram/CMakeFiles/dram.dir/all: src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/all
 	$(MAKE) $(MAKESILENT) -f src/dram/CMakeFiles/dram.dir/build.make src/dram/CMakeFiles/dram.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/CMakeFiles/dram.dir/build.make src/dram/CMakeFiles/dram.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=1,2,3,4,5,6,7 "Built target dram"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=32,33,34,35,36 "Built target dram"
 .PHONY : src/dram/CMakeFiles/dram.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/CMakeFiles/dram.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 72
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 50
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/CMakeFiles/dram.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/CMakeFiles/dram.dir/rule
@@ -780,7 +804,7 @@ dram: src/dram/CMakeFiles/dram.dir/rule
 # codegen rule for target.
 src/dram/CMakeFiles/dram.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/CMakeFiles/dram.dir/build.make src/dram/CMakeFiles/dram.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=1,2,3,4,5,6,7 "Finished codegen for target dram"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=32,33,34,35,36 "Finished codegen for target dram"
 .PHONY : src/dram/CMakeFiles/dram.dir/codegen
 
 # clean rule for target.
@@ -1691,12 +1715,12 @@ _deps/yaml-cpp-build/CMakeFiles/ContinuousSubmit.dir/clean:
 _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/all:
 	$(MAKE) $(MAKESILENT) -f _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/build.make _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/depend
 	$(MAKE) $(MAKESILENT) -f _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/build.make _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100 "Built target yaml-cpp"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100 "Built target yaml-cpp"
 .PHONY : _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/all
 
 # Build rule for subdir invocation for target.
 _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 24
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 17
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/rule
@@ -1708,7 +1732,7 @@ yaml-cpp: _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/rule
 # codegen rule for target.
 _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/build.make _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100 "Finished codegen for target yaml-cpp"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100 "Finished codegen for target yaml-cpp"
 .PHONY : _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/codegen
 
 # clean rule for target.
@@ -1723,12 +1747,12 @@ _deps/yaml-cpp-build/CMakeFiles/yaml-cpp.dir/clean:
 _deps/spdlog-build/CMakeFiles/spdlog.dir/all:
 	$(MAKE) $(MAKESILENT) -f _deps/spdlog-build/CMakeFiles/spdlog.dir/build.make _deps/spdlog-build/CMakeFiles/spdlog.dir/depend
 	$(MAKE) $(MAKESILENT) -f _deps/spdlog-build/CMakeFiles/spdlog.dir/build.make _deps/spdlog-build/CMakeFiles/spdlog.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=70,71,72,73,74,75,76 "Built target spdlog"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=80,81,82,83 "Built target spdlog"
 .PHONY : _deps/spdlog-build/CMakeFiles/spdlog.dir/all
 
 # Build rule for subdir invocation for target.
 _deps/spdlog-build/CMakeFiles/spdlog.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 7
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 4
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 _deps/spdlog-build/CMakeFiles/spdlog.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : _deps/spdlog-build/CMakeFiles/spdlog.dir/rule
@@ -1740,7 +1764,7 @@ spdlog: _deps/spdlog-build/CMakeFiles/spdlog.dir/rule
 # codegen rule for target.
 _deps/spdlog-build/CMakeFiles/spdlog.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f _deps/spdlog-build/CMakeFiles/spdlog.dir/build.make _deps/spdlog-build/CMakeFiles/spdlog.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=70,71,72,73,74,75,76 "Finished codegen for target spdlog"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=80,81,82,83 "Finished codegen for target spdlog"
 .PHONY : _deps/spdlog-build/CMakeFiles/spdlog.dir/codegen
 
 # clean rule for target.
@@ -1755,12 +1779,12 @@ _deps/spdlog-build/CMakeFiles/spdlog.dir/clean:
 src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/build.make src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/build.make src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=35,36,37,38 "Built target ramulator-base"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=55,56,57 "Built target ramulator-base"
 .PHONY : src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 4
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 3
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/rule
@@ -1772,7 +1796,7 @@ ramulator-base: src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/rule
 # codegen rule for target.
 src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/build.make src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=35,36,37,38 "Finished codegen for target ramulator-base"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=55,56,57 "Finished codegen for target ramulator-base"
 .PHONY : src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/codegen
 
 # clean rule for target.
@@ -1787,12 +1811,12 @@ src/dram/ramulator2/src/base/CMakeFiles/ramulator-base.dir/clean:
 src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/build.make src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/build.make src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=57,58,59,60,61,62 "Built target ramulator-frontend"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=70,71,72,73,74 "Built target ramulator-frontend"
 .PHONY : src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 6
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 5
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/rule
@@ -1804,7 +1828,7 @@ ramulator-frontend: src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-fronte
 # codegen rule for target.
 src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/build.make src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=57,58,59,60,61,62 "Finished codegen for target ramulator-frontend"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=70,71,72,73,74 "Finished codegen for target ramulator-frontend"
 .PHONY : src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/codegen
 
 # clean rule for target.
@@ -1819,12 +1843,12 @@ src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/clean:
 src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/build.make src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/build.make src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=66 "Built target ramulator-translation"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=76,77 "Built target ramulator-translation"
 .PHONY : src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 1
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 2
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/rule
@@ -1836,7 +1860,7 @@ ramulator-translation: src/dram/ramulator2/src/translation/CMakeFiles/ramulator-
 # codegen rule for target.
 src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/build.make src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=66 "Finished codegen for target ramulator-translation"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=76,77 "Finished codegen for target ramulator-translation"
 .PHONY : src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/codegen
 
 # clean rule for target.
@@ -1851,12 +1875,12 @@ src/dram/ramulator2/src/translation/CMakeFiles/ramulator-translation.dir/clean:
 src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/build.make src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/build.make src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=63,64,65 "Built target ramulator-memorysystem"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=75 "Built target ramulator-memorysystem"
 .PHONY : src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 3
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/rule
@@ -1868,7 +1892,7 @@ ramulator-memorysystem: src/dram/ramulator2/src/memory_system/CMakeFiles/ramulat
 # codegen rule for target.
 src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/build.make src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=63,64,65 "Finished codegen for target ramulator-memorysystem"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=75 "Finished codegen for target ramulator-memorysystem"
 .PHONY : src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/codegen
 
 # clean rule for target.
@@ -1883,12 +1907,12 @@ src/dram/ramulator2/src/memory_system/CMakeFiles/ramulator-memorysystem.dir/clea
 src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/build.make src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/build.make src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=33,34 "Built target ramulator-addrmapper"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=54 "Built target ramulator-addrmapper"
 .PHONY : src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 2
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 1
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/rule
@@ -1900,7 +1924,7 @@ ramulator-addrmapper: src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-a
 # codegen rule for target.
 src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/build.make src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=33,34 "Finished codegen for target ramulator-addrmapper"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=54 "Finished codegen for target ramulator-addrmapper"
 .PHONY : src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/codegen
 
 # clean rule for target.
@@ -1915,12 +1939,12 @@ src/dram/ramulator2/src/addr_mapper/CMakeFiles/ramulator-addrmapper.dir/clean:
 src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/build.make src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/build.make src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=51,52,53,54,55,56 "Built target ramulator-dram"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=66,67,68,69 "Built target ramulator-dram"
 .PHONY : src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 6
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 4
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/rule
@@ -1932,7 +1956,7 @@ ramulator-dram: src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/rule
 # codegen rule for target.
 src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/build.make src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=51,52,53,54,55,56 "Finished codegen for target ramulator-dram"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=66,67,68,69 "Finished codegen for target ramulator-dram"
 .PHONY : src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/codegen
 
 # clean rule for target.
@@ -1947,12 +1971,12 @@ src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/clean:
 src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/all:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/build.make src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/depend
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/build.make src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=39,40,41,42,43,44,45,46,47,48,49,50 "Built target ramulator-controller"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=58,59,60,61,62,63,64,65 "Built target ramulator-controller"
 .PHONY : src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/all
 
 # Build rule for subdir invocation for target.
 src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/rule: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 12
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 8
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/all
 	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
 .PHONY : src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/rule
@@ -1964,7 +1988,7 @@ ramulator-controller: src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulat
 # codegen rule for target.
 src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/build.make src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=39,40,41,42,43,44,45,46,47,48,49,50 "Finished codegen for target ramulator-controller"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=58,59,60,61,62,63,64,65 "Finished codegen for target ramulator-controller"
 .PHONY : src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/codegen
 
 # clean rule for target.
@@ -1979,7 +2003,7 @@ src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/clea
 eval/CMakeFiles/run.dir/all: CMakeFiles/llm_system.dir/all
 	$(MAKE) $(MAKESILENT) -f eval/CMakeFiles/run.dir/build.make eval/CMakeFiles/run.dir/depend
 	$(MAKE) $(MAKESILENT) -f eval/CMakeFiles/run.dir/build.make eval/CMakeFiles/run.dir/build
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=67,68 "Built target run"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=78 "Built target run"
 .PHONY : eval/CMakeFiles/run.dir/all
 
 # Build rule for subdir invocation for target.
@@ -1996,13 +2020,45 @@ run: eval/CMakeFiles/run.dir/rule
 # codegen rule for target.
 eval/CMakeFiles/run.dir/codegen:
 	$(MAKE) $(MAKESILENT) -f eval/CMakeFiles/run.dir/build.make eval/CMakeFiles/run.dir/codegen
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=67,68 "Finished codegen for target run"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=78 "Finished codegen for target run"
 .PHONY : eval/CMakeFiles/run.dir/codegen
 
 # clean rule for target.
 eval/CMakeFiles/run.dir/clean:
 	$(MAKE) $(MAKESILENT) -f eval/CMakeFiles/run.dir/build.make eval/CMakeFiles/run.dir/clean
 .PHONY : eval/CMakeFiles/run.dir/clean
+
+#=============================================================================
+# Target rules for target booksim2_build/CMakeFiles/booksim2.dir
+
+# All Build rule for target.
+booksim2_build/CMakeFiles/booksim2.dir/all:
+	$(MAKE) $(MAKESILENT) -f booksim2_build/CMakeFiles/booksim2.dir/build.make booksim2_build/CMakeFiles/booksim2.dir/depend
+	$(MAKE) $(MAKESILENT) -f booksim2_build/CMakeFiles/booksim2.dir/build.make booksim2_build/CMakeFiles/booksim2.dir/build
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31 "Built target booksim2"
+.PHONY : booksim2_build/CMakeFiles/booksim2.dir/all
+
+# Build rule for subdir invocation for target.
+booksim2_build/CMakeFiles/booksim2.dir/rule: cmake_check_build_system
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 31
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 booksim2_build/CMakeFiles/booksim2.dir/all
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles 0
+.PHONY : booksim2_build/CMakeFiles/booksim2.dir/rule
+
+# Convenience name for target.
+booksim2: booksim2_build/CMakeFiles/booksim2.dir/rule
+.PHONY : booksim2
+
+# codegen rule for target.
+booksim2_build/CMakeFiles/booksim2.dir/codegen:
+	$(MAKE) $(MAKESILENT) -f booksim2_build/CMakeFiles/booksim2.dir/build.make booksim2_build/CMakeFiles/booksim2.dir/codegen
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --progress-dir=/home/igilolt/Escritorio/TFM/LLMSimulator/build/CMakeFiles --progress-num=1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31 "Finished codegen for target booksim2"
+.PHONY : booksim2_build/CMakeFiles/booksim2.dir/codegen
+
+# clean rule for target.
+booksim2_build/CMakeFiles/booksim2.dir/clean:
+	$(MAKE) $(MAKESILENT) -f booksim2_build/CMakeFiles/booksim2.dir/build.make booksim2_build/CMakeFiles/booksim2.dir/clean
+.PHONY : booksim2_build/CMakeFiles/booksim2.dir/clean
 
 #=============================================================================
 # Special targets to cleanup operation of make.

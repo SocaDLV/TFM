@@ -478,5 +478,341 @@
   "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/argparse/include -O3 -DNDEBUG -fPIC -o CMakeFiles/run.dir/test.cpp.o -c /home/igilolt/Escritorio/TFM/LLMSimulator/eval/test.cpp",
   "file": "/home/igilolt/Escritorio/TFM/LLMSimulator/eval/test.cpp",
   "output": "eval/CMakeFiles/run.dir/test.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/allocator.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/allocator.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/allocator.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/allocator.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/islip.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/islip.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/islip.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/islip.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/loa.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/loa.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/loa.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/loa.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/maxsize.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/maxsize.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/maxsize.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/maxsize.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/pim.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/pim.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/pim.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/pim.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/selalloc.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/selalloc.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/selalloc.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/selalloc.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/separable.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/separable.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/separable.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/separable_input_first.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/separable_input_first.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/separable_input_first.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable_input_first.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/separable_output_first.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/separable_output_first.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/separable_output_first.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable_output_first.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/allocators/wavefront.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/allocators/wavefront.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/allocators/wavefront.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/allocators/wavefront.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/arbiters/arbiter.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/arbiter.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/arbiters/arbiter.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/arbiters/arbiter.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/arbiters/matrix_arb.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/matrix_arb.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/arbiters/matrix_arb.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/arbiters/matrix_arb.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/arbiters/prio_arb.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/prio_arb.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/arbiters/prio_arb.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/arbiters/prio_arb.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/arbiters/roundrobin_arb.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/roundrobin_arb.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/arbiters/roundrobin_arb.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/arbiters/roundrobin_arb.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/arbiters/tree_arb.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/tree_arb.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/arbiters/tree_arb.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/arbiters/tree_arb.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/batchtrafficmanager.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/batchtrafficmanager.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/batchtrafficmanager.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/batchtrafficmanager.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/booksim_api.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/booksim_api.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/booksim_config.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/booksim_config.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/booksim_config.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/booksim_config.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/buffer.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/buffer.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/buffer.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/buffer.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/buffer_state.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/buffer_state.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/buffer_state.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/buffer_state.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/config_utils.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/config_utils.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/config_utils.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/credit.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/credit.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/credit.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/credit.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/flit.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/flit.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/flit.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/flit.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/flitchannel.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/flitchannel.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/flitchannel.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/flitchannel.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/injection.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/injection.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/injection.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/injection.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/misc_utils.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/misc_utils.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/misc_utils.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/misc_utils.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/module.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/module.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/module.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/module.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/anynet.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/anynet.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/anynet.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/anynet.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/cmesh.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/cmesh.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/cmesh.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/cmesh.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/dragonfly.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/dragonfly.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/dragonfly.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/dragonfly.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/fattree.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/fattree.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/fattree.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/fattree.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/flatfly_onchip.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/flatfly_onchip.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/flatfly_onchip.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/flatfly_onchip.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/fly.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/fly.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/fly.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/fly.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/kncube.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/kncube.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/kncube.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/kncube.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/network.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/network.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/network.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/network.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/qtree.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/qtree.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/qtree.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/qtree.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/networks/tree4.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/networks/tree4.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/networks/tree4.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/networks/tree4.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/outputset.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/outputset.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/outputset.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/outputset.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/packet_reply_info.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/packet_reply_info.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/packet_reply_info.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/packet_reply_info.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/power/buffer_monitor.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/power/buffer_monitor.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/power/buffer_monitor.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/power/buffer_monitor.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/power/power_module.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/power/power_module.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/power/power_module.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/power/power_module.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/power/switch_monitor.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/power/switch_monitor.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/power/switch_monitor.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/power/switch_monitor.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/random_utils.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/random_utils.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/random_utils.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/random_utils.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/rng_double_wrapper.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/rng_double_wrapper.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/rng_double_wrapper.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/rng_double_wrapper.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/rng_wrapper.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/rng_wrapper.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/rng_wrapper.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/rng_wrapper.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/routefunc.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/routefunc.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/routefunc.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/routefunc.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/routers/chaos_router.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/routers/chaos_router.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/routers/chaos_router.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/routers/chaos_router.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/routers/event_router.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/routers/event_router.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/routers/event_router.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/routers/event_router.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/routers/iq_router.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/routers/iq_router.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/routers/iq_router.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/routers/iq_router.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/routers/router.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/routers/router.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/routers/router.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/routers/router.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/stats.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/stats.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/stats.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/stats.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/traffic.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/traffic.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/traffic.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/traffic.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/trafficmanager.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/trafficmanager.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/c++  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/vc.cpp.o -c /home/igilolt/Escritorio/TFM/booksim2/src/vc.cpp",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/vc.cpp",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/vc.cpp.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/cc  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu99 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/lex.yy.c.o -c /home/igilolt/Escritorio/TFM/booksim2/src/lex.yy.c",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/lex.yy.c",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/lex.yy.c.o"
+},
+{
+  "directory": "/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build",
+  "command": "/usr/bin/cc  -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers -O3 -DNDEBUG -std=gnu99 -fPIC -fPIC -w -O3 -o CMakeFiles/booksim2.dir/src/y.tab.c.o -c /home/igilolt/Escritorio/TFM/booksim2/src/y.tab.c",
+  "file": "/home/igilolt/Escritorio/TFM/booksim2/src/y.tab.c",
+  "output": "booksim2_build/CMakeFiles/booksim2.dir/src/y.tab.c.o"
 }
 ]

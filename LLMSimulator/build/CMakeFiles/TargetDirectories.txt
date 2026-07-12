@@ -218,3 +218,12 @@
 /home/igilolt/Escritorio/TFM/LLMSimulator/build/eval/CMakeFiles/install.dir
 /home/igilolt/Escritorio/TFM/LLMSimulator/build/eval/CMakeFiles/install/local.dir
 /home/igilolt/Escritorio/TFM/LLMSimulator/build/eval/CMakeFiles/install/strip.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/booksim2.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/package.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/package_source.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/edit_cache.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/rebuild_cache.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/list_install_components.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/install.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/install/local.dir
+/home/igilolt/Escritorio/TFM/LLMSimulator/build/booksim2_build/CMakeFiles/install/strip.dir

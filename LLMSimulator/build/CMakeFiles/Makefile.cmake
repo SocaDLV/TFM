@@ -42,6 +42,7 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/home/igilolt/Escritorio/TFM/LLMSimulator/src/model/CMakeLists.txt"
   "/home/igilolt/Escritorio/TFM/LLMSimulator/src/module/CMakeLists.txt"
   "/home/igilolt/Escritorio/TFM/LLMSimulator/src/scheduler/CMakeLists.txt"
+  "/home/igilolt/Escritorio/TFM/booksim2/CMakeLists.txt"
   "/usr/share/cmake/Modules/BasicConfigVersion-AnyNewerVersion.cmake.in"
   "/usr/share/cmake/Modules/BasicConfigVersion-ExactVersion.cmake.in"
   "/usr/share/cmake/Modules/CMakeCCompiler.cmake.in"
@@ -232,6 +233,7 @@ set(CMAKE_MAKEFILE_PRODUCTS
   "src/dram/ramulator2/src/dram/CMakeFiles/CMakeDirectoryInformation.cmake"
   "src/dram/ramulator2/src/dram_controller/CMakeFiles/CMakeDirectoryInformation.cmake"
   "eval/CMakeFiles/CMakeDirectoryInformation.cmake"
+  "booksim2_build/CMakeFiles/CMakeDirectoryInformation.cmake"
   )
 
 # Dependency information for all targets:
@@ -280,4 +282,5 @@ set(CMAKE_DEPEND_INFO_FILES
   "src/dram/ramulator2/src/dram/CMakeFiles/ramulator-dram.dir/DependInfo.cmake"
   "src/dram/ramulator2/src/dram_controller/CMakeFiles/ramulator-controller.dir/DependInfo.cmake"
   "eval/CMakeFiles/run.dir/DependInfo.cmake"
+  "booksim2_build/CMakeFiles/booksim2.dir/DependInfo.cmake"
   )
