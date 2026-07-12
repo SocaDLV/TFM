@@ -1,5 +1,5 @@
 model:
-  model_name: deepseekV3
+  model_name: mixtral
 
 system:
   gpu_gen: B100 # e.g. A100, H100, B100, B200 (currently only support 4 generation)

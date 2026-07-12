@@ -59,7 +59,7 @@ public:
             _total_in_flight_flits[f->cl].insert(std::make_pair(f->id, f));
 
             // Inyectamos directamente en la cola de paquetes parciales
-            _partial_packets[0][src].push_back(f);
+            _partial_packets[src][0].push_back(f);
         }
     }
 

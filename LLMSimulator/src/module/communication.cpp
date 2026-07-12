@@ -1,16 +1,93 @@
 #include "module/communication.h"
 #include "scheduler/scheduler.h"
-
 #include "common/assert.h"
-// AllReduce //
+
+// --- INICIO CÓDIGO TFM: BOOKSIM CO-SIMULATION MANAGER ---
+#include <map>
+#include <vector>
+#include <string>
+#include <cmath>
+#include <iostream>
+
+// Enlace con la API de BookSim2
+extern void BookSim_Initialize(const char* config_file);
+extern void BookSim_InjectPacket(int src, int dst, int size_in_flits);
+extern void BookSim_AdvanceCycle();
+extern bool BookSim_CheckReceived(int& src, int& dst);
+
+struct BookSimTraffic {
+    int src;
+    int dst;
+    int flits;
+};
+
+class BookSimCoSimManager {
+public:
+    static std::map<std::string, int> calls_per_module;
+    static std::map<std::string, std::vector<BookSimTraffic>> traffic_per_module;
+    static std::map<std::string, std::vector<llm_system::Device::Ptr>> devices_per_module;
+    static bool initialized;
+
+    static void Init() {
+        if (!initialized) {
+            // ATENCIÓN: Asegúrate de que test.cfg tiene el número de nodos correcto (ej. k=8, n=1 para 8 GPUs)
+            BookSim_Initialize("test.cfg"); 
+            initialized = true;
+        }
+    }
+
+    static void TriggerBarrier(const std::string& mod_name) {
+        Init();
+        
+        int total_injected = 0;
+        // 1. Inyectar todo el tráfico de la capa simultáneamente
+        for(auto& t : traffic_per_module[mod_name]) {
+            BookSim_InjectPacket(t.src, t.dst, t.flits);
+            total_injected++;
+        }
+        
+        // 2. Simular la red hasta que todos los paquetes hayan aterrizado
+        int total_received = 0;
+        int cycles = 0;
+        while(total_received < total_injected) {
+            BookSim_AdvanceCycle();
+            cycles++;
+            int arr_src, arr_dst;
+            while(BookSim_CheckReceived(arr_src, arr_dst)) {
+                total_received++;
+            }
+        }
+        
+        // 3. Aplicar la latencia real a todas las GPUs (Asumimos 1 ciclo de BookSim = 1 ns, ajustable si es necesario)
+        time_ns network_latency = cycles * 1.0; 
+        
+        for(auto& dev : devices_per_module[mod_name]) {
+            dev->status.device_time += network_latency;
+            // Para mantener consistencia con los streams internos del simulador
+            dev->status.high_time += network_latency;
+            dev->status.low_time += network_latency;
+        }
+        
+        // 4. Limpieza de estructuras para la siguiente capa
+        traffic_per_module.erase(mod_name);
+        devices_per_module.erase(mod_name);
+        calls_per_module.erase(mod_name);
+    }
+};
+
+std::map<std::string, int> BookSimCoSimManager::calls_per_module;
+std::map<std::string, std::vector<BookSimTraffic>> BookSimCoSimManager::traffic_per_module;
+std::map<std::string, std::vector<llm_system::Device::Ptr>> BookSimCoSimManager::devices_per_module;
+bool BookSimCoSimManager::initialized = false;
+// --- FIN CÓDIGO TFM ---
+
 
 namespace llm_system {
 
 AllReduce::AllReduce(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
-    : Module(prefix, name, device, device_list, true, true) { // sync == true, thererfore need to be synced
+    : Module(prefix, name, device, device_list, true, true) { 
   std::vector<int> shape = {1, 1};
-
   Tensor::Ptr output = Tensor::Create("allreduce_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
 }
@@ -52,14 +129,12 @@ AllGather::AllGather(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true, true) {
   std::vector<int> shape = {1, 1};
-
   Tensor::Ptr output = Tensor::Create("allgather_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
 }
 
 Tensor::Ptr AllGather::forward(const Tensor::Ptr input,
                                BatchedSequence::Ptr sequences_metadata) {
-
   Tensor::Ptr output = get_activation("allgather_output", input->shape);
   return output;
 }
@@ -68,22 +143,15 @@ AllScatter::AllScatter(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true, true) {
   std::vector<int> shape = {1, 1};
-
   parallel_num = device_list.size();
-
   Tensor::Ptr output = Tensor::Create("allscatter_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
 }
 
 Tensor::Ptr AllScatter::forward(const Tensor::Ptr input,
                                 BatchedSequence::Ptr sequences_metadata) {
-  long m = input->shape[0];
-  long k = input->shape[1];
-
   std::vector<int> shape = {input->shape[0], input->shape[1] / parallel_num};
-
   Tensor::Ptr output = get_activation("allscatter_output", shape);
-
   return output;
 }
 
@@ -91,184 +159,70 @@ MoEScatter::MoEScatter(std::string& prefix, std::string& name,
                        std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true, true) {
   std::vector<int> shape = {1, 1};
-
-  Tensor::Ptr output =
-      Tensor::Create("moe_scatter_output", shape, "act", device, device->model_config.precision_byte);
+  Tensor::Ptr output = Tensor::Create("moe_scatter_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
 }
 
 Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
                                 BatchedSequence::Ptr sequences_metadata) {
-  int m = input->shape[0];
   int k = input->shape[1];
   Tensor::Ptr output = get_activation("moe_scatter_output", input->shape);
-
-  
-  // assume using disaggregated system
 
   if (!device->perform_execution) {
     return output;
   }
 
-  time_ns total_time = 0;
-  time_ns send_time = 0;
-  time_ns receive_time = 0;
-
-  // Send time // 
-  int intra_node_comm_token = 0;
-  int inter_node_comm_token = 0;
-
-  int src = device->device_total_rank; // current device
-  int src_node = src / device->config.num_device;
-
+  int src = device->device_total_rank;
   int ne_tp_dg = device->model_config.ne_tp_dg;
   int e_tp_dg = device->model_config.e_tp_dg;
-
-  std::vector<int> tp_sharing_device_list = {};
-  int device_list_offset = device->device_total_rank / ne_tp_dg * ne_tp_dg;
-
-  for(int device_idx = device_list_offset; device_idx < device_list_offset + ne_tp_dg; device_idx ++){
-    tp_sharing_device_list.push_back(device_idx);
-  }
-
-  std::unordered_set<int> set_tp_devices(tp_sharing_device_list.begin(), tp_sharing_device_list.end());
-
   int total_num_device = device->config.num_device * device->config.num_node;
 
-  for(int dst = 0; dst < total_num_device; dst ++){ // dst: destination device
-    if(set_tp_devices.count(dst) == 0){ // outer tp space
+  std::vector<int> tp_sharing_device_list = {};
+  int device_list_offset = src / ne_tp_dg * ne_tp_dg;
+  for(int device_idx = device_list_offset; device_idx < device_list_offset + ne_tp_dg; device_idx++){
+    tp_sharing_device_list.push_back(device_idx);
+  }
+  std::unordered_set<int> set_tp_devices(tp_sharing_device_list.begin(), tp_sharing_device_list.end());
+
+  // --- INICIO CÓDIGO TFM: EXTRACCIÓN DE DATOS Y PACKETIZATION ---
+  int MTU = 256;          // Maximum Transmission Unit (Payload)
+  int HEADER_SIZE = 24;   // Cabeceras de red por paquete
+  int FLIT_SIZE = 32;     // Tamaño del Flit físico de BookSim2
+
+  for(int dst = 0; dst < total_num_device; dst++) {
+    if(set_tp_devices.count(dst) == 0 && src != dst) {
       int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst / e_tp_dg) * e_tp_dg;
       int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
-
-      if((int)(dst / 8) == src_node){ 
-        // intra node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          intra_node_comm_token += sequences_metadata->local_num_token_in_expert[e_id]; // to the experts in a dst device
-        }
+      
+      int tokens_to_dst = 0;
+      for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
+        tokens_to_dst += sequences_metadata->local_num_token_in_expert[e_id];
       }
-      else{ 
-        // inter node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          inter_node_comm_token += sequences_metadata->local_num_token_in_expert[e_id];
-        }
-      }
-    }
-  }
 
-  // if ne_tp_dg > 1, tp sharing devices have same tokens. Therefore, need to be divided by ne_tp_dg (send only 1/ne_tp_dg tokens)
-  
-  hw_metric intra_node_comm_size = 1.0 * intra_node_comm_token * k * input->precision_byte;
-  hw_metric inter_node_comm_size = 1.0 * inter_node_comm_token * k * input->precision_byte;
+      long bytes_to_dst = (long)tokens_to_dst * k * input->precision_byte / ne_tp_dg;
 
-  intra_node_comm_size /= ne_tp_dg;
-  inter_node_comm_size /= ne_tp_dg;
-
-  if(intra_node_comm_size == 0 && inter_node_comm_size == 0){
-    return output;
-  }
-
-  if(sequences_metadata->get_sum_process_token() > 0){
-    // prefill & mixed stage - use both NVLink and InfiniBand
-
-    time_ns intra_node_latency = intra_node_comm_size / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.device_ict_latency;
-                                
-    time_ns inter_node_latency = inter_node_comm_size / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.node_ict_latency;
-
-    send_time = std::max(intra_node_latency, inter_node_latency);
-  }
-  else if (sequences_metadata->get_gen_process_token() > 0){
-    // decode - use only InifiniBand, but when num_node == 1, use NVLink
-    if(device->config.num_node == 1){
-      send_time = (intra_node_comm_size + inter_node_comm_size) / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.device_ict_latency;
-    }
-    else{
-      send_time = (intra_node_comm_size + inter_node_comm_size) / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.node_ict_latency;
-    }
-  }
-
-  // Receive time //
-  intra_node_comm_token = 0;
-  inter_node_comm_token = 0;
-
-  int dst_device_rank = device->device_total_rank; // dst: destination device, current device
-  int dst_node = dst_device_rank / device->config.num_device;
-
-  int dst_dp_rank = device->device_total_rank / ne_tp_dg; // data parallel index
-  
-  int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst_device_rank / e_tp_dg) * e_tp_dg; // experts in a dst_device
-  int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
-
-  for(int src_dp_idx = 0; src_dp_idx < total_num_device / ne_tp_dg; src_dp_idx ++){ 
-    if(src_dp_idx != dst_dp_rank){ // from other dp space
-
-      int src_device_rank = src_dp_idx * ne_tp_dg;
-      int src_node = src_device_rank / device->config.num_device;
-
-      if(dst_node == src_node){ 
-        // intra node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          intra_node_comm_token += sequences_metadata->scheduler->running_queue[src_dp_idx]->local_num_token_in_expert[e_id]; // from the experts in a src device
-        }
-      }
-      else{ 
-        // inter node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          inter_node_comm_token += sequences_metadata->scheduler->running_queue[src_dp_idx]->local_num_token_in_expert[e_id];
+      if (bytes_to_dst > 0) {
+        int num_packets = (bytes_to_dst + MTU - 1) / MTU;
+        for (int p = 0; p < num_packets; p++) {
+            long payload = (p == num_packets - 1) ? (bytes_to_dst % MTU) : MTU;
+            if (payload == 0) payload = MTU;
+            int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
+            
+            BookSimCoSimManager::traffic_per_module[this->name].push_back({src, dst, flits});
         }
       }
     }
   }
 
-  // if ne_tp_dg > 1, tp sharing devices have same tokens. Therefore, need to be divided by ne_tp_dg (send only 1/ne_tp_dg tokens)
-  
-  intra_node_comm_size = 1.0 * intra_node_comm_token * k * input->precision_byte;
-  inter_node_comm_size = 1.0 * inter_node_comm_token * k * input->precision_byte;
+  // Registro del dispositivo en la barrera
+  BookSimCoSimManager::devices_per_module[this->name].push_back(device);
+  BookSimCoSimManager::calls_per_module[this->name]++;
 
-  intra_node_comm_size /= ne_tp_dg;
-  inter_node_comm_size /= ne_tp_dg;
-
-  if(intra_node_comm_size == 0 && inter_node_comm_size == 0){
-    return output;
+  // ¿Han llegado todas las GPUs a esta capa? Si es así, disparamos BookSim2.
+  if (BookSimCoSimManager::calls_per_module[this->name] == total_num_device) {
+      BookSimCoSimManager::TriggerBarrier(this->name);
   }
-
-  if(sequences_metadata->get_sum_process_token() > 0){
-    // prefill & mixed stage - use both NVLink and InfiniBand
-
-    time_ns intra_node_latency = intra_node_comm_size / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.device_ict_latency;
-                                
-    time_ns inter_node_latency = inter_node_comm_size / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.node_ict_latency;
-
-    receive_time = std::max(intra_node_latency, inter_node_latency);
-  }
-  else if (sequences_metadata->get_gen_process_token() > 0){
-    // decode - use only InifiniBand, but when num_node == 1, use NVLink
-    if(device->config.num_node == 1){
-      receive_time = (intra_node_comm_size + inter_node_comm_size) / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.device_ict_latency;
-    }
-    else{
-      receive_time = (intra_node_comm_size + inter_node_comm_size) / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.node_ict_latency;
-    }
-  }
-
-  total_time = std::max(send_time, receive_time);
-
-  if (input->parallel_execution && !device->config.communication_hiding) {
-    if (input->isPerformHigh()) {
-      device->status.high_time += total_time;
-      // device->status.device_time += total_time;
-    } else {
-      device->status.low_time += total_time;
-    }
-  }
-  device->status.device_time += total_time;
+  // --- FIN CÓDIGO TFM ---
 
   return output;
 }
@@ -277,189 +231,72 @@ MoEGather::MoEGather(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true) {
   std::vector<int> shape = {1, 1};
-
-  Tensor::Ptr output =
-      Tensor::Create("moe_gather_output", shape, "act", device, device->model_config.precision_byte);
+  Tensor::Ptr output = Tensor::Create("moe_gather_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
 }
 
 TensorVec MoEGather::forward(const TensorVec input_vec,
                              BatchedSequence::Ptr sequences_metadata) {
   Tensor::Ptr input = input_vec.at(0);
-  int m = input->shape[0];
   int k = input->shape[1];
-  Tensor::Ptr output = get_activation("moe_gather_output", input->shape);
   
-  // assume using disaggregated system
   if (!device->perform_execution) {
     return input_vec;
   }
 
-  time_ns total_time = 0;
-  time_ns send_time = 0;
-  time_ns receive_time = 0;
-
-  // Receive time // 
-  int intra_node_comm_token = 0;
-  int inter_node_comm_token = 0;
-
-  int dst = device->device_total_rank; // current device
-  int dst_node = dst / device->config.num_device;
-
+  int dst = device->device_total_rank; // En Gather, la GPU actual es el destino
   int e_tp_dg = device->model_config.e_tp_dg;
   int ne_tp_dg = device->model_config.ne_tp_dg;
+  int total_num_device = device->config.num_device * device->config.num_node;
 
   std::vector<int> e_tp_sharing_device_list = {};
-  int device_list_offset = device->device_total_rank / e_tp_dg * e_tp_dg;
-
-  for(int device_idx = device_list_offset; device_idx < device_list_offset + e_tp_dg; device_idx ++){
+  int device_list_offset = dst / e_tp_dg * e_tp_dg;
+  for(int device_idx = device_list_offset; device_idx < device_list_offset + e_tp_dg; device_idx++){
     e_tp_sharing_device_list.push_back(device_idx);
   }
-
   std::unordered_set<int> set_e_tp_devices(e_tp_sharing_device_list.begin(), e_tp_sharing_device_list.end());
 
-  int total_num_device = device->config.num_device * device->config.num_node;
-  
-  for(int src = 0; src < total_num_device; src ++){ // dst: destination device
-    if(set_e_tp_devices.count(src) == 0){ // outer tp space
+  // --- INICIO CÓDIGO TFM: EXTRACCIÓN DE DATOS Y PACKETIZATION ---
+  int MTU = 256;          
+  int HEADER_SIZE = 24;   
+  int FLIT_SIZE = 32;     
+
+  for(int src = 0; src < total_num_device; src++) {
+    if(set_e_tp_devices.count(src) == 0 && src != dst) { 
       int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (src / e_tp_dg) * e_tp_dg;
       int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
 
-      if((int)(src / 8) == dst_node){ 
-        // intra node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          intra_node_comm_token += sequences_metadata->local_num_token_in_expert[e_id]; // to the experts in a src device
-        }
+      int tokens_from_src = 0;
+      for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++){
+        tokens_from_src += sequences_metadata->local_num_token_in_expert[e_id];
       }
-      else{ 
-        // inter node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          inter_node_comm_token += sequences_metadata->local_num_token_in_expert[e_id];
-        }
+
+      long bytes_from_src = 1.0 * tokens_from_src * k * input->precision_byte / e_tp_dg / ne_tp_dg;
+
+      if ((device->model_config.model_name == "deepseekV3") && device->model_config.precision_byte == 1){
+        bytes_from_src *= 2;
       }
-    }
-  }
 
-  hw_metric intra_node_comm_size = 1.0 * intra_node_comm_token * k * input->precision_byte;
-  hw_metric inter_node_comm_size = 1.0 * inter_node_comm_token * k * input->precision_byte;
-
-  intra_node_comm_size /= device->model_config.e_tp_dg;
-  inter_node_comm_size /= device->model_config.e_tp_dg;
-
-  intra_node_comm_size /= device->model_config.ne_tp_dg; // receive only (1 / tp_degree) tokens, and then all reduce
-  inter_node_comm_size /= device->model_config.ne_tp_dg; // receive only (1 / tp_degree) tokens, and then all reduce
-
-  // FP8 dispatch && BF16 combine
-  if((device->model_config.model_name == "deepseekV3") && device->model_config.precision_byte == 1){
-    intra_node_comm_size *= 2;
-    inter_node_comm_size *= 2;
-  }
-
-  if(intra_node_comm_size == 0 && inter_node_comm_size == 0){
-    return input_vec;
-  }
-
-  if(sequences_metadata->get_sum_process_token() > 0){
-    // prefill & mixed stage - use both NVLink and InfiniBand
-
-    time_ns intra_node_latency = intra_node_comm_size / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.device_ict_latency;
-                                
-    time_ns inter_node_latency = inter_node_comm_size / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.node_ict_latency;
-
-    receive_time = std::max(intra_node_latency, inter_node_latency);
-  }
-  else if (sequences_metadata->get_gen_process_token() > 0){
-    // decode - use only InifiniBand, but when num_node == 1, use NVLink
-    if(device->config.num_node == 1){
-      receive_time = (intra_node_comm_size + inter_node_comm_size) / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.device_ict_latency;
-    }
-    else{
-      receive_time = (intra_node_comm_size + inter_node_comm_size) / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.node_ict_latency;
-    }
-  }
-
-  // Send time //
-  intra_node_comm_token = 0;
-  inter_node_comm_token = 0;
-
-  int src_device_rank = device->device_total_rank; // src: source device, current device
-  int src_node = src_device_rank / device->config.num_device;
-
-  int src_dp_rank = device->device_total_rank / ne_tp_dg; // data parallel index
-  
-  int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (src_device_rank / e_tp_dg) * e_tp_dg; // experts in a src_device
-  int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
-
-  for(int dst_dp_idx = 0; dst_dp_idx < total_num_device / ne_tp_dg; dst_dp_idx ++){ 
-    if(dst_dp_idx != src_dp_rank){ // to other dp space
-
-      int dst_device_rank = dst_dp_idx * ne_tp_dg;
-      int dst_node = dst_device_rank / device->config.num_device;
-
-      if(dst_node == src_node){ 
-        // intra node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          intra_node_comm_token += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id]; // to orig device from the experts in a src device
-        }
-      }
-      else{ 
-        // inter node
-        for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id ++){
-          inter_node_comm_token += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id];
+      if (bytes_from_src > 0) {
+        int num_packets = (bytes_from_src + MTU - 1) / MTU;
+        for (int p = 0; p < num_packets; p++) {
+            long payload = (p == num_packets - 1) ? (bytes_from_src % MTU) : MTU;
+            if (payload == 0) payload = MTU;
+            int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
+            
+            BookSimCoSimManager::traffic_per_module[this->name].push_back({src, dst, flits});
         }
       }
     }
   }
 
-  // if ne_tp_dg > 1, tp sharing devices have same tokens. Therefore, need to be divided by ne_tp_dg (send only 1/ne_tp_dg tokens)
-  
-  intra_node_comm_size = 1.0 * intra_node_comm_token * k * input->precision_byte;
-  inter_node_comm_size = 1.0 * inter_node_comm_token * k * input->precision_byte;
+  BookSimCoSimManager::devices_per_module[this->name].push_back(device);
+  BookSimCoSimManager::calls_per_module[this->name]++;
 
-  intra_node_comm_size /= ne_tp_dg;
-  inter_node_comm_size /= ne_tp_dg;
-
-  if(intra_node_comm_size == 0 && inter_node_comm_size == 0){
-    return input_vec;
+  if (BookSimCoSimManager::calls_per_module[this->name] == total_num_device) {
+      BookSimCoSimManager::TriggerBarrier(this->name);
   }
-
-  if(sequences_metadata->get_sum_process_token() > 0){
-    // prefill & mixed stage - use both NVLink and InfiniBand
-
-    time_ns intra_node_latency = intra_node_comm_size / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.device_ict_latency;
-                                
-    time_ns inter_node_latency = inter_node_comm_size / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-                                + device->config.node_ict_latency;
-
-    send_time = std::max(intra_node_latency, inter_node_latency);
-  }
-  else if (sequences_metadata->get_gen_process_token() > 0){
-    // decode - use only InifiniBand, but when num_node == 1, use NVLink
-    if(device->config.num_node == 1){
-      send_time = (intra_node_comm_size + inter_node_comm_size) / device->config.device_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.device_ict_latency;
-    }
-    else{
-      send_time = (intra_node_comm_size + inter_node_comm_size) / device->config.node_ict_bandwidth * 1000 * 1000 * 1000
-      + device->config.node_ict_latency;
-    }
-  }
-
-  total_time = std::max(send_time, receive_time);
-
-  if (input->parallel_execution && !device->config.communication_hiding) {
-    if (input->isPerformHigh()) {
-      device->status.high_time += total_time;
-    } else {
-      device->status.low_time += total_time;
-    }
-  }
-  device->status.device_time += total_time;
+  // --- FIN CÓDIGO TFM ---
 
   return input_vec;
 }
@@ -467,12 +304,8 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
 Sync::Sync(std::string& prefix, std::string& name, std::vector<int> device_list,
            Device::Ptr device)
     : Module(prefix, name, device, device_list) {
-  std::vector<int> shape = {1, 1};
-
-  auto sync__set =
-      Sync__Set::Create(module_map_name, "sync__set", device_list, device);
+  auto sync__set = Sync__Set::Create(module_map_name, "sync__set", device_list, device);
   add_module(sync__set);
-
   auto sync__ = Sync__::Create(module_map_name, "sync__", device_list, device);
   add_module(sync__);
 }
@@ -516,4 +349,3 @@ Tensor::Ptr Sync__::forward(const Tensor::Ptr input,
 }
 
 }  // namespace llm_system
-
