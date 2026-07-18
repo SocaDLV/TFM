@@ -77,14 +77,21 @@ Tensor::Ptr Decoder::forward(const Tensor::Ptr input,
   Module::Ptr all_reduce = get_module("all_reduce");
   Module::Ptr residual_2 = get_module("residual_2");
 
+  // --- CÓDIGO CORREGIDO ---
   Tensor::Ptr input_ln_out = (*input_layer_norm)(input, sequences_metadata);
   Tensor::Ptr attention_out = (*attention)(input_ln_out, sequences_metadata);
+  
+  // 1. Calculamos el primer residuo (input + attention_out)
   Tensor::Ptr res_1_out = (*residual_1)(attention_out, sequences_metadata);
-  Tensor::Ptr post_attn_ln_out = (*post_attn_layer_norm)(attention_out, sequences_metadata);
+  
+  // 2. CORRECCIÓN: El post_attn recibe res_1_out, NO attention_out
+  Tensor::Ptr post_attn_ln_out = (*post_attn_layer_norm)(res_1_out, sequences_metadata); 
+  
   Tensor::Ptr ffn_out = (*feedforward)(post_attn_ln_out, sequences_metadata);
   Tensor::Ptr result = (*all_reduce)(ffn_out, sequences_metadata);
-  Tensor::Ptr res_2_out = (*residual_1)(result, sequences_metadata);
-
+  
+  // 3. CORRECCIÓN: El segundo residuo debe llamar a residual_2, NO a residual_1
+  Tensor::Ptr res_2_out = (*residual_2)(result, sequences_metadata);
 
   return res_2_out;
 }
@@ -121,7 +128,9 @@ MoEDecoder::MoEDecoder(std::string& prefix, std::string& name,
     add_module(attention);
   }
 
-  auto residual_1 = LayerNorm::Create(module_map_name, "residual_1", model_config.hidden_dim,
+  // --- CÓDIGO CORREGIDO ---
+  // CORRECCIÓN: Usar Residual::Create en lugar de LayerNorm::Create
+  auto residual_1 = Residual::Create(module_map_name, "residual_1", model_config.hidden_dim,
       non_moe_device_list, device);
   add_module(residual_1);
 
@@ -135,7 +144,8 @@ MoEDecoder::MoEDecoder(std::string& prefix, std::string& name,
                         device_list, device);
   add_module(expert_ffn);
 
-  auto residual_2 = LayerNorm::Create(module_map_name, "residual_2", model_config.hidden_dim,
+  // CORRECCIÓN: Usar Residual::Create en lugar de LayerNorm::Create
+  auto residual_2 = Residual::Create(module_map_name, "residual_2", model_config.hidden_dim,
       non_moe_device_list, device);
   add_module(residual_2);
 }
@@ -150,10 +160,14 @@ Tensor::Ptr MoEDecoder::forward(const Tensor::Ptr input,
   Module::Ptr residual_2 = get_module("residual_2");
   
 
+  // --- CÓDIGO CORREGIDO EN MoEDecoder::forward ---
   Tensor::Ptr input_ln_out = (*input_layer_norm)(input, sequences_metadata);
   Tensor::Ptr attention_out = (*attention)(input_ln_out, sequences_metadata);
   Tensor::Ptr res_1_out = (*residual_1)(attention_out, sequences_metadata);
-  Tensor::Ptr post_attn_ln_out = (*post_attn_layer_norm)(attention_out, sequences_metadata);
+  
+  // CORRECCIÓN: Alimentamos con res_1_out
+  Tensor::Ptr post_attn_ln_out = (*post_attn_layer_norm)(res_1_out, sequences_metadata); 
+  
   Tensor::Ptr result = (*expert_ffn)(post_attn_ln_out, sequences_metadata);
   Tensor::Ptr res_2_out = (*residual_2)(result, sequences_metadata);
 

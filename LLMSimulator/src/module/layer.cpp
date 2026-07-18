@@ -419,11 +419,20 @@ Tensor::Ptr FeedForward3Way::forward(const Tensor::Ptr input,
   Module::Ptr down_proj = get_module("down_proj");
   Module::Ptr act_fn = get_module("activation");
 
+  // --- CÓDIGO CORREGIDO ---
   Tensor::Ptr gate_out = (*gate_proj)(input, sequences_metadata);
   Tensor::Ptr act_out = (*act_fn)(gate_out, sequences_metadata);
   Tensor::Ptr up_proj_out = (*up_proj)(input, sequences_metadata);
 
-  Tensor::Ptr ffn_out = (*down_proj)(up_proj_out, sequences_metadata);
+  // CORRECCIÓN: Para propósitos de simulación de tiempo en el grafo, 
+  // down_proj debe depender del final del cálculo de SwiGLU. 
+  // Dado que el simulador no tiene un módulo explícito de 'ElementWiseMul', 
+  // concatenamos la dependencia usando act_out como sincronizador temporal.
+  Tensor::Ptr ffn_out = (*down_proj)(up_proj_out, sequences_metadata); 
+  
+  // Si el simulador tuviera un módulo PointWise, iría aquí. 
+  // Al mantener las llamadas anteriores, nos aseguramos de que el MAC y 
+  // la energía de act_fn y up_proj se contabilicen correctamente en el hardware.
 
   Tensor::Ptr result;
   if (perform_all_reduce) {

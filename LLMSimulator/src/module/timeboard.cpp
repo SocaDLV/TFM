@@ -39,8 +39,12 @@ void TimeStamp::set_status(const StatusBoard& output_status) {
     }
   }
 
-  status.start_time = status.device_time;
-  status.end_time = output_status.device_time;
+  //CORRECCIÓN: Estas dos lineas siguientes rompen la simulación paralela
+  // en caso de seleccionar una topología asimétrica o un numero , por lo
+  // que se comentan
+
+  //status.start_time = status.device_time;
+  //status.end_time = output_status.device_time;
 
   if (status.isTensorVec) {
     for (auto tensor : status.tensor_vec) {
