@@ -36,6 +36,7 @@ Instead of analytical formulas, the compute simulator delegates all `AllReduce`,
 *   **Python:** 3.8+ (for automation and trace analysis)
 
 ### Build Instructions
+
 Clone the repository and compile the C++ core:
 
 ```bash
@@ -51,6 +52,9 @@ cd build
 cmake ..
 make -j
 cd ..
+```
+
+---
 
 ## 🚀 Usage: Automated CLI Workflow
 
@@ -74,6 +78,7 @@ python run_sim.py --model mixtral --devices 8 --topology torus
 | `--gantt` | `flag` | `False` | Exports Gantt chart rendering data for visualization. |
 
 ### Output Artifacts
+
 Results are securely sealed in a timestamped folder inside `build/results/` (e.g., `build/results/mixtral_8dev_torus_parFalse_20260718_201022/`). 
 The output includes:
 *   `device_X.trc`: Cycle-accurate execution traces containing compute times and physical `NETWORK_STALL` events.
@@ -83,6 +88,7 @@ The output includes:
 ---
 
 ## 📊 Trace Analysis (Phase 5)
+
 *Work in progress.* Scripts to parse `.trc` files, separate compute vs. network stall metrics, and generate latency distribution visualizations will be located in the `analysis/` directory.
 
 ---
