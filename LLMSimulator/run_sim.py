@@ -3,14 +3,19 @@ import subprocess
 import os
 import shutil
 import sys
+import math
 from datetime import datetime
 
 def parse_args():
     parser = argparse.ArgumentParser(description="LLM + BookSim2 Co-Simulation Runner")
-    # Opciones de Hardware
+    # Opciones de Modelo
     parser.add_argument("--model", type=str, default="mixtral", help="Target LLM Model")
-    parser.add_argument("--devices", type=int, default=8, help="Number of GPUs")
+    
+    # Opciones de Red Espacial (BookSim2)
     parser.add_argument("--topology", type=str, default="torus", choices=["mesh", "torus", "ring"], help="BookSim2 Topology")
+    parser.add_argument("--net_dims", type=int, nargs='+', default=[8], help="Network dimensions (e.g., '4 4' for 4x4, or '8' for 1D)")
+    parser.add_argument("--vcs", type=int, default=4, help="Number of Virtual Channels (VCs)")
+    parser.add_argument("--routing", type=str, default="dim_order", choices=["dim_order", "min_adapt"], help="Routing algorithm")
     
     # Opciones de Simulación
     parser.add_argument("--parallel", action="store_true", help="Enable parallel_execution (xPU + PIM overlapping)")
@@ -19,22 +24,26 @@ def parse_args():
     
     return parser.parse_args()
 
-def generate_configs(args, output_dir):
-    # 1. Crear configuración para BookSim2
+def generate_configs(args, output_dir, total_devices):
+    n_dims = len(args.net_dims)
+    
+    if n_dims > 1:
+        k_str = "{" + ",".join(map(str, args.net_dims)) + "}"
+    else:
+        k_str = str(args.net_dims[0])
+
     booksim_cfg_path = os.path.join(output_dir, "test.cfg")
     with open(booksim_cfg_path, "w") as f:
         f.write(f"topology = {args.topology};\n")
-        f.write(f"k = {args.devices};\n")
-        f.write(f"n = 1;\n")
-        f.write(f"routing_function = dim_order;\n")
-        f.write(f"num_vcs = 4;\n")
-        f.write(f"injection_rate = 0.0;\n")
+        f.write(f"k = {k_str};\n")
+        f.write(f"n = {n_dims};\n")
+        f.write(f"routing_function = {args.routing};\n")
+        f.write(f"num_vcs = {args.vcs};\n")
+        f.write(f"injection_rate = 0.0;\n") # INMUTABLE: LLMSimulator es el inyector
 
-    # Transformar booleanos a "on"/"off" sin comillas
     parallel_str = "on" if args.parallel else "off"
     gantt_str = "on" if args.gantt else "off"
 
-    # 2. Crear configuración YAML manualmente para evitar las comillas de pyyaml
     yaml_content = f"""model:
   model_name: {args.model}
 
@@ -43,7 +52,7 @@ system:
   nvlink_gen: 5
   infiniband_gen: 800
   num_node: 1
-  num_device: {args.devices}
+  num_device: {total_devices}
   processor_type: GPU
   distribution:
     expert_tensor_degree: 1
@@ -92,32 +101,45 @@ log:
     return llm_cfg_path, booksim_cfg_path
 
 def main():
-    # Comprobación de seguridad: Asegurar que estamos en la raíz del proyecto
     if not os.path.exists("build/run"):
         print("❌ Error: Ejecutable 'build/run' no encontrado.")
-        print("👉 Asegúrate de ejecutar este script desde la RAÍZ de LLMSimulator (no desde dentro de 'build/').")
         sys.exit(1)
 
     args = parse_args()
+    total_devices = math.prod(args.net_dims)
     
-    # Nombrado científico de la carpeta de resultados
+    # ==========================================
+    # GUARDARRAÍLES DE ARQUITECTURA (NUEVO)
+    # ==========================================
+    if args.topology == "torus" and args.vcs < 2:
+        print("🛑 ERROR CRÍTICO DE ARQUITECTURA:")
+        print("   La topología Torus requiere al menos 2 VCs (num_vcs >= 2).")
+        print("   Si usas 1 VC, BookSim2 entrará en un 'Deadlock' infinito debido a los ciclos físicos de la red.")
+        sys.exit(1)
+        
+    if total_devices > 256:
+        print("⚠️ ADVERTENCIA DE LÍMITE FÍSICO:")
+        print(f"   Estás intentando simular {total_devices} GPUs. BookSim2 escalará cuadráticamente los puertos de los routers.")
+        print("   Esto puede consumir toda tu memoria RAM o tardar horas por iteración. Asegúrate de tener recursos suficientes.\n")
+    # ==========================================
+
+    dims_str = "x".join(map(str, args.net_dims))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder_name = f"{args.model}_{args.devices}dev_{args.topology}_par{args.parallel}_{timestamp}"
+    folder_name = f"{args.model}_{dims_str}dev_{args.topology}_par{args.parallel}_{timestamp}"
     output_dir = os.path.join("build", "results", folder_name)
     os.makedirs(os.path.join(output_dir, "gantt"), exist_ok=True)
     
-    llm_cfg, booksim_cfg = generate_configs(args, output_dir)
+    llm_cfg, booksim_cfg = generate_configs(args, output_dir, total_devices)
     
-    # Copiar configs a donde el ejecutable en C++ los espera leer (en la raíz)
     shutil.copy(booksim_cfg, "test.cfg")
     shutil.copy(llm_cfg, "config.yaml")
     
     cmd_str = " ".join(sys.argv)
     executable = ["./build/run"]
-    
     log_file_path = os.path.join(output_dir, "sim_output.txt")
     
     print(f"\n🚀 Iniciando Co-Simulación...")
+    print(f"🖥️ Red: {dims_str} {args.topology.upper()} | GPUs: {total_devices} | Enrutamiento: {args.routing}")
     print(f"📁 Resultados irán a: {output_dir}")
     print(f"⚙️ Comando: {cmd_str}\n" + "-"*40)
     
@@ -134,17 +156,14 @@ def main():
             
         process.wait()
             
-    # --- AÑADIR ESTE BLOQUE ---
     print(f"\n📦 Recolectando archivos .trc generados...")
     moved_trcs = 0
-    for file in os.listdir("."):  # Busca en la raíz del proyecto
+    for file in os.listdir("."):
         if file.endswith(".trc"):
             shutil.move(file, os.path.join(output_dir, file))
             moved_trcs += 1
-    # --------------------------
             
     print(f"✅ Simulación terminada. Se movieron {moved_trcs} archivos .trc. Datos sellados en: {output_dir}\n")
 
 if __name__ == "__main__":
     main()
-            

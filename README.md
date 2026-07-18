@@ -58,12 +58,19 @@ cd ..
 
 ## 🚀 Usage: Automated CLI Workflow
 
-The framework provides a robust Python wrapper (`run_sim.py`) that orchestrates the simulation, generates dynamic configurations, and automatically collects trace artifacts.
+The framework provides a robust Python wrapper (`run_sim.py`) that orchestrates the simulation, automatically calculates node capacities, and securely collects trace artifacts.
 
 Run simulations directly from the root directory:
 
 ```bash
-python run_sim.py --model mixtral --devices 8 --topology torus
+# Example 1: 1D Ring Topology (8 GPUs)
+python run_sim.py --model mixtral --net_dims 8 --topology torus
+
+# Example 2: 2D Mesh Topology (4x4 = 16 GPUs)
+python run_sim.py --model mixtral --net_dims 4 4 --topology mesh
+
+# Example 3: Asymmetric 2D Torus (8x2 = 16 GPUs)
+python run_sim.py --model mixtral --net_dims 8 2 --topology torus
 ```
 
 ### CLI Parameters
@@ -71,21 +78,21 @@ python run_sim.py --model mixtral --devices 8 --topology torus
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--model` | `str` | `mixtral` | Target LLM Architecture (e.g., mixtral, llama). |
-| `--devices` | `int` | `8` | Number of physical GPUs in the cluster. |
-| `--topology` | `str` | `torus` | BookSim2 physical interconnect topology (`torus`, `mesh`, `ring`). |
-| `--parallel` | `flag` | `False` | Enables parallel_execution (only relevant for xPU+PIM heterogeneous setups). |
+| `--net_dims` | `int(s)` | `8` | Spatial dimensions of the network. (e.g., `8` for 1D, `4 4` for 2D). |
+| `--topology` | `str` | `torus` | BookSim2 physical interconnect topology (`torus`, `mesh`). |
+| `--routing` | `str` | `dim_order` | Routing algorithm (`dim_order`, `min_adapt`). |
+| `--vcs` | `int` | `4` | Number of Virtual Channels. *Note: Torus requires >= 2 to prevent deadlocks.* |
+| `--parallel` | `flag` | `False` | Enables parallel compute execution (xPU+PIM setups only). |
 | `--data_mode`| `str` | `synthesis` | Compute timing mode (`synthesis` for trace-based, `analytical` for Roofline). |
 | `--gantt` | `flag` | `False` | Exports Gantt chart rendering data for visualization. |
 
 ### Output Artifacts
 
-Results are securely sealed in a timestamped folder inside `build/results/` (e.g., `build/results/mixtral_8dev_torus_parFalse_20260718_201022/`). 
+Results are securely sealed in a timestamped folder inside `build/results/` (e.g., `build/results/mixtral_4x4dev_torus_parFalse_20260718_201022/`). 
 The output includes:
 *   `device_X.trc`: Cycle-accurate execution traces containing compute times and physical `NETWORK_STALL` events.
 *   `config.yaml` & `test.cfg`: Snapshot of the specific configuration used.
 *   `sim_output.txt`: Raw stdout and logging.
-
----
 
 ## 📊 Trace Analysis (Phase 5)
 
