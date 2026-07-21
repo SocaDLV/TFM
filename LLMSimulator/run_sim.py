@@ -35,7 +35,7 @@ def generate_configs(args, output_dir, total_devices):
     
     # BookSim2 solo acepta redes simétricas (k entero). Tomamos el primer valor.
     k_str = str(args.net_dims[0])
-
+    
     booksim_cfg_path = os.path.join(output_dir, "test.cfg")
     with open(booksim_cfg_path, "w") as f:
         f.write(f"topology = {args.topology};\n")
@@ -142,7 +142,8 @@ def main():
 
     dims_str = "x".join(map(str, args.net_dims))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder_name = f"{args.model}_{dims_str}dev_{args.topology}_tok{args.output_len}_{timestamp}"
+    # Nuevo naming basado en Batch Size
+    folder_name = f"{args.model}_{dims_str}dev_{args.topology}_bs{args.batch_size}_{timestamp}"
     output_dir = os.path.join("build", "results", folder_name)
     os.makedirs(os.path.join(output_dir, "gantt"), exist_ok=True)
     
@@ -156,8 +157,9 @@ def main():
     log_file_path = os.path.join(output_dir, "sim_output.txt")
     
     print(f"\n🚀 Iniciando Co-Simulación...")
-    print(f"🖥️ Red: {dims_str} {args.topology.upper()} | Enrutamiento: {args.routing}")
-    print(f"🧠 Carga: {args.output_len} Tokens/iter | Batch: {args.batch_size} | Iters: {args.iter}")
+    print(f"🖥️ Red: {dims_str} {args.topology.upper()} | VCs: {args.vcs} | Enrutamiento: {args.routing}")
+    print(f"🧠 Concurrencia: Batch Size {args.batch_size} (Max. secuencias simultáneas)")
+    print(f"🔄 Estadística: {args.iter} Iteraciones (Trazas pre-cargadas de 10 tokens)")
     print(f"📁 Resultados irán a: {output_dir}")
     print(f"⚙️ Comando: {cmd_str}\n" + "-"*40)
     

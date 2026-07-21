@@ -1,0 +1,7 @@
+COMMAND EXECUTED: python run_sim.py --model mixtral --net_dims 2 2 2 --topology mesh --batch_size 4
+--------------------------------------------------
+[Decode Mode] Current Length of sequences is modified into input_len
+Using synthesis trace
+k_cache_0_0
+ERROR: Unvalid cached tensor request
+"/home/igilolt/Escritorio/TFM/LLMSimulator"
