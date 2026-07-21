@@ -75,14 +75,27 @@ python run_sim.py --model mixtral --net_dims 8 2 --topology torus
 
 ### CLI Parameters
 
+#### Network Architecture Options (BookSim2)
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--topology` | `str` | `torus` | Physical interconnect topology (`torus`, `mesh`, `ring`). |
+| `--net_dims` | `int(s)` | `8` | Spatial dimensions. Single int for 1D (e.g., `8`), multiple for 2D/3D (e.g., `2 2 2` for a 3D grid). Must be symmetrical. Total GPUs are inferred automatically. |
+| `--routing` | `str` | `dim_order` | Routing algorithm (`dim_order`, `min_adapt`). |
+| `--vcs` | `int` | `4` | Number of Virtual Channels. *Note: Torus requires >= 2 to prevent deadlocks.* |
+
+#### Workload & Model Options (LLMSimulator)
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--model` | `str` | `mixtral` | Target LLM Architecture (e.g., mixtral, llama). |
-| `--net_dims` | `int(s)` | `8` | Spatial dimensions of the network. (e.g., `8` for 1D, `4 4` for 2D). |
-| `--topology` | `str` | `torus` | BookSim2 physical interconnect topology (`torus`, `mesh`). |
-| `--routing` | `str` | `dim_order` | Routing algorithm (`dim_order`, `min_adapt`). |
-| `--vcs` | `int` | `4` | Number of Virtual Channels. *Note: Torus requires >= 2 to prevent deadlocks.* |
-| `--parallel` | `flag` | `False` | Enables parallel compute execution (xPU+PIM setups only). |
+| `--input_len` | `int` | `1024` | Prompt size. Dictates the initial memory/compute prefill burst. |
+| `--output_len`| `int` | `10` | Number of tokens to generate per iteration. **Higher values induce more steady-state network contention.** |
+| `--batch_size`| `int` | `32` | Maximum batch size for continuous batching scenarios. |
+| `--iter` | `int` | `5` | Number of times to repeat the simulation for statistical variance. |
+
+#### Simulation Execution Options
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `--parallel` | `flag` | `False` | Enables parallel compute execution (xPU+PIM heterogeneous setups only). |
 | `--data_mode`| `str` | `synthesis` | Compute timing mode (`synthesis` for trace-based, `analytical` for Roofline). |
 | `--gantt` | `flag` | `False` | Exports Gantt chart rendering data for visualization. |
 

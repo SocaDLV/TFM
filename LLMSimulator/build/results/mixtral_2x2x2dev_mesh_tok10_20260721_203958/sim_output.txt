@@ -1,0 +1,5 @@
+COMMAND EXECUTED: python run_sim.py --model mixtral --net_dims 2 2 2 --topology mesh --output_len 10 --data_mode analytical
+--------------------------------------------------
+[Decode Mode] Current Length of sequences is modified into input_len
+ERROR: [Decode Mode] Output length must be larger than 1
+"/home/igilolt/Escritorio/TFM/LLMSimulator"

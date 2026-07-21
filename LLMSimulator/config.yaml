@@ -31,7 +31,7 @@ serving:
   max_process_token: 0
 
 simulation:
-  data: synthesis
+  data: analytical
   input_len: 1024
   output_len: 10
   precision_byte: 1
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_parFalse_20260718_214547/
-  gantt_directory: build/results/mixtral_8dev_torus_parFalse_20260718_214547/gantt/
+  output_directory: build/results/mixtral_2x2x2dev_mesh_tok10_20260721_203958/
+  gantt_directory: build/results/mixtral_2x2x2dev_mesh_tok10_20260721_203958/gantt/

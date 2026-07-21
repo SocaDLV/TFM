@@ -17,6 +17,12 @@ def parse_args():
     parser.add_argument("--vcs", type=int, default=4, help="Number of Virtual Channels (VCs)")
     parser.add_argument("--routing", type=str, default="dim_order", choices=["dim_order", "min_adapt"], help="Routing algorithm")
     
+    # Opciones de Carga de Trabajo (LLMSimulator Workload)
+    parser.add_argument("--input_len", type=int, default=1024, help="Prompt size (Prefill tokens)")
+    parser.add_argument("--output_len", type=int, default=10, help="Number of tokens to generate per iteration (Decoding steps)")
+    parser.add_argument("--iter", type=int, default=5, help="Number of statistical iterations to run")
+    parser.add_argument("--batch_size", type=int, default=32, help="Max batch size for continuous batching")
+    
     # Opciones de Simulación
     parser.add_argument("--parallel", action="store_true", help="Enable parallel_execution (xPU + PIM overlapping)")
     parser.add_argument("--data_mode", type=str, default="synthesis", help="Data mode (e.g., synthesis, analytical)")
@@ -37,11 +43,12 @@ def generate_configs(args, output_dir, total_devices):
         f.write(f"n = {n_dims};\n")
         f.write(f"routing_function = {args.routing};\n")
         f.write(f"num_vcs = {args.vcs};\n")
-        f.write(f"injection_rate = 0.0;\n") # INMUTABLE: LLMSimulator es el inyector
+        f.write(f"injection_rate = 0.0;\n")
 
     parallel_str = "on" if args.parallel else "off"
     gantt_str = "on" if args.gantt else "off"
 
+    # Plantilla YAML inyectando las nuevas variables de carga de trabajo
     yaml_content = f"""model:
   model_name: {args.model}
 
@@ -71,16 +78,16 @@ system:
     decode_mode: on
 
 serving:
-  max_batch_size: 32
+  max_batch_size: {args.batch_size}
   max_process_token: 0
 
 simulation:
   data: {args.data_mode}
-  input_len: 1024
-  output_len: 10
+  input_len: {args.input_len}
+  output_len: {args.output_len}
   precision_byte: 1
   skewness: 0.0
-  iter: 5
+  iter: {args.iter}
   injection_rate: 0
   exit_out_of_memory: off
   mem_cap_limit: off
@@ -107,31 +114,35 @@ def main():
     total_devices = math.prod(args.net_dims)
     
     # ==========================================
-    # GUARDARRAÍLES DE ARQUITECTURA (NUEVO)
+    # GUARDARRAÍLES DE ARQUITECTURA
     # ==========================================
     if args.topology == "torus" and args.vcs < 2:
         print("🛑 ERROR CRÍTICO DE ARQUITECTURA:")
         print("   La topología Torus requiere al menos 2 VCs (num_vcs >= 2).")
-        print("   Si usas 1 VC, BookSim2 entrará en un 'Deadlock' infinito debido a los ciclos físicos de la red.")
         sys.exit(1)
         
-    if total_devices > 256:
-        print("⚠️ ADVERTENCIA DE LÍMITE FÍSICO:")
-        print(f"   Estás intentando simular {total_devices} GPUs. BookSim2 escalará cuadráticamente los puertos de los routers.")
-        print("   Esto puede consumir toda tu memoria RAM o tardar horas por iteración. Asegúrate de tener recursos suficientes.\n")
-
-    # Comprobar que todas las dimensiones son iguales (BookSim2 requiere simetría)
     if not all(dim == args.net_dims[0] for dim in args.net_dims):
         print("🛑 ERROR DE ARQUITECTURA (BookSim2 Limit):")
         print("   BookSim2 solo soporta mallas/toros SIMÉTRICOS usando k y n.")
         print("   Todas las dimensiones deben ser iguales (ej. 4 4, no 4 2).")
         sys.exit(1)
         
+    if total_devices > 256:
+        print("⚠️ ADVERTENCIA DE LÍMITE FÍSICO:")
+        print(f"   Estás intentando simular {total_devices} GPUs. BookSim2 escalará cuadráticamente.")
+        
+    # EL TIP PRO: Advertencia de Tiempo de Simulación
+    total_tokens_simulados = args.output_len * args.iter
+    if total_tokens_simulados > 150:
+        print("\n⏳ ⚠️ ADVERTENCIA DE RENDIMIENTO (Sobrecarga de Red):")
+        print(f"   Estás solicitando {args.output_len} tokens x {args.iter} iteraciones = {total_tokens_simulados} pasos de decodificación.")
+        print("   Como la red es ciclo a ciclo (Cycle-Accurate), esto va a inyectar una cantidad masiva de eventos.")
+        print("   La simulación podría tardar varios minutos. ¡Paciencia!")
     # ==========================================
 
     dims_str = "x".join(map(str, args.net_dims))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder_name = f"{args.model}_{dims_str}dev_{args.topology}_par{args.parallel}_{timestamp}"
+    folder_name = f"{args.model}_{dims_str}dev_{args.topology}_tok{args.output_len}_{timestamp}"
     output_dir = os.path.join("build", "results", folder_name)
     os.makedirs(os.path.join(output_dir, "gantt"), exist_ok=True)
     
@@ -145,7 +156,8 @@ def main():
     log_file_path = os.path.join(output_dir, "sim_output.txt")
     
     print(f"\n🚀 Iniciando Co-Simulación...")
-    print(f"🖥️ Red: {dims_str} {args.topology.upper()} | GPUs: {total_devices} | Enrutamiento: {args.routing}")
+    print(f"🖥️ Red: {dims_str} {args.topology.upper()} | Enrutamiento: {args.routing}")
+    print(f"🧠 Carga: {args.output_len} Tokens/iter | Batch: {args.batch_size} | Iters: {args.iter}")
     print(f"📁 Resultados irán a: {output_dir}")
     print(f"⚙️ Comando: {cmd_str}\n" + "-"*40)
     
