@@ -1,0 +1,10 @@
+COMMAND EXECUTED: python run_sim.py --model mixtral --net_dims 4 2 --topology mesh --routing dim_order
+--------------------------------------------------
+[Decode Mode] Current Length of sequences is modified into input_len
+Using synthesis trace
+ACT: 0.477417GB, Weight: 6.74634GB, Cache: 0.252441GB
+Total: 7.4762GB
+-----------------------------------
+-------------start-----------------
+-----------------------------------
+Parse error : Unknown string field: k

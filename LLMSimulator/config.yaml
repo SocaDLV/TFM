@@ -12,7 +12,7 @@ system:
     expert_tensor_degree: 1
     none_expert_tensor_degree: 1
   optimization:
-    parallel_execution: on
+    parallel_execution: off
     hetero_subbatch: off
     disagg_system: off
     use_low_unit_moe_only: off
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_parTrue_20260718_201049/
-  gantt_directory: build/results/mixtral_8dev_torus_parTrue_20260718_201049/gantt/
+  output_directory: build/results/mixtral_8dev_torus_parFalse_20260718_214547/
+  gantt_directory: build/results/mixtral_8dev_torus_parFalse_20260718_214547/gantt/

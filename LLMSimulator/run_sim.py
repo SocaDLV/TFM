@@ -27,10 +27,8 @@ def parse_args():
 def generate_configs(args, output_dir, total_devices):
     n_dims = len(args.net_dims)
     
-    if n_dims > 1:
-        k_str = "{" + ",".join(map(str, args.net_dims)) + "}"
-    else:
-        k_str = str(args.net_dims[0])
+    # BookSim2 solo acepta redes simétricas (k entero). Tomamos el primer valor.
+    k_str = str(args.net_dims[0])
 
     booksim_cfg_path = os.path.join(output_dir, "test.cfg")
     with open(booksim_cfg_path, "w") as f:
@@ -121,6 +119,14 @@ def main():
         print("⚠️ ADVERTENCIA DE LÍMITE FÍSICO:")
         print(f"   Estás intentando simular {total_devices} GPUs. BookSim2 escalará cuadráticamente los puertos de los routers.")
         print("   Esto puede consumir toda tu memoria RAM o tardar horas por iteración. Asegúrate de tener recursos suficientes.\n")
+
+    # Comprobar que todas las dimensiones son iguales (BookSim2 requiere simetría)
+    if not all(dim == args.net_dims[0] for dim in args.net_dims):
+        print("🛑 ERROR DE ARQUITECTURA (BookSim2 Limit):")
+        print("   BookSim2 solo soporta mallas/toros SIMÉTRICOS usando k y n.")
+        print("   Todas las dimensiones deben ser iguales (ej. 4 4, no 4 2).")
+        sys.exit(1)
+        
     # ==========================================
 
     dims_str = "x".join(map(str, args.net_dims))
