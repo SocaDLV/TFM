@@ -22,7 +22,8 @@ std::ostream * gWatchOut = nullptr;
 
 class API_TrafficManager : public TrafficManager {
 public:
-    std::queue<std::pair<int, int>> arrived_packets;
+    #include <tuple>
+    std::queue<std::tuple<int, int, int>> arrived_packets; // <src, dst, pid>
 
     API_TrafficManager(const Configuration &config, const vector<Network *> & net)
         : TrafficManager(config, net) {}
@@ -33,9 +34,9 @@ public:
     }
 
     // Inyección manual directa a los buffers de BookSim2
-    void Inject(int src, int dst, int size_in_flits) {
-        int pid = _cur_pid++;
-        int time = _time;
+    int Inject(int src, int dst, int size_in_flits) {
+      int pid = _cur_pid++; // Booksim ya lleva este contador
+      int time = _time;
 
         for(int i = 0; i < size_in_flits; ++i) {
             Flit *f = Flit::New();
@@ -61,12 +62,27 @@ public:
             // Inyectamos directamente en la cola de paquetes parciales
             _partial_packets[src][0].push_back(f);
         }
+        return pid;
     }
 
     // Interceptamos los flits cuando se retiran de la red al llegar a destino
     virtual void _RetireFlit(Flit *f, int dest) override {
         if (f->tail) { // Si es el último flit del paquete, registramos la llegada
-            arrived_packets.push({f->src, f->dest});
+            // CORRECCIÓN: Añadido f->pid a la tupla (src, dst, pid)
+            arrived_packets.push({f->src, f->dest, f->pid}); 
+
+            // --- INICIO TFM DEBUG: TRACKING DE PAQUETES ---
+            static const char* debug_env = std::getenv("SIM_DEBUG_PIDS");
+            if (debug_env && std::string(debug_env) == "1") {
+                int receive_time = _time; // _time es variable protegida de TrafficManager
+                int latency = receive_time - f->ctime; // f->ctime es el ciclo de inyección
+                
+                // Imprimimos la traza mágica para que Python la capture
+                std::cout << "[TRACK_PID] " << f->pid << "," << f->src << "," 
+                          << f->dest << "," << f->ctime << "," << receive_time 
+                          << "," << latency << std::endl;
+            }
+            // --- FIN TFM DEBUG ---
         }
         TrafficManager::_RetireFlit(f, dest);
     }
@@ -106,10 +122,11 @@ void BookSim_Initialize(const char* config_file) {
     g_traffic_manager = new API_TrafficManager(config, g_networks);
 }
 
-void BookSim_InjectPacket(int src, int dst, int size_in_flits) {
+int BookSim_InjectPacket(int src, int dst, int size_in_flits) {
     if(g_traffic_manager) {
-        g_traffic_manager->Inject(src, dst, size_in_flits);
+        return ((API_TrafficManager*)g_traffic_manager)->Inject(src, dst, size_in_flits);
     }
+    return -1;
 }
 
 void BookSim_AdvanceCycle() {
@@ -118,12 +135,14 @@ void BookSim_AdvanceCycle() {
     }
 }
 
-bool BookSim_CheckReceived(int& src, int& dst) {
-    if(g_traffic_manager && !g_traffic_manager->arrived_packets.empty()) {
-        auto packet = g_traffic_manager->arrived_packets.front();
-        g_traffic_manager->arrived_packets.pop();
-        src = packet.first;
-        dst = packet.second;
+bool BookSim_CheckReceived(int& src, int& dst, int& pid) {
+    if(g_traffic_manager && !((API_TrafficManager*)g_traffic_manager)->arrived_packets.empty()) {
+        auto pkt = ((API_TrafficManager*)g_traffic_manager)->arrived_packets.front();
+        ((API_TrafficManager*)g_traffic_manager)->arrived_packets.pop();
+        
+        src = std::get<0>(pkt);
+        dst = std::get<1>(pkt);
+        pid = std::get<2>(pkt); // Extraemos el PID
         return true;
     }
     return false;

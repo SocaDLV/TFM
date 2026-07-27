@@ -1,0 +1,6 @@
+COMMAND EXECUTED: python run_sim.py --model mixtral --net_dims 4 4 --topology mesh --debug_pids
+--------------------------------------------------
+[Decode Mode] Current Length of sequences is modified into input_len
+Using synthesis trace
+ERROR: Expert tensor parallel degree is not supported
+"/home/igilolt/Escritorio/TFM/LLMSimulator"

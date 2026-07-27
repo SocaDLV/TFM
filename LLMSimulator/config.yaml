@@ -27,7 +27,7 @@ system:
     decode_mode: on
 
 serving:
-  max_batch_size: 128
+  max_batch_size: 32
   max_process_token: 0
 
 simulation:
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_tok10_20260721_211639/
-  gantt_directory: build/results/mixtral_8dev_torus_tok10_20260721_211639/gantt/
+  output_directory: build/results/mixtral_2x2x2dev_mesh_bs32_20260726_220903/
+  gantt_directory: build/results/mixtral_2x2x2dev_mesh_bs32_20260726_220903/gantt/

@@ -11,7 +11,8 @@
 extern void BookSim_Initialize(const char* config_file);
 extern void BookSim_InjectPacket(int src, int dst, int size_in_flits);
 extern void BookSim_AdvanceCycle();
-extern bool BookSim_CheckReceived(int& src, int& dst);
+// CORRECCIÓN TFM: Actualizada la firma para incluir pid
+extern bool BookSim_CheckReceived(int& src, int& dst, int& pid); 
 
 class BookSimCoSimManager {
 public:
@@ -181,11 +182,12 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
 
       // Simulamos toda la capa en BookSim2 de golpe
       int cycles = 0;
-      int arr_src, arr_dst;
+      int arr_src, arr_dst, arr_pid; // CORRECCIÓN TFM: Variable pid añadida
       while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
           BookSim_AdvanceCycle();
           cycles++;
-          while(BookSim_CheckReceived(arr_src, arr_dst)) {
+          // CORRECCIÓN TFM: Pasamos arr_pid
+          while(BookSim_CheckReceived(arr_src, arr_dst, arr_pid)) { 
               BookSimCoSimManager::total_received++;
           }
       }
@@ -297,11 +299,12 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       }
 
       int cycles = 0;
-      int arr_src, arr_dst;
+      int arr_src, arr_dst, arr_pid; // CORRECCIÓN TFM: Variable pid añadida
       while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
           BookSim_AdvanceCycle();
           cycles++;
-          while(BookSim_CheckReceived(arr_src, arr_dst)) {
+          // CORRECCIÓN TFM: Pasamos arr_pid
+          while(BookSim_CheckReceived(arr_src, arr_dst, arr_pid)) {
               BookSimCoSimManager::total_received++;
           }
       }

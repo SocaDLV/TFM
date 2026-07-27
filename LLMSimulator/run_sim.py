@@ -27,6 +27,9 @@ def parse_args():
     parser.add_argument("--parallel", action="store_true", help="Enable parallel_execution (xPU + PIM overlapping)")
     parser.add_argument("--data_mode", type=str, default="synthesis", help="Data mode (e.g., synthesis, analytical)")
     parser.add_argument("--gantt", action="store_true", help="Export Gantt charts")
+
+    # Opciones de Debugging
+    parser.add_argument("--debug_pids", action="store_true", help="Genera el CSV de ciclo de vida de los paquetes (Gantt)")
     
     return parser.parse_args()
 
@@ -140,6 +143,13 @@ def main():
         print("   La simulación podría tardar varios minutos. ¡Paciencia!")
     # ==========================================
 
+    # --- INYECTAR MODO DEBUG PARA C++ ---
+    if args.debug_pids:
+        os.environ["SIM_DEBUG_PIDS"] = "1"
+    else:
+        os.environ.pop("SIM_DEBUG_PIDS", None)
+    # ------------------------------------
+
     dims_str = "x".join(map(str, args.net_dims))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Nuevo naming basado en Batch Size
@@ -163,6 +173,8 @@ def main():
     print(f"📁 Resultados irán a: {output_dir}")
     print(f"⚙️ Comando: {cmd_str}\n" + "-"*40)
     
+    track_pids_data = []  # Almacenaje en memoria de las trazas de paquetes
+    
     with open(log_file_path, "w") as log_file:
         log_file.write(f"COMMAND EXECUTED: python {cmd_str}\n")
         log_file.write("-" * 50 + "\n")
@@ -171,8 +183,12 @@ def main():
         process = subprocess.Popen(executable, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         
         for line in process.stdout:
-            sys.stdout.write(line)
-            log_file.write(line)
+            # Interceptamos la traza mágica de BookSim2
+            if line.startswith("[TRACK_PID]"):
+                track_pids_data.append(line.strip().replace("[TRACK_PID] ", ""))
+            else:
+                sys.stdout.write(line)
+                log_file.write(line)
             
         process.wait()
             
@@ -183,7 +199,17 @@ def main():
             shutil.move(file, os.path.join(output_dir, file))
             moved_trcs += 1
             
-    print(f"✅ Simulación terminada. Se movieron {moved_trcs} archivos .trc. Datos sellados en: {output_dir}\n")
+    print(f"✅ Simulación terminada. Se movieron {moved_trcs} archivos .trc. Datos sellados en: {output_dir}")
+
+    # Escribir el CSV del Tracking si estábamos en Debug Mode
+    if args.debug_pids and track_pids_data:
+        csv_path = os.path.join(output_dir, "packet_tracking_debug.csv")
+        with open(csv_path, "w") as f:
+            f.write("PID,Source,Dest,Inject_Cycle,Receive_Cycle,Latency\n")
+            f.write("\n".join(track_pids_data))
+        print(f"🐛 Trazas PID (Modo Debug) guardadas en: {csv_path}\n")
+    else:
+        print("")
 
 if __name__ == "__main__":
     main()
