@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_2x2x2dev_mesh_bs32_20260726_220903/
-  gantt_directory: build/results/mixtral_2x2x2dev_mesh_bs32_20260726_220903/gantt/
+  output_directory: build/results/mixtral_2x2x2dev_mesh_bs32_20260729_214357/
+  gantt_directory: build/results/mixtral_2x2x2dev_mesh_bs32_20260729_214357/gantt/
