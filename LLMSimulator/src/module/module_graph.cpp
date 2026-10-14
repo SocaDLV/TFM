@@ -25,7 +25,7 @@ ModuleGraph::ModuleGraph(Module::Ptr module, StatusBoard& status,
 };
 
 bool ModuleGraph::run(BatchedSequence::Ptr sequences_metadata) {
-  if (module == nullptr || !module->execution()) {
+  if (module_pop || module == nullptr || !module->execution()) {
     return true;
   } else if (check_ready() == true) {
     if (isTensorVec) {
@@ -112,7 +112,7 @@ void ModuleGraph::sync_devices() {
 
 void ModuleGraph::set_dependency_tensor() {
   // only when inputs are one Tensor pointer
-  if (input && module && module->sync) {
+  if (input && module && module->sync && !module_pop) {
     module->set_dependency_tensor(dependency_tensor_list, input);
   }
 }
@@ -135,10 +135,14 @@ void TopModuleGraph::push_module_graph(Module::Ptr module, Tensor::Ptr input) {
   module_graph.push_back(graph);
 };
 
-void TopModuleGraph::pop_module_graph(Tensor::Ptr input) {
+void TopModuleGraph::pop_module_graph(Module::Ptr module, Tensor::Ptr input) {
   ModuleGraph::Ptr graph =
-      ModuleGraph::Create(status, nullptr, input, current_module_level--, true);
+      ModuleGraph::Create(status, module, input, current_module_level--, true);
   module_graph.push_back(graph);
+};
+
+void TopModuleGraph::pop_module_graph(Tensor::Ptr input) {
+  pop_module_graph(nullptr, input);
 };
 
 void TopModuleGraph::push_module_graph(Module::Ptr module, TensorVec input) {
@@ -147,10 +151,14 @@ void TopModuleGraph::push_module_graph(Module::Ptr module, TensorVec input) {
   module_graph.push_back(graph);
 };
 
-void TopModuleGraph::pop_module_graph(TensorVec input) {
+void TopModuleGraph::pop_module_graph(Module::Ptr module, TensorVec input) {
   ModuleGraph::Ptr graph =
-      ModuleGraph::Create(status, nullptr, input, current_module_level--, true);
+      ModuleGraph::Create(status, module, input, current_module_level--, true);
   module_graph.push_back(graph);
+};
+
+void TopModuleGraph::pop_module_graph(TensorVec input) {
+  pop_module_graph(nullptr, input);
 };
 
 void TopModuleGraph::set_dependency() {
@@ -321,25 +329,24 @@ void TopModuleGraph::set_pop_status() {
   status.opb = exec_status.opb;
 
 // --- INICIO AÑADIDO TFM: LOG DE EJECUCIÓN (CÓMPUTO/MEMORIA) ---
-  if (device != nullptr) {
+  if (device != nullptr && exec_status.total_duration > 0) {
       time_ns end_time = status.device_time;
       time_ns start_time = end_time - exec_status.total_duration;
       
-      std::string layer_name = "UNKNOWN_LAYER";
-      if (*current_module != nullptr) {
-          // AÇÒ EVITA L'EXPLOSIÓ: Comprovem si és un node POP abans de demanar-li el nom
-          if (!(*current_module)->is_pop()) {
-              layer_name = (*current_module)->get_name();
-          } else {
-              layer_name = "POP_OPERATION";
-          }
+      std::string layer_name = "POP_OPERATION";
+      if (*current_module != nullptr && (*current_module)->module != nullptr) {
+          layer_name = (*current_module)->module->name;
       }
       
       std::string details = "ProcType:" + std::to_string((int)exec_status.processor_type) + 
                             "|Comp_ns:" + std::to_string(exec_status.compute_duration) + 
                             "|Mem_ns:" + std::to_string(exec_status.memory_duration);
+      if (*current_module != nullptr && (*current_module)->module != nullptr) {
+          details += "|Module:" + (*current_module)->module->module_map_name;
+      }
       
       device->log_tfm_event(start_time, end_time, layer_name, details);
+
   }
   // --- FIN AÑADIDO TFM ---
 

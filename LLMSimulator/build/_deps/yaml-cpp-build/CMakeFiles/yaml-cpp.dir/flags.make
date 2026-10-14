@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = -DYAML_CPP_NO_CONTRIB
 
-CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/src
+CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/src
 
 CXX_FLAGS = -O3 -DNDEBUG -std=c++20 -fPIC -fPIC -Wall -Wextra -Wshadow -Weffc++ -Wno-long-long -pedantic -pedantic-errors
 

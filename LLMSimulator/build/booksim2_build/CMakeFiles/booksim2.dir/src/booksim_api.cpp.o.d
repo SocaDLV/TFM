@@ -124,7 +124,8 @@ booksim2_build/CMakeFiles/booksim2.dir/src/booksim_api.cpp.o: \
  /home/igilolt/Escritorio/TFM/booksim2/src/networks/network.hpp \
  /usr/include/c++/15/deque /usr/include/c++/15/bits/stl_deque.h \
  /usr/include/c++/15/bits/deque.tcc \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /usr/include/c++/15/iostream /usr/include/c++/15/ostream \
  /usr/include/c++/15/bits/ostream.h /usr/include/c++/15/ios \
  /usr/include/c++/15/exception /usr/include/c++/15/bits/exception_ptr.h \
@@ -163,33 +164,36 @@ booksim2_build/CMakeFiles/booksim2.dir/src/booksim_api.cpp.o: \
  /usr/include/c++/15/bits/basic_ios.tcc \
  /usr/include/c++/15/bits/ostream.tcc /usr/include/c++/15/istream \
  /usr/include/c++/15/bits/istream.tcc \
- /home/igilolt/Escritorio/TFM/booksim2/src/flit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flit.hpp \
  /usr/include/c++/15/stack /usr/include/c++/15/bits/stl_stack.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/outputset.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/outputset.hpp \
  /usr/include/c++/15/set /usr/include/c++/15/bits/stl_set.h \
  /usr/include/c++/15/bits/stl_multiset.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/credit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/credit.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/routers/router.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/timed_module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/flitchannel.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/channel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/timed_module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flitchannel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/channel.hpp \
  /usr/include/c++/15/queue /usr/include/c++/15/bits/stl_heap.h \
  /usr/include/c++/15/bits/stl_queue.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/globals.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/timed_module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/flit.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/channel.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/globals.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/globals.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/timed_module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/channel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/globals.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.hpp \
  /usr/include/c++/15/list /usr/include/c++/15/bits/stl_list.h \
  /usr/include/c++/15/bits/allocated_ptr.h \
  /usr/include/c++/15/bits/list.tcc \
+ /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/booksim2/src/flit.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/buffer_state.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/credit.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/stats.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/traffic.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/routefunc.hpp \
+ /home/igilolt/Escritorio/TFM/booksim2/src/outputset.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/injection.hpp \
  /usr/include/c++/15/sstream /usr/include/c++/15/bits/sstream.tcc

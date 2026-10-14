@@ -9,8 +9,10 @@ add_compile_options(-fPIC)
 
 include_directories(src)
 include_directories(src/dram/ramulator2/src)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../booksim2/src)
 add_subdirectory(src)
 add_subdirectory(eval)
+
 
 # TFM: Importar BookSim2 (co-simulación)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../booksim2 ${CMAKE_CURRENT_BINARY_DIR}/booksim2_build)

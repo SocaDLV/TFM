@@ -5,13 +5,13 @@
 # compile CXX with /usr/bin/c++
 C_DEFINES = 
 
-C_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers
+C_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers
 
 C_FLAGS = -O3 -DNDEBUG -std=gnu99 -fPIC -fPIC -w -O3
 
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers
+CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers
 
 CXX_FLAGS = -O3 -DNDEBUG -std=gnu++17 -fPIC -fPIC -w -O3
 

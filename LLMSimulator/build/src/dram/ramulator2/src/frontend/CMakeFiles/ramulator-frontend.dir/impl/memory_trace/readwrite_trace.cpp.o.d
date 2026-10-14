@@ -277,7 +277,8 @@ src/dram/ramulator2/src/frontend/CMakeFiles/ramulator-frontend.dir/impl/memory_t
  /usr/include/bits/types/struct_statx_timestamp.h \
  /usr/include/bits/types/struct_statx.h /usr/include/fcntl.h \
  /usr/include/bits/fcntl.h /usr/include/bits/fcntl-linux.h \
- /usr/include/bits/types/struct_iovec.h /usr/include/linux/falloc.h \
+ /usr/include/bits/types/struct_iovec.h /usr/include/bits/cloexec.h \
+ /usr/include/linux/falloc.h \
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include/spdlog/details/backtracer.h \
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include/spdlog/details/log_msg_buffer.h \
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include/spdlog/details/log_msg_buffer-inl.h \

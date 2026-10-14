@@ -52,11 +52,12 @@ class ModuleGraph : std::enable_shared_from_this<ModuleGraph> {
   void set_dependency();
 
   void unset_tensor() {
-    if (module) {
+    if (module && !module_pop) {
       module->unset_tensor();
     }
     unset_stamped();
   }
+
 
   bool is_stamped() { return stamped; }
   void unset_stamped() { stamped = false; }
@@ -111,9 +112,12 @@ class TopModuleGraph {
 
   void push_module_graph(Module::Ptr module, Tensor::Ptr input);
   void pop_module_graph(Tensor::Ptr input);
+  void pop_module_graph(Module::Ptr module, Tensor::Ptr input);
 
   void push_module_graph(Module::Ptr module, TensorVec input);
   void pop_module_graph(TensorVec input);
+  void pop_module_graph(Module::Ptr module, TensorVec input);
+
 
   void run(BatchedSequence::Ptr sequences_metadata);
   void restart_graph();

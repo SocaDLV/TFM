@@ -8,11 +8,7 @@
 #include <string>
 #include <unordered_set>
 
-extern void BookSim_Initialize(const char* config_file);
-extern void BookSim_InjectPacket(int src, int dst, int size_in_flits);
-extern void BookSim_AdvanceCycle();
-// CORRECCIÓN TFM: Actualizada la firma para incluir pid
-extern bool BookSim_CheckReceived(int& src, int& dst, int& pid); 
+#include "booksim_api.hpp"
 
 class BookSimCoSimManager {
 public:
@@ -70,6 +66,8 @@ Tensor::Ptr AllReduce::forward(const Tensor::Ptr input,
 
   time_ns total_time = one_hop * hop;
 
+  time_ns start_time = device->status.device_time;
+
   if (input->parallel_execution && !device->config.communication_hiding) {
     if (input->isPerformHigh()) {
       device->status.high_time += total_time;
@@ -78,8 +76,15 @@ Tensor::Ptr AllReduce::forward(const Tensor::Ptr input,
     }
   }
   device->status.device_time += total_time;
+  time_ns end_time = device->status.device_time;
+
+  if (total_time > 0) {
+    std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(total_time);
+    device->log_tfm_event(start_time, end_time, this->name, details);
+  }
 
   return output;
+
 }
 
 AllGather::AllGather(std::string& prefix, std::string& name,
@@ -182,12 +187,11 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
 
       // Simulamos toda la capa en BookSim2 de golpe
       int cycles = 0;
-      int arr_src, arr_dst, arr_pid; // CORRECCIÓN TFM: Variable pid añadida
+      BookSimPacketInfo pkt_info;
       while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
           BookSim_AdvanceCycle();
           cycles++;
-          // CORRECCIÓN TFM: Pasamos arr_pid
-          while(BookSim_CheckReceived(arr_src, arr_dst, arr_pid)) { 
+          while(BookSim_CheckReceived(pkt_info)) { 
               BookSimCoSimManager::total_received++;
           }
       }
@@ -299,12 +303,11 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       }
 
       int cycles = 0;
-      int arr_src, arr_dst, arr_pid; // CORRECCIÓN TFM: Variable pid añadida
+      BookSimPacketInfo pkt_info;
       while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
           BookSim_AdvanceCycle();
           cycles++;
-          // CORRECCIÓN TFM: Pasamos arr_pid
-          while(BookSim_CheckReceived(arr_src, arr_dst, arr_pid)) {
+          while(BookSim_CheckReceived(pkt_info)) {
               BookSimCoSimManager::total_received++;
           }
       }

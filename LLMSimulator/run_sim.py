@@ -205,9 +205,10 @@ def main():
     if args.debug_pids and track_pids_data:
         csv_path = os.path.join(output_dir, "packet_tracking_debug.csv")
         with open(csv_path, "w") as f:
-            f.write("PID,Source,Dest,Inject_Cycle,Receive_Cycle,Latency\n")
+            f.write("PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes\n")
             f.write("\n".join(track_pids_data))
         print(f"🐛 Trazas PID (Modo Debug) guardadas en: {csv_path}\n")
+
     else:
         print("")
 

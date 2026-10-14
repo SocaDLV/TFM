@@ -662,6 +662,7 @@ src/module/CMakeFiles/module.dir/attention.cpp.o: /home/igilolt/Escritorio/TFM/L
   /usr/lib/gcc/x86_64-redhat-linux/15/include/stdint.h
 
 src/module/CMakeFiles/module.dir/communication.cpp.o: /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp \
+  /home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/common/assert.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/common/type.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/dram_type.h \
@@ -6435,6 +6436,8 @@ src/module/CMakeFiles/module.dir/timeboard.cpp.o: /home/igilolt/Escritorio/TFM/L
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/scheduler/scheduler.h:
 
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.h:
+
+/home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp:
 
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/attention.cpp:
 

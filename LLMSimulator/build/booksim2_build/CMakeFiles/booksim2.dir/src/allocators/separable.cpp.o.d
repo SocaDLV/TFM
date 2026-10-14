@@ -110,8 +110,8 @@ booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable.cpp.o: \
  /usr/include/c++/15/bits/erase_if.h /usr/include/c++/15/set \
  /usr/include/c++/15/bits/stl_set.h \
  /usr/include/c++/15/bits/stl_multiset.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /usr/include/c++/15/cstring /usr/include/string.h /usr/include/strings.h \
  /usr/include/c++/15/climits \
  /usr/lib/gcc/x86_64-redhat-linux/15/include/limits.h \
@@ -160,6 +160,6 @@ booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable.cpp.o: \
  /usr/include/c++/15/bits/basic_ios.tcc \
  /usr/include/c++/15/bits/ostream.tcc /usr/include/c++/15/istream \
  /usr/include/c++/15/bits/istream.tcc \
- /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/config_utils.hpp \
  /usr/include/c++/15/sstream /usr/include/c++/15/bits/sstream.tcc \
  /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/arbiter.hpp

@@ -168,17 +168,20 @@ booksim2_build/CMakeFiles/booksim2.dir/src/buffer.cpp.o: \
  /usr/include/c++/15/bits/erase_if.h \
  /home/igilolt/Escritorio/TFM/booksim2/src/routefunc.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/routers/router.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/timed_module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/flit.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/credit.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/flitchannel.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/channel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/timed_module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/credit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flitchannel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/channel.hpp \
  /usr/include/c++/15/queue /usr/include/c++/15/bits/stl_heap.h \
  /usr/include/c++/15/bits/stl_queue.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/timed_module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/channel.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/globals.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/timed_module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/channel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/config_utils.hpp \
  /usr/include/c++/15/map /usr/include/c++/15/bits/stl_map.h \
  /usr/include/c++/15/bits/stl_multimap.h \
  /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp

@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = -DSPDLOG_COMPILED_LIB -Dllm_system_EXPORTS
 
-CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/argparse/include -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers
+CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/yaml-cpp/include -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/argparse/include -I/home/igilolt/Escritorio/TFM/booksim2/src -I/home/igilolt/Escritorio/TFM/booksim2/src/allocators -I/home/igilolt/Escritorio/TFM/booksim2/src/arbiters -I/home/igilolt/Escritorio/TFM/booksim2/src/networks -I/home/igilolt/Escritorio/TFM/booksim2/src/power -I/home/igilolt/Escritorio/TFM/booksim2/src/routers
 
 CXX_FLAGS = -O3 -DNDEBUG -fPIC
 

@@ -4,29 +4,55 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 def plot_gantt(df_subset, title, filename, folder):
-    """Función auxiliar para generar y guardar el gráfico de Gantt."""
+    """Función auxiliar para generar y guardar el gráfico de Gantt con dos tramos por barra."""
     if df_subset.empty:
         print(f"⚠️ Aviso: No hay suficientes datos para generar '{title}'.")
         return
 
-    # Ordenar estrictamente por PID para que la ventana temporal sea perfecta
+    # Ordenar por PID descendente para que el menor PID aparezca arriba en el eje Y
     df_subset = df_subset.sort_values(by='PID', ascending=False)
 
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(14, 9))
 
-    bars = ax.barh(df_subset['PID'].astype(str), df_subset['Latency'], 
-                   left=df_subset['Inject_Cycle'], 
-                   color='royalblue', edgecolor='black', alpha=0.8)
+    # Tramo 1: Espera en cola de inyección / NIC Queueing [Creation_Cycle -> Inject_Cycle]
+    bars_q = ax.barh(df_subset['PID'].astype(str), df_subset['Queueing_Delay'], 
+                     left=df_subset['Creation_Cycle'], 
+                     color='#ff7f0e', edgecolor='black', linewidth=0.3, alpha=0.85,
+                     label='Espera en cola (NIC Queueing)')
 
-    # Añadir etiquetas (Src -> Dst)
-    for bar, src, dst in zip(bars, df_subset['Source'], df_subset['Dest']):
-        ax.text(bar.get_x() + bar.get_width() + 1, bar.get_y() + bar.get_height()/2, 
-                f"S{src}→D{dst}", va='center', ha='left', fontsize=9)
+    # Tramo 2: Vuelo real en la NoC [Inject_Cycle -> Receive_Cycle]
+    bars_net = ax.barh(df_subset['PID'].astype(str), df_subset['Network_Latency'], 
+                       left=df_subset['Inject_Cycle'], 
+                       color='#1f77b4', edgecolor='black', linewidth=0.3, alpha=0.85,
+                       label='Vuelo en Red (NoC Flight)')
+
+    # Cálculo dinámico del margen para evitar solapamiento de etiquetas
+    min_x = df_subset['Creation_Cycle'].min()
+    max_x = df_subset['Receive_Cycle'].max()
+    x_span = max(1.0, max_x - min_x)
+    text_offset = max(1.0, x_span * 0.008)
+
+    # Añadir etiquetas detalladas: S{src}→D{dst} (X flits / Y B)
+    for _, row in df_subset.iterrows():
+        y_pos = str(int(row['PID']))
+        x_pos = row['Receive_Cycle'] + text_offset
+        src = int(row['Source'])
+        dst = int(row['Dest'])
+        flits = int(row['Num_Flits'])
+        bytes_val = int(row['Size_Bytes'])
+        
+        ax.text(x_pos, y_pos, 
+                f"S{src}→D{dst} ({flits} flits / {bytes_val} B)", 
+                va='center', ha='left', fontsize=8, color='#111111')
 
     ax.set_xlabel("Ciclos de Reloj (BookSim2)", fontsize=12)
     ax.set_ylabel("Packet ID (PID Secuencial)", fontsize=12)
-    ax.set_title(title, fontsize=14)
+    ax.set_title(title, fontsize=14, fontweight='bold')
     ax.grid(axis='x', linestyle='--', alpha=0.6)
+    ax.legend(loc='upper right', framealpha=0.9, fontsize=10)
+
+    # Margen extra a la derecha para que quepan las etiquetas de texto
+    ax.set_xlim(left=max(0, min_x - x_span * 0.02), right=max_x + x_span * 0.25)
 
     plt.tight_layout()
     output_png = os.path.join(folder, filename)
@@ -37,26 +63,21 @@ def plot_gantt(df_subset, title, filename, folder):
 def get_pid_window(df, threshold, samples):
     """
     Busca el primer paquete cuya latencia supere el 'threshold'.
-    Devuelve un DataFrame con una "foto" secuencial de PIDs centrada en él.
+    Devuelve un DataFrame con una 'foto' secuencial de PIDs centrada en él.
     """
-    # Buscar los paquetes que superen el umbral
-    target_pkts = df[df['Latency'] >= threshold]
+    lat_col = 'Total_Latency' if 'Total_Latency' in df.columns else 'Latency'
+    target_pkts = df[df[lat_col] >= threshold]
     
     if target_pkts.empty:
         return pd.DataFrame() # No se alcanzó este nivel de congestión
         
-    # Cogemos el PID del primero que rompe el umbral
     target_pid = target_pkts.iloc[0]['PID']
     
-    # Calculamos la ventana (mitad por debajo, mitad por encima)
     half_window = samples // 2
     min_pid = target_pid - half_window
     max_pid = target_pid + half_window
     
-    # Filtramos la "foto" secuencial
     window_df = df[(df['PID'] >= min_pid) & (df['PID'] <= max_pid)]
-    
-    # Por si hay huecos, nos aseguramos de limitar exactamente al número de samples
     return window_df.head(samples)
 
 def main():
@@ -71,8 +92,23 @@ def main():
         return
 
     df = pd.read_csv(csv_path)
-    df['Latency'] = pd.to_numeric(df['Latency'])
-    df['PID'] = pd.to_numeric(df['PID'])
+
+    # Compatibilidad con CSVs antiguos si carecen de las nuevas columnas
+    if 'Total_Latency' not in df.columns and 'Latency' in df.columns:
+        df['Total_Latency'] = df['Latency']
+        df['Network_Latency'] = df['Latency']
+        df['Queueing_Delay'] = 0
+        df['Creation_Cycle'] = df['Inject_Cycle']
+        df['Num_Flits'] = 1
+        df['Size_Bytes'] = 32
+
+    # Conversión numérica de columnas clave
+    cols_to_numeric = ['PID', 'Source', 'Dest', 'Creation_Cycle', 'Inject_Cycle', 
+                       'Receive_Cycle', 'Total_Latency', 'Network_Latency', 
+                       'Queueing_Delay', 'Num_Flits', 'Size_Bytes']
+    for col in cols_to_numeric:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # El DataFrame maestro, ordenado secuencialmente por el simulador (PID)
     df_sorted = df.sort_values(by='PID', ascending=True)

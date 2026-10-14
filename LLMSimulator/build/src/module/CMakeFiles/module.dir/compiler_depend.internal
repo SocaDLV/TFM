@@ -665,6 +665,7 @@ src/module/CMakeFiles/module.dir/attention.cpp.o
 
 src/module/CMakeFiles/module.dir/communication.cpp.o
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp
+ /home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/common/assert.h
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/common/type.h
  /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/dram_type.h

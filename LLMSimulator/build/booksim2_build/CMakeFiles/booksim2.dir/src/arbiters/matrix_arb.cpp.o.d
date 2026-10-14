@@ -52,8 +52,8 @@ booksim2_build/CMakeFiles/booksim2.dir/src/arbiters/matrix_arb.cpp.o: \
  /usr/include/c++/15/bits/uses_allocator.h \
  /usr/include/c++/15/bits/uses_allocator_args.h /usr/include/c++/15/tuple \
  /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/arbiter.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /usr/include/c++/15/string /usr/include/c++/15/bits/stringfwd.h \
  /usr/include/c++/15/bits/char_traits.h \
  /usr/include/c++/15/bits/postypes.h /usr/include/c++/15/cwchar \

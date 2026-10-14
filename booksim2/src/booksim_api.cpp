@@ -22,8 +22,7 @@ std::ostream * gWatchOut = nullptr;
 
 class API_TrafficManager : public TrafficManager {
 public:
-    #include <tuple>
-    std::queue<std::tuple<int, int, int>> arrived_packets; // <src, dst, pid>
+    std::queue<BookSimPacketInfo> arrived_packets;
 
     API_TrafficManager(const Configuration &config, const vector<Network *> & net)
         : TrafficManager(config, net) {}
@@ -68,19 +67,51 @@ public:
     // Interceptamos los flits cuando se retiran de la red al llegar a destino
     virtual void _RetireFlit(Flit *f, int dest) override {
         if (f->tail) { // Si es el último flit del paquete, registramos la llegada
-            // CORRECCIÓN: Añadido f->pid a la tupla (src, dst, pid)
-            arrived_packets.push({f->src, f->dest, f->pid}); 
+            Flit * head = nullptr;
+            if (f->head) {
+                head = f;
+            } else {
+                auto iter = _retired_packets[f->cl].find(f->pid);
+                if (iter != _retired_packets[f->cl].end()) {
+                    head = iter->second;
+                }
+            }
+
+            int pid = f->pid;
+            int src = f->src;
+            int dst = dest;
+            int ctime = head ? head->ctime : f->ctime;
+            int itime = head ? head->itime : f->itime;
+            int atime = _time; // Llegada del tail flit
+            int total_latency = atime - ctime;
+            int network_latency = atime - itime;
+            int queueing_delay = itime - ctime;
+            int num_flits = head ? (f->id - head->id + 1) : 1;
+            int size_bytes = num_flits * 32;
+
+            BookSimPacketInfo pkt;
+            pkt.pid = pid;
+            pkt.src = src;
+            pkt.dst = dst;
+            pkt.ctime = ctime;
+            pkt.itime = itime;
+            pkt.atime = atime;
+            pkt.total_latency = total_latency;
+            pkt.network_latency = network_latency;
+            pkt.queueing_delay = queueing_delay;
+            pkt.num_flits = num_flits;
+            pkt.size_bytes = size_bytes;
+
+            arrived_packets.push(pkt);
 
             // --- INICIO TFM DEBUG: TRACKING DE PAQUETES ---
             static const char* debug_env = std::getenv("SIM_DEBUG_PIDS");
             if (debug_env && std::string(debug_env) == "1") {
-                int receive_time = _time; // _time es variable protegida de TrafficManager
-                int latency = receive_time - f->ctime; // f->ctime es el ciclo de inyección
-                
-                // Imprimimos la traza mágica para que Python la capture
-                std::cout << "[TRACK_PID] " << f->pid << "," << f->src << "," 
-                          << f->dest << "," << f->ctime << "," << receive_time 
-                          << "," << latency << std::endl;
+                // Formato de exportación: PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes
+                std::cout << "[TRACK_PID] " << pid << "," << src << "," << dst << "," 
+                          << ctime << "," << itime << "," << atime << "," 
+                          << total_latency << "," << network_latency << "," << queueing_delay << ","
+                          << num_flits << "," << size_bytes << std::endl;
             }
             // --- FIN TFM DEBUG ---
         }
@@ -135,15 +166,23 @@ void BookSim_AdvanceCycle() {
     }
 }
 
-bool BookSim_CheckReceived(int& src, int& dst, int& pid) {
+bool BookSim_CheckReceived(BookSimPacketInfo& info) {
     if(g_traffic_manager && !((API_TrafficManager*)g_traffic_manager)->arrived_packets.empty()) {
-        auto pkt = ((API_TrafficManager*)g_traffic_manager)->arrived_packets.front();
+        info = ((API_TrafficManager*)g_traffic_manager)->arrived_packets.front();
         ((API_TrafficManager*)g_traffic_manager)->arrived_packets.pop();
-        
-        src = std::get<0>(pkt);
-        dst = std::get<1>(pkt);
-        pid = std::get<2>(pkt); // Extraemos el PID
         return true;
     }
     return false;
 }
+
+bool BookSim_CheckReceived(int& src, int& dst, int& pid) {
+    BookSimPacketInfo info;
+    if (BookSim_CheckReceived(info)) {
+        src = info.src;
+        dst = info.dst;
+        pid = info.pid;
+        return true;
+    }
+    return false;
+}
+

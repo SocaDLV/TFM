@@ -110,8 +110,8 @@ booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable_input_first.cpp.
  /usr/include/c++/15/bits/basic_string.tcc /usr/include/c++/15/map \
  /usr/include/c++/15/bits/stl_map.h \
  /usr/include/c++/15/bits/stl_multimap.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /usr/include/c++/15/cstring /usr/include/string.h /usr/include/strings.h \
  /usr/include/c++/15/climits \
  /usr/lib/gcc/x86_64-redhat-linux/15/include/limits.h \
@@ -160,6 +160,6 @@ booksim2_build/CMakeFiles/booksim2.dir/src/allocators/separable_input_first.cpp.
  /usr/include/c++/15/bits/basic_ios.tcc \
  /usr/include/c++/15/bits/ostream.tcc /usr/include/c++/15/istream \
  /usr/include/c++/15/bits/istream.tcc \
- /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /home/igilolt/Escritorio/TFM/booksim2/src/arbiters/arbiter.hpp

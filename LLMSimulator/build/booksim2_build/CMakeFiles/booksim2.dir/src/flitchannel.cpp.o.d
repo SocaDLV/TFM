@@ -176,11 +176,12 @@ booksim2_build/CMakeFiles/booksim2.dir/src/flitchannel.cpp.o: \
  /usr/include/c++/15/bits/quoted_string.h /usr/include/c++/15/sstream \
  /usr/include/c++/15/bits/sstream.tcc \
  /home/igilolt/Escritorio/TFM/booksim2/src/routers/router.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/timed_module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/flit.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/credit.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/flitchannel.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/channel.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/timed_module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/credit.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/flitchannel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/channel.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /usr/include/c++/15/map /usr/include/c++/15/bits/stl_map.h \
  /usr/include/c++/15/bits/stl_multimap.h

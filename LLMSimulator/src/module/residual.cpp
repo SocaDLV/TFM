@@ -39,6 +39,8 @@ Tensor::Ptr Residual::forward(const Tensor::Ptr input,
 
   time_ns total_time = std::max(compute_duration, memory_duration);
 
+  time_ns start_time = device->status.device_time;
+
   if (input->parallel_execution) {
     if (input->isPerformHigh()) {
       device->status.high_time += total_time;
@@ -47,8 +49,14 @@ Tensor::Ptr Residual::forward(const Tensor::Ptr input,
     }
   }
   device->status.device_time += total_time;
+  time_ns end_time = device->status.device_time;
+
+  std::string details = "ProcType:0|Comp_ns:" + std::to_string(compute_duration) + 
+                        "|Mem_ns:" + std::to_string(memory_duration);
+  device->log_tfm_event(start_time, end_time, this->name, details);
 
   return output;
+
 }
 
 }  // namespace llm_system

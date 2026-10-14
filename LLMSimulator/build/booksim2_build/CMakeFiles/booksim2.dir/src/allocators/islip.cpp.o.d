@@ -1,7 +1,7 @@
 booksim2_build/CMakeFiles/booksim2.dir/src/allocators/islip.cpp.o: \
  /home/igilolt/Escritorio/TFM/booksim2/src/allocators/islip.cpp \
  /usr/include/stdc-predef.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
  /usr/include/c++/15/string /usr/include/c++/15/bits/requires_hosted.h \
  /usr/include/c++/15/x86_64-redhat-linux/bits/c++config.h \
  /usr/include/bits/wordsize.h \
@@ -160,7 +160,7 @@ booksim2_build/CMakeFiles/booksim2.dir/src/allocators/islip.cpp.o: \
  /usr/include/c++/15/bits/erase_if.h /usr/include/c++/15/set \
  /usr/include/c++/15/bits/stl_set.h \
  /usr/include/c++/15/bits/stl_multiset.h \
- /home/igilolt/Escritorio/TFM/booksim2/src/module.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/booksim.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/config_utils.hpp \
- /home/igilolt/Escritorio/TFM/booksim2/src/random_utils.hpp
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/module.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/config_utils.hpp \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/random_utils.hpp

@@ -4,7 +4,7 @@
 # compile CXX with /usr/bin/c++
 CXX_DEFINES = 
 
-CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src
+CXX_INCLUDES = -I/home/igilolt/Escritorio/TFM/LLMSimulator/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src -I/home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src
 
 CXX_FLAGS = -O3 -DNDEBUG -fPIC
 

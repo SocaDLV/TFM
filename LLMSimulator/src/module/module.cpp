@@ -12,7 +12,7 @@ Tensor::Ptr Module::operator()(const Tensor::Ptr input,
   Tensor::Ptr return_tensor;
   device->top_module_graph->push_module_graph(getptr(), input);
   return_tensor = forward(input, sequences_metadata);
-  device->top_module_graph->pop_module_graph(return_tensor);
+  device->top_module_graph->pop_module_graph(getptr(), return_tensor);
   return return_tensor;
 };
 
@@ -21,9 +21,10 @@ TensorVec Module::operator()(const TensorVec input,
   std::vector<Tensor::Ptr> return_tensor;
   device->top_module_graph->push_module_graph(getptr(), input);
   return_tensor = forward(input, sequences_metadata);
-  device->top_module_graph->pop_module_graph(return_tensor);
+  device->top_module_graph->pop_module_graph(getptr(), return_tensor);
   return return_tensor;
 };
+
 
 void Module::set_device(Device::Ptr device) {
   for (auto iter : tensor_list) {

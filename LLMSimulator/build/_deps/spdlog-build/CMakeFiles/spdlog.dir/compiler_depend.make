@@ -1860,6 +1860,7 @@ _deps/spdlog-build/CMakeFiles/spdlog.dir/src/spdlog.cpp.o: /home/igilolt/Escrito
   /usr/include/assert.h \
   /usr/include/bits/atomic_wide_counter.h \
   /usr/include/bits/byteswap.h \
+  /usr/include/bits/cloexec.h \
   /usr/include/bits/confname.h \
   /usr/include/bits/cpu-set.h \
   /usr/include/bits/endian.h \
@@ -2603,6 +2604,8 @@ _deps/spdlog-build/CMakeFiles/spdlog.dir/src/stdout_sinks.cpp.o: /home/igilolt/E
 /usr/include/bits/statx-generic.h:
 
 /usr/include/bits/stat.h:
+
+/usr/include/bits/cloexec.h:
 
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/ext/spdlog/include/spdlog/sinks/sink-inl.h:
 

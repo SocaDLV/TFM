@@ -57,18 +57,19 @@ def analyze_folder(folder_path, folder_name):
             df['TYPE'] = df['TYPE'].str.strip() # Limpiar espacios
             df['DURATION'] = pd.to_numeric(df['DURATION'], errors='coerce').fillna(0)
             
-            # 1. Compute Time (Operaciones matemáticas en la GPU)
-            compute = df[df['TYPE'] == 'POP_OPERATION']['DURATION'].sum()
-            
-            # 2. Network Transit (Tiempo de viaje de los datos en BookSim2)
-            scatter = df[df['TYPE'] == 'moe_scatter']['DURATION'].sum()
-            gather = df[df['TYPE'] == 'moe_gather']['DURATION'].sum()
-            # Capturamos cualquier tipo de all_reduce (moe_all_reduce_for_gather, etc)
-            all_reduce = df[df['TYPE'].str.contains('all_reduce', na=False)]['DURATION'].sum()
+            # 1. Network Transit (Tiempo de viaje de los datos en BookSim2)
+            scatter = df[df['TYPE'].str.contains('scatter', case=False, na=False)]['DURATION'].sum()
+            gather = df[df['TYPE'].str.contains('gather', case=False, na=False)]['DURATION'].sum()
+            all_reduce = df[df['TYPE'].str.contains('all_reduce', case=False, na=False)]['DURATION'].sum()
             transit = scatter + gather + all_reduce
             
-            # 3. Synchronization Stalls (Tiempo de inactividad por desbalanceo)
-            stall = df[df['TYPE'] == 'NETWORK_STALL']['DURATION'].sum()
+            # 2. Synchronization Stalls (Tiempo de inactividad por desbalanceo)
+            stall = df[df['TYPE'].str.contains('stall', case=False, na=False)]['DURATION'].sum()
+
+            # 3. Compute Time (Operaciones matemáticas en la GPU: compatible con POP_OPERATION y nombres reales)
+            non_compute_mask = df['TYPE'].str.contains('scatter|gather|stall|all_reduce', case=False, na=False)
+            compute = df[~non_compute_mask]['DURATION'].sum()
+
             
             compute_total += compute
             transit_total += transit
