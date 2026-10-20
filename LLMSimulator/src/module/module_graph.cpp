@@ -338,14 +338,21 @@ void TopModuleGraph::set_pop_status() {
           layer_name = (*current_module)->module->name;
       }
       
-      std::string details = "ProcType:" + std::to_string((int)exec_status.processor_type) + 
-                            "|Comp_ns:" + std::to_string(exec_status.compute_duration) + 
-                            "|Mem_ns:" + std::to_string(exec_status.memory_duration);
-      if (*current_module != nullptr && (*current_module)->module != nullptr) {
-          details += "|Module:" + (*current_module)->module->module_map_name;
+      // Evitar doble registro de módulos que ya registran su propio evento en forward()
+      bool is_self_logged = (layer_name == "input_layer_norm" || layer_name == "post_attn_layer_norm" ||
+                             layer_name == "residual_1" || layer_name == "residual_2" ||
+                             layer_name == "moe_scatter" || layer_name == "moe_gather" ||
+                             layer_name == "all_reduce" || layer_name.find("rope") != std::string::npos ||
+                             layer_name.find("norm") != std::string::npos || layer_name.find("residual") != std::string::npos);
+      if (!is_self_logged) {
+          std::string details = "ProcType:" + std::to_string((int)exec_status.processor_type) + 
+                                "|Comp_ns:" + std::to_string(exec_status.compute_duration) + 
+                                "|Mem_ns:" + std::to_string(exec_status.memory_duration);
+          if (*current_module != nullptr && (*current_module)->module != nullptr) {
+              details += "|Module:" + (*current_module)->module->module_map_name;
+          }
+          device->log_tfm_event(start_time, end_time, layer_name, details);
       }
-      
-      device->log_tfm_event(start_time, end_time, layer_name, details);
 
   }
   // --- FIN AÑADIDO TFM ---

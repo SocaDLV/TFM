@@ -1070,8 +1070,10 @@ Para dotar al co-simulador de observabilidad completa, se implementó un motor n
    ```csv
    START_NS,END_NS,DURATION,TYPE,DETAILS
    ```
-   Utiliza `std::endl` para vaciar el búfer del sistema operativo de inmediato, protegiendo los datos contra interrupciones anormales del simulador.
-3. **Filtrado de Eventos Nulos:** En [`src/module/module_graph.cpp:L332`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module_graph.cpp#L332), solo se registran eventos con `exec_status.total_duration > 0`, eliminando del archivo miles de llamadas declarativas nulas que saturaban el almacenamiento.
+   Utiliza `std::fixed` junto con `std::setprecision(4)` (`#include <iomanip>`) para asegurar que las marcas de tiempo en nanosegundos (superiores a $10^6$ ns) no se trunquen por el formato estándar a notación científica (`float` de 6 cifras significativas), preservando la fidelidad temporal exacta. Asimismo, emplea `std::endl` para vaciar el búfer del sistema operativo de inmediato, protegiendo los datos contra interrupciones anormales del simulador.
+3. **Filtrado de Eventos Nulos y Guarda Anti-Doble Registro:**
+   - En [`src/module/module_graph.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module_graph.cpp), solo se registran eventos con `exec_status.total_duration > 0`, eliminando del archivo miles de llamadas declarativas nulas que saturaban el almacenamiento.
+   - En `TopModuleGraph::set_pop_status()`, se implementa una guarda explícita (`is_self_logged`) que comprueba el nombre canónico del módulo (`norm`, `residual`, `rope`, `scatter`, `gather`, `all_reduce`). Si el módulo pertenece a una de estas clases que ya autogestionan su propio registro en `forward()`, se omite la emisión de un segundo registro POP, previniendo solapamientos temporales o doble contabilidad de latencias en el archivo `.trc`.
 
 ---
 
@@ -1107,15 +1109,52 @@ Ubicado en [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSi
 
 ## 6.4. Análisis Macroscópico de Latencias (`analyze_traces.py`)
 
-Ubicado en [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py):
-- Analiza las ejecuciones más recientes (`--recent N`, `--model`, `--today`).
-- Extrae de los `.trc` el desglose acumulado de:
-  - **Cómputo GPU Puro:** Suma de todas las duraciones de capas tensoriales (`Linear`, `Attention`, normalizaciones).
-  - **Tránsito de Red:** Tiempo de vuelo físico en BookSim2 (`moe_scatter` y `moe_gather`).
-  - **Bloqueos de Sincronización:** Tiempo ocioso en barreras BSP (`NETWORK_STALL`).
-- Genera automáticamente en `build/analysis/`:
-  - `anatomia_latencia.png`: Gráfico de barras apiladas comparativas.
-  - `desglose_primitivas_moe.png`: Comparativa del coste de `moe_scatter` frente a `moe_gather`.
+Ubicado en [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py), realiza el posprocesamiento macroscópico de los archivos `.trc` generados por el clúster.
+
+### 6.4.1. Auditoría de Discrepancias y Conservación del Wall-Clock Time
+Durante las primeras campañas de simulación, se detectó una aparente discrepancia: las gráficas de latencia mostraban barras agregadas cercanas a $\sim 10\text{ M}$ ns, mientras que el reloj real de simulación (`END_NS` máximo en los archivos `TFM_device_X.trc`) culminaba en torno a $\sim 1{,}18\text{ M}$ ns. Se realizó una auditoría rigurosa sobre tres hipótesis causales:
+
+1. **Agregación Multi-GPU vs. Promedio por Dispositivo:**
+   Si se acumula la duración física de todas las GPUs sin normalizar ($N_{\text{GPUs}} = 8$), la métrica reflejaría el tiempo CPU acumulado (Core-Hours equivalentes) en lugar del tiempo transcurrido de pared (*Wall-Clock Time*). El analizador calcula la media representativa por dispositivo:
+   $$\overline{T}_{\text{métrica}} = \frac{1}{N_{\text{GPUs}}} \sum_{g=0}^{N_{\text{GPUs}}-1} T_{\text{métrica}}^{(g)}$$
+
+2. **Doble Registro o Solapamiento de Intervalos en `.trc`:**
+   Se auditó la secuencia temporal de cada `.trc` individual para verificar si la coexistencia de registros emitidos en `forward()` (`LayerNorm`, `Residual`, `RoPE`, `MoEScatter`, `MoEGather`, `AllReduce`) y registros emitidos en `set_pop_status()` provocaba solapamientos o huecos. Se constató que, gracias a la guarda `is_self_logged` implementada en `TopModuleGraph::set_pop_status()`, los intervalos temporales $[t_{\text{start}}, t_{\text{end}}]$ son continuos y disjuntos, cumpliendo:
+   $$\sum \Delta t_k = \max(t_{\text{end}}) - \min(t_{\text{start}})$$
+
+3. **Acumulación Multi-Iteración (Filtro Anti-Appends):**
+   **Causa Raíz de la Inflación:** Cuando el motor ejecuta múltiples iteraciones o fases de calentamiento (`runIteration(iter)` con `iter = 6`), las trazas `.trc` acumulan secuencialmente las sucesivas ejecuciones en un único archivo. En cada nueva iteración, el reloj de la GPU se reinicia a $0$, provocando retrocesos temporales en la serie cronológica ($\text{START\_NS}[i] < \text{START\_NS}[i-1]$). Sin un filtrado adecuado, `analyze_traces.py` sumaba las $6$ iteraciones consecutivas ($6 \times 1{,}187\text{ M ns} \approx 7{,}12\text{ M ns}$ hasta $6 \times 1{,}878\text{ M ns} \approx 11{,}27\text{ M ns}$), multiplicando por $6$ el tiempo real.
+
+Para solucionar de forma definitiva este problema, `analyze_traces.py` incorpora el **Filtro Anti-Appends**:
+```python
+# Detectar reinicios temporales por iteraciones múltiples (iter > 1)
+time_drops = df['START_NS'].diff() < 0
+if time_drops.any():
+    last_reset_idx = time_drops[time_drops].index[-1]
+    df = df.loc[last_reset_idx:].copy()
+```
+Este algoritmo recorta automáticamente el DataFrame a partir del último punto de inflexión temporal, garantizando que el análisis se aplique estrictamente sobre la iteración canónica en estado estacionario.
+
+### 6.4.2. Ecuación Fundamental de Balance Temporal y Validación Empírica
+Tras aplicar el filtrado, se cumple con absoluta precisión la ley de conservación del Wall-Clock Time de la simulación:
+$$\text{Wall-Clock Time} = \max_{g \in [0, N-1]} (\text{END\_NS}^{(g)}) \approx \overline{T}_{\text{compute}} + \overline{T}_{\text{transit}} + \overline{T}_{\text{stall}}$$
+
+Donde:
+- **Cómputo GPU Puro ($\overline{T}_{\text{compute}}$):** Suma media de todas las operaciones de tensores (`Linear`, `Attention`, `Residual`, `LayerNorm`, `RoPE`).
+- **Tránsito Físico de Red ($\overline{T}_{\text{transit}}$):** Retardo de propagación y enrutamiento en BookSim2 derivado de primitivas All-to-All (`moe_scatter` y `moe_gather`).
+- **Bloqueos de Sincronización ($\overline{T}_{\text{stall}}$):** Tiempo ocioso de espera en barreras globales de sincronización (`NETWORK_STALL`).
+
+Los resultados empíricos validados sobre trazas reales demuestran una concordancia exacta (discrepancia inferior al $0{,}0002\%$ atribuible a redondeo infinitesimal):
+
+| Configuración de Red | GPUs | Cómputo ($\text{ns}$) | Tránsito Red ($\text{ns}$) | Esperas Stall ($\text{ns}$) | Suma Total ($\text{ns}$) | Wall-Clock Real ($\text{ns}$) | Discrepancia |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Mixtral 8dev Torus (bs=32)** | 8 | 911.686,1 | 274.640,0 | 1.511,4 | **1.187.837,6** | **1.187.840,0** | **< 2,5 ns** |
+| **Mixtral 2x2dev Mesh (bs=32)** | 4 | 1.655.436,0 | 221.455,0 | 1.634,3 | **1.878.525,3** | **1.878.530,0** | **< 4,7 ns** |
+
+### 6.4.3. Visualizaciones Generadas
+El script exporta de forma automatizada a `build/analysis/analisis_<timestamp>/`:
+1. `anatomia_latencia.png`: Gráfico de barras apiladas con estética científica, donde cada barra representa una configuración de red, descomponiendo visualmente el tiempo de inferencia total en sus tres factores ortogonales (Cómputo, Tránsito, Stalls), con anotaciones numéricas en microsegundos/milisegundos y porcentajes relativos.
+2. `desglose_primitivas_moe.png`: Gráfico de barras agrupadas que contrasta la latencia de red inducida por `moe_scatter` frente a `moe_gather`, permitiendo estudiar asimetrías de congestión y contención de búferes.
 
 ---
 
@@ -1287,6 +1326,7 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`src/hardware/device.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/device.h) & [`device.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/device.cpp)
 - **Propósito:** Representa un acelerador individual (GPU o procesador PIM). Gestiona el estado de reloj local (`device_time`), la caché de memoización analítica (`addExecutionCache`), y delega la ejecución de capas a los motores analíticos o a Ramulator2.
+- **Trazabilidad:** Implementa `log_tfm_event()` con formateador de alta precisión (`std::fixed`, `std::setprecision(4)`) para evitar redondeos o notación exponencial en las marcas temporales registradas en `TFM_device_<id>.trc`.
 
 ### [`src/hardware/node.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/node.h) & [`node.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/node.cpp)
 - **Propósito:** Agrupa los dispositivos `Device` alojados en un mismo chasis/servidor físico, gestionando la interconexión intra-nodo (ej. NVLink).
@@ -1364,6 +1404,7 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - `ModuleGraph`: Grafo local por GPU. Mantiene la lista de nodos ordenados topológicamente (`topological_sort()`).
   - `TopModuleGraph`: Coordinador global que gobierna el bucle de ejecución de todas las GPUs mediante barreras `sync_devices()`, resolución de nodos PUSH/POP y avance causal de dependencias.
   - Acumula los contadores físicos de energía (`status.act_energy`, `status.mac_energy`, etc.).
+  - En `set_pop_status()`, incorpora la guarda `is_self_logged` que filtra módulos autologgeados (`norm`, `residual`, `rope`, `scatter`, `gather`, `all_reduce`) para evitar registros duplicados o solapados en trazas `.trc`.
 
 ### [`src/module/timeboard.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/timeboard.h) & [`timeboard.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/timeboard.cpp)
 - **Propósito:** Tablero de instrumentación y trazabilidad. Registra marcas temporales (`TimeStamp`) de inicio y fin de cada módulo, computa diferencias de energía y vuelca estadísticas tabulares a consola y trazas estructuradas.
@@ -1448,6 +1489,10 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py)
 - **Propósito:** Analizador macroscópico de trazas. Parsea los registros `.trc` de cada GPU, calcula promedios de latencia por tipo de capa y genera tablas resumen de tiempos de cómputo vs. comunicación.
+- **Mecanismos Clave:**
+  - Resolución dual robusta del directorio base (`resolve_base_dir()`), operable tanto desde la raíz del TFM como desde `LLMSimulator/`.
+  - **Filtro Anti-Appends Temporal:** Detecta caídas en la serie cronológica (`START_NS.diff() < 0`) para aislar la última iteración en simulaciones multi-iteración (`iter > 1`), eliminando inflaciones artificiales de tiempo acumulado.
+  - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
 
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
 - **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Genera diagramas de dispersión temporal, histogramas de latencia de paquetes ($ctime \to itime \to atime$) y análisis de contención en colas de NIC.

@@ -3,6 +3,7 @@
 #include <random>
 #include <string>
 #include <stdexcept>
+#include <iomanip>
 
 #include "common/assert.h"
 #include "dram/dram_interface.h"
@@ -233,11 +234,12 @@ void Device::initializeDRAM(int ProcessorType, DramEnergy dramEnergy) {
 
 void Device::log_tfm_event(time_ns start, time_ns end, const std::string& event_type, const std::string& details) {
     if (tfm_trace_file.is_open() && end >= start) {
-        tfm_trace_file << start << "," 
+        tfm_trace_file << std::fixed << std::setprecision(4)
+                       << start << "," 
                        << end << "," 
                        << (end - start) << ","
                        << event_type << ","
-                       << details << std::endl; // <--- std::endl força el guardat immediat al disc
+                       << details << std::endl;
     }
 }
 
