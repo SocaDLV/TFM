@@ -8,6 +8,9 @@
 #include <queue>
 #include <iostream>
 #include <sstream>
+#include <iomanip>
+#include <map>
+#include <vector>
 
 // =========================================================================
 // VARIABLES GLOBALES (Reemplazando a main.cpp para poder compilar sin él)
@@ -23,6 +26,13 @@ std::ostream * gWatchOut = nullptr;
 class API_TrafficManager : public TrafficManager {
 public:
     std::queue<BookSimPacketInfo> arrived_packets;
+    std::map<int, long> flit_latency_sum;
+    long op_flits_received = 0;
+    int op_start_cycle = 0;
+    std::string current_op_type = "Scatter";
+    int current_op_idx = 1;
+    double current_op_start_ns = 0.0;
+    std::vector<BookSimPacketInfo> current_op_packets;
 
     API_TrafficManager(const Configuration &config, const vector<Network *> & net)
         : TrafficManager(config, net) {}
@@ -30,6 +40,37 @@ public:
     // Exponemos el método protegido _Step()
     void Step() {
         _Step();
+    }
+
+    void StartOperation(const std::string& op_type, int op_idx, double op_start_ns) {
+        op_start_cycle = _time;
+        op_flits_received = 0;
+        current_op_type = op_type;
+        current_op_idx = op_idx;
+        current_op_start_ns = op_start_ns;
+        flit_latency_sum.clear();
+        current_op_packets.clear();
+    }
+
+    void FinishOperation(double op_end_ns) {
+        static const char* debug_env = std::getenv("SIM_DEBUG_PIDS");
+        bool debug_pids = (debug_env && std::string(debug_env) == "1");
+
+        if (debug_pids) {
+            for (auto& pkt : current_op_packets) {
+                pkt.op_end_ns = op_end_ns;
+                // Formato de exportación: PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes,Avg_Flit_Latency,Throughput,Op_Type,Op_Idx,Op_Start_NS,Op_End_NS
+                std::cout << "[TRACK_PID] " << pkt.pid << "," << pkt.src << "," << pkt.dst << "," 
+                          << pkt.ctime << "," << pkt.itime << "," << pkt.atime << "," 
+                          << pkt.total_latency << "," << pkt.network_latency << "," << pkt.queueing_delay << ","
+                          << pkt.num_flits << "," << pkt.size_bytes << ","
+                          << std::fixed << std::setprecision(4)
+                          << pkt.avg_flit_lat << "," << pkt.throughput << ","
+                          << pkt.op_type << "," << pkt.op_idx << ","
+                          << pkt.op_start_ns << "," << pkt.op_end_ns << std::endl;
+            }
+        }
+        current_op_packets.clear();
     }
 
     // Inyección manual directa a los buffers de BookSim2
@@ -66,6 +107,10 @@ public:
 
     // Interceptamos los flits cuando se retiran de la red al llegar a destino
     virtual void _RetireFlit(Flit *f, int dest) override {
+        // Acumular latencia del flit individual (tiempo de llegada - tiempo de creación)
+        flit_latency_sum[f->pid] += (_time - f->ctime);
+        op_flits_received++;
+
         if (f->tail) { // Si es el último flit del paquete, registramos la llegada
             Flit * head = nullptr;
             if (f->head) {
@@ -89,6 +134,13 @@ public:
             int num_flits = head ? (f->id - head->id + 1) : 1;
             int size_bytes = num_flits * 32;
 
+            double avg_flit_lat = (num_flits > 0) ? ((double)flit_latency_sum[pid] / (double)num_flits) : (double)total_latency;
+            flit_latency_sum.erase(pid);
+
+            int sim_cycles = _time - op_start_cycle;
+            if (sim_cycles <= 0) sim_cycles = 1;
+            double throughput = (double)op_flits_received / (double)sim_cycles;
+
             BookSimPacketInfo pkt;
             pkt.pid = pid;
             pkt.src = src;
@@ -101,19 +153,15 @@ public:
             pkt.queueing_delay = queueing_delay;
             pkt.num_flits = num_flits;
             pkt.size_bytes = size_bytes;
+            pkt.avg_flit_lat = avg_flit_lat;
+            pkt.throughput = throughput;
+            pkt.op_type = current_op_type;
+            pkt.op_idx = current_op_idx;
+            pkt.op_start_ns = current_op_start_ns;
+            pkt.op_end_ns = 0.0;
 
             arrived_packets.push(pkt);
-
-            // --- INICIO TFM DEBUG: TRACKING DE PAQUETES ---
-            static const char* debug_env = std::getenv("SIM_DEBUG_PIDS");
-            if (debug_env && std::string(debug_env) == "1") {
-                // Formato de exportación: PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes
-                std::cout << "[TRACK_PID] " << pid << "," << src << "," << dst << "," 
-                          << ctime << "," << itime << "," << atime << "," 
-                          << total_latency << "," << network_latency << "," << queueing_delay << ","
-                          << num_flits << "," << size_bytes << std::endl;
-            }
-            // --- FIN TFM DEBUG ---
+            current_op_packets.push_back(pkt);
         }
         TrafficManager::_RetireFlit(f, dest);
     }
@@ -184,5 +232,17 @@ bool BookSim_CheckReceived(int& src, int& dst, int& pid) {
         return true;
     }
     return false;
+}
+
+void BookSim_StartOperation(const std::string& op_type, int op_idx, double op_start_ns) {
+    if (g_traffic_manager) {
+        ((API_TrafficManager*)g_traffic_manager)->StartOperation(op_type, op_idx, op_start_ns);
+    }
+}
+
+void BookSim_FinishOperation(double op_end_ns) {
+    if (g_traffic_manager) {
+        ((API_TrafficManager*)g_traffic_manager)->FinishOperation(op_end_ns);
+    }
 }
 

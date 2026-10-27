@@ -28,9 +28,11 @@
    - 3.2. Ciclo de Vida del Paquete y sus Flits (`head`, `body`, `tail`)
    - 3.3. Tiempos Fundamentales: $ctime$ (Creación), $itime$ (Inyección) y $atime$ (Retiro)
    - 3.4. Descomposición Física: Espera en Cola de NIC (`Queueing_Delay`) vs. Tránsito en Red (`Network_Latency`)
-   - 3.5. Diseño del Wrapper C++ `booksim_api` y Desacoplamiento de `main.cpp`
-   - 3.6. Topologías de Red en BookSim2: Construcción de Mallas y Toros (`booksim2/src/networks/kncube.cpp`)
-   - 3.7. Microarquitectura del Router Virtual-Channel y Prevención de Deadlock (`booksim2/src/routers/iq_router.cpp`, `routefunc.cpp`, `buffer_state.cpp`, `allocator/`)
+   - 3.5. Métricas Avanzadas de Flits y Productividad de Red
+   - 3.6. Contexto de Operación LLM y Trazado Temporal (Scatter/Gather y Ventanas NS)
+   - 3.7. Diseño del Wrapper C++ `booksim_api` y Desacoplamiento de `main.cpp`
+   - 3.8. Topologías de Red en BookSim2: Construcción de Mallas y Toros (`booksim2/src/networks/kncube.cpp`)
+   - 3.9. Microarquitectura del Router Virtual-Channel y Prevención de Deadlock (`booksim2/src/routers/iq_router.cpp`, `routefunc.cpp`, `buffer_state.cpp`, `allocator/`)
 4. [Capítulo 4: Nuestro Co-Simulador en Lazo Cerrado (LLMSimulator + BookSim2)](#capítulo-4-nuestro-co-simulador-en-lazo-cerrado-llmsimulator--booksim2)
    - 4.1. El Paradigma de Integración Oráculo en Modo Bulk Synchronous Parallel (BSP)
    - 4.2. Traducción de Tensores y Metadatos de Enrutamiento a Tráfico Unicast (`MoEScatter` y `MoEGather`)
@@ -46,7 +48,7 @@
    - 6.2. Propagación de Identidad Jerárquica (`module_map_name`) a Nodos POP
    - 6.3. Automatización de Ejecución y Orquestación (`run_sim.py`)
    - 6.4. Análisis Macroscópico de Latencias (`analyze_traces.py`)
-   - 6.5. Visualizador de Congestión en Red (`plot_packet_tracking.py`)
+   - 6.5. Visualizador de Congestión en Red y Paginación de Paquetes (`plot_packet_tracking.py`)
    - 6.6. Cronograma Micro-Arquitectural Causal GPU Cycle-to-Cycle (`plot_cronograma.py`)
 7. [Capítulo 7: Amenazas a la Validez, Limitaciones Actuales y Hoja de Ruta de Mejoras](#capítulo-7-amenazas-a-la-validez-limitaciones-actuales-y-hoja-de-ruta-de-mejoras)
    - 7.1. Simplificaciones Asumidas en el Co-Simulador Actual
@@ -726,23 +728,60 @@ $$\mathbf{\text{Total\_Latency} = \text{Queueing\_Delay} + \text{Network\_Latenc
 
 ---
 
-## 3.5. Diseño del Wrapper C++ `booksim_api` y Desacoplamiento de `main.cpp`
+## 3.5. Métricas Avanzadas de Flits y Productividad de Red
+
+Para dotar al análisis de fidelidad micro-arquitectural según los requerimientos de investigación, el co-simulador captura dos métricas elementales a nivel de flit:
+
+### 1. Latencia Media de Flits por Paquete (`Avg_Flit_Latency`)
+Dado que los flits de un paquete ($N_{\text{flits}}$) se retiran de forma asíncrona a lo largo de ciclos sucesivos en el destino debido a la contención en enlaces y conmutadores, la latencia del paquete hasta el retiro del último flit ($tail$) oculta el comportamiento de los flits precedentes. Se define la latencia media exacta de flits de un paquete $p$ como:
+
+$$\text{Avg\_Flit\_Latency}(p) = \frac{\sum_{i=1}^{N_{\text{flits}}(p)} (t_{\text{retire}, i} - ctime(p))}{N_{\text{flits}}(p)} \quad [\text{ciclos}]$$
+
+En [`booksim2/src/booksim_api.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.cpp), el método `API_TrafficManager::_RetireFlit(Flit *f, int dest)` acumula en un mapa hash `flit_latency_sum[f->pid] += (_time - f->ctime)` cada vez que cualquier flit ($head$, $body$ o $tail$) abandona la red. Cuando `f->tail == true`, se computa la media exacta y se almacena en `BookSimPacketInfo::avg_flit_lat`.
+
+### 2. Productividad Instantánea y Acumulada de la Red (`Throughput`)
+La productividad o tasa de drenaje de la red en la operación en curso se calcula como la razón entre el volumen acumulado de flits recibidos por todos los nodos de destino y el tiempo transcurrido en ciclos de red:
+
+$$\text{Throughput}(t) = \frac{\sum \text{Flits Recibidos en la Operación}}{\max(1, \_time - t_{\text{start\_op}})} \quad \left[\frac{\text{flits}}{\text{ciclo}}\right]$$
+
+Esta métrica refleja cuantitativamente el grado de aprovechamiento y saturación del biseccionado de la topología en cada instante de la ráfaga colectiva.
+
+---
+
+## 3.6. Contexto de Operación LLM y Trazado Temporal (Scatter/Gather y Ventanas NS)
+
+Para correlacionar inequívocamente cada paquete físico simulado en BookSim2 con la primitiva algorítmica del grafo de cómputo en LLMSimulator:
+1. **Contadores Correlativos por Iteración:** En [`LLMSimulator/src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp), `BookSimCoSimManager` gestiona contadores estáticos `scatter_op_counter` y `gather_op_counter`. Cuando el reloj de la GPU `device->status.device_time` retrocede respecto al último tiempo registrado (indicativo del inicio de una nueva iteración de inferencia/decodificación cuando `iter > 1`), ambos contadores se reinician limpiamente a 1.
+2. **Delimitación de Fronteras Temporales:**
+   - **`Op_Start_NS`:** Estampa el reloj `device_time` antes de añadir la latencia calculada por la red.
+   - **`Op_End_NS`:** Estampa el reloj `device_time` tras sumar la latencia en nanosegundos calculada por el oráculo.
+3. **Puntos de Enganche en C++:**
+   - Antes de iniciar el bucle de avance de ciclos de BookSim2, se invoca `BookSim_StartOperation(op_type, op_idx, op_start_ns)`.
+   - Al completar la simulación de todos los paquetes de la ráfaga, se invoca `BookSim_FinishOperation(op_end_ns)`.
+   - En `FinishOperation`, se estampan `op_end_ns` en todos los paquetes recibidos en la ráfaga y, si `--debug_pids` está activo, se emite por `stdout` el registro completo de 17 campos con prefijo `[TRACK_PID]`:
+     `[TRACK_PID] PID,Src,Dst,ctime,itime,atime,Total_Lat,Net_Lat,Queue_Delay,Num_Flits,Size_Bytes,Avg_Flit_Lat,Throughput,Op_Type,Op_Idx,Op_Start_NS,Op_End_NS`
+
+---
+
+## 3.7. Diseño del Wrapper C++ `booksim_api` y Desacoplamiento de `main.cpp`
 
 Para integrar BookSim2 como librería dinámica/estática en `LLMSimulator` sin colisiones de enlace:
 1. Se aislaron las variables globales de BookSim2 (`gPrintActivity`, `gK`, `gN`, etc.) en [`booksim2/src/booksim_api.cpp:L15-L22`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.cpp#L15-L22), evitando enlazar con el `main.cpp` original de BookSim2.
 2. Se implementó la clase derivada `API_TrafficManager` que hereda de `TrafficManager`:
-   - Sobrescribe `_RetireFlit()` para capturar métricas sin alterar las estadísticas internas de BookSim2.
+   - Sobrescribe `_RetireFlit()` para capturar métricas sin alterar las estadísticas internas de BookSim2, acumulando latencias de flits y productividad en tiempo real.
    - Encola las estructuras `BookSimPacketInfo` en la cola `arrived_packets`.
-   - Si la variable de entorno `SIM_DEBUG_PIDS=1` está activa, emite la traza estructurada `[TRACK_PID]` hacia `stdout`.
+   - Si la variable de entorno `SIM_DEBUG_PIDS=1` está activa, emite la traza estructurada `[TRACK_PID]` con 17 columnas hacia `stdout`.
 3. Se expuso una API pura en C en [`booksim2/src/booksim_api.hpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp):
    - `BookSim_Initialize(const char* config_file)`
    - `BookSim_InjectPacket(int src, int dst, int size_in_flits)`
    - `BookSim_AdvanceCycle()`
    - `BookSim_CheckReceived(BookSimPacketInfo& info)`
+   - `BookSim_StartOperation(const char* op_type, int op_idx, double op_start_ns)`
+   - `BookSim_FinishOperation(double op_end_ns)`
 
 ---
 
-## 3.6. Topologías de Red en BookSim2: Construcción de Mallas y Toros (`booksim2/src/networks/kncube.cpp`)
+## 3.8. Topologías de Red en BookSim2: Construcción de Mallas y Toros (`booksim2/src/networks/kncube.cpp`)
 
 BookSim2 implementa una parametrización rigurosa de redes de interconexión directa de tipo $k$-ary $n$-cube a través de la clase `KNCube` ([`booksim2/src/networks/kncube.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/networks/kncube.cpp)):
 
@@ -770,7 +809,7 @@ En [`booksim2/src/networks/kncube.cpp:L70-L169`](file:///home/igilolt/Escritorio
 
 ---
 
-## 3.7. Microarquitectura del Router Virtual-Channel y Prevención de Deadlock (`booksim2/src/routers/iq_router.cpp`, `routefunc.cpp`, `buffer_state.cpp`, `allocator/`)
+## 3.9. Microarquitectura del Router Virtual-Channel y Prevención de Deadlock (`booksim2/src/routers/iq_router.cpp`, `routefunc.cpp`, `buffer_state.cpp`, `allocator/`)
 
 La microarquitectura de conmutación modelada en nuestras simulaciones corresponde al router de entrada encolada con Canales Virtuales (`IQRouter`, [`booksim2/src/routers/iq_router.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/routers/iq_router.cpp)).
 
@@ -1158,17 +1197,31 @@ El script exporta de forma automatizada a `build/analysis/analisis_<timestamp>/`
 
 ---
 
-## 6.5. Visualizador de Congestión en Red (`plot_packet_tracking.py`)
+## 6.5. Visualizador de Congestión en Red y Paginación de Paquetes (`plot_packet_tracking.py`)
 
 Ubicado en [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py):
-- Parsea `packet_tracking_debug.csv` y genera diagramas de Gantt de la vida de los paquetes con barras horizontales compuestas de dos colores:
-  - 🟧 **Espera en Cola del NIC (Queueing Delay):** Desde $ctime$ hasta $itime$.
-  - 🟦 **Vuelo en Red (NoC Flight Time):** Desde $itime$ hasta $atime$.
-- Anota cada barra individual con su metadato de tráfico: `S{src}→D{dst} (9 flits / 288 B)`.
-- Genera tres ventanas clave:
-  - `gantt_1_fase_libre.png`: Fase inicial con red vacía.
-  - `gantt_2_congestion_media.png`: Primeros paquetes en superar 1.500 ciclos (aparición del efecto escalera en cola).
-  - `gantt_3_congestion_critica.png`: Paquetes que superan 2.000 ciclos durante el cuello de botella masivo All-to-All.
+- **Parsea `packet_tracking_debug.csv`** (17 columnas) y reconstruye la vida de los paquetes flit a flit.
+- **Filtro Anti-Appends de Última Iteración:** Detecta automáticamente retrocesos temporales en `Op_Start_NS` (`df['Op_Start_NS'].diff() < 0`) causados por reinicios de reloj al pasar a una nueva iteración de inferencia. Por defecto, aísla con exactitud los paquetes de la última iteración (permite `--all_iters` para analizar todas las iteraciones).
+- **Paginación Dinámica en Subcarpeta `gantt/`:**
+  - Divide las decenas de miles de paquetes en bloques manejables de 50 en 50 paquetes (`--samples 50`).
+  - Guarda los diagramas secuencialmente en `gantt/gantt_page_XXX_pids_X_to_Y.png` dentro del directorio de resultados de la simulación.
+  - Ofrece el parámetro `--max_pages <N>` (por defecto `30`, o `0` para ilimitado), permitiendo generar rápidamente páginas representativas del régimen estacionario.
+- **Barras Horizontales Bicolores de Latencia Físicamente Descompuesta:**
+  - 🟧 **Espera en Cola del NIC (Queueing Delay):** Desde $ctime$ hasta $itime$ (saturación de interfaces de red).
+  - 🟦 **Vuelo en Red (NoC Flight Time):** Desde $itime$ hasta $atime$ (contención y arbitraje de conmutadores).
+- **Etiquetas Micro-Arquitecturales Enriquecidas por Paquete:**
+  - Al lado derecho de cada barra se muestra la tupla de ruta, tamaño físico, latencia media de flits y productividad acumulada:
+    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c`
+- **Sombreado Semántico por Operación de Red (`ax.axhspan`):**
+  - Identifica transiciones entre operaciones colectivas sucesivas (`Scatter NºX` vs. `Gather NºX`).
+  - Aplica franjas horizontales de fondo suaves alternas (azul claro para Scatter, violeta/verde claro para Gather).
+  - Dibuja líneas horizontales discontinuas (`linestyle='--'`) en la frontera exacta de cambio de operación.
+  - Inserta tarjetas o badges destacados en el extremo derecho del gráfico con la leyenda de operación y su intervalo en nanosegundos: `Scatter Nº1 \n NS 6362 - 10547`.
+- **Hitos Globales de Congestión:**
+  - Preserva en la raíz del experimento los tres cortes representativos:
+    - `gantt_1_fase_libre.png`: Fase inicial con red vacía (mínima latencia).
+    - `gantt_2_congestion_media.png`: Transición hacia la saturación (primeros paquetes > 1.500 ciclos).
+    - `gantt_3_congestion_critica.png`: Cuello de botella crítico (> 2.000 ciclos por colapso All-to-All).
 
 ---
 
@@ -1486,6 +1539,8 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py)
 - **Propósito:** Orquestador principal de experimentos. Automatiza la ejecución del binario compilado, gestiona parámetros CLI, captura salidas en consola y coordina la generación de artefactos (`dia1_exec1.txt`, `packet_tracking_debug.csv`).
+- **Mecanismos Clave:**
+  - Extrae y formatea el CSV de seguimiento de paquetes `packet_tracking_debug.csv` con 17 columnas canónicas: `PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes,Avg_Flit_Latency,Throughput,Op_Type,Op_Idx,Op_Start_NS,Op_End_NS`.
 
 ### [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py)
 - **Propósito:** Analizador macroscópico de trazas. Parsea los registros `.trc` de cada GPU, calcula promedios de latencia por tipo de capa y genera tablas resumen de tiempos de cómputo vs. comunicación.
@@ -1495,7 +1550,12 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
 
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
-- **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Genera diagramas de dispersión temporal, histogramas de latencia de paquetes ($ctime \to itime \to atime$) y análisis de contención en colas de NIC.
+- **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Reconstruye el ciclo de vida de los paquetes, descompone latencias ($ctime \to itime \to atime$), calcula productividad acumulada y segmenta la visualización por páginas de 50 paquetes en la subcarpeta `gantt/`.
+- **Mecanismos Clave:**
+  - Filtro automático de última iteración mediante detección de retroceso temporal en `Op_Start_NS` (anulable con `--all_iters`).
+  - Paginación dinámica en subcarpeta `gantt/` (`--samples 50`, `--max_pages 30`), con sombreado de franjas por operación (`Scatter` vs. `Gather`), líneas divisorias y badges laterales con marcas de tiempo en nanosegundos.
+  - Renderizado de etiquetas enriquecidas por paquete: `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c`.
+  - Generación de gráficos representativos de los regímenes de congestión: libre, media y crítica.
 
 ### [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py)
 - **Propósito:** Generador de cronogramas causales de alta precisión (Diagramas de Gantt cycle-to-cycle). Reconstruye la ejecución concurrente de todas las GPUs con resolución de nanosegundos, visualizando esperas por barrera, fases de cálculo y transferencias de red.
@@ -1505,7 +1565,11 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ## 8.9. Subsistema de Red BookSim2 (`booksim2/src/`)
 
 ### [`booksim2/src/booksim_api.hpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp) & [`booksim_api.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.cpp)
-- **Propósito:** Wrapper y API en C++ para desacoplar BookSim2 como librería interactiva. Define `BookSim_Initialize()`, `BookSim_InjectPacket()`, `BookSim_AdvanceCycle()` y gestiona la clase `API_TrafficManager` con captura de PIDs y marcas temporales.
+- **Propósito:** Wrapper y API en C++ para desacoplar BookSim2 como librería interactiva. Define `BookSim_Initialize()`, `BookSim_InjectPacket()`, `BookSim_AdvanceCycle()`, `BookSim_StartOperation()`, `BookSim_FinishOperation()` y gestiona la clase `API_TrafficManager`.
+- **Mecanismos Clave:**
+  - Acumula en `_RetireFlit()` la latencia exacta de todos los flits individuales por `PID` (`flit_latency_sum`) y el contador global de flits recibidos.
+  - Al retirarse el $tail$ flit, computa la latencia media de flits `avg_flit_lat` y la productividad acumulada `throughput` en flits/ciclo.
+  - Enlaza el contexto de cómputo del LLM (`Op_Type`, `Op_Idx`, `Op_Start_NS`, `Op_End_NS`) emitiendo el registro estructurado `[TRACK_PID]` con 17 columnas bajo la bandera `--debug_pids`.
 
 ### [`booksim2/src/trafficmanager.hpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.hpp) & [`trafficmanager.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.cpp)
 - **Propósito:** Motor maestro de tráfico en BookSim2. Gobierna el bucle ciclo a ciclo `_Step()`, inyecta flits en las colas de red (`_Inject()`), evalúa el avance de conmutadores y retira flits completados en destino (`_RetireFlit()`).

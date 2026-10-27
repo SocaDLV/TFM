@@ -17,6 +17,9 @@ public:
     static int total_injected;
     static int total_received;
     static bool initialized;
+    static int scatter_op_counter;
+    static int gather_op_counter;
+    static double last_device_time;
 
     static void Init() {
         if (!initialized) {
@@ -24,6 +27,9 @@ public:
             initialized = true;
             total_injected = 0;
             total_received = 0;
+            scatter_op_counter = 0;
+            gather_op_counter = 0;
+            last_device_time = -1.0;
         }
     }
 };
@@ -33,6 +39,9 @@ std::map<std::string, double> BookSimCoSimManager::cached_latency;
 int BookSimCoSimManager::total_injected = 0;
 int BookSimCoSimManager::total_received = 0;
 bool BookSimCoSimManager::initialized = false;
+int BookSimCoSimManager::scatter_op_counter = 0;
+int BookSimCoSimManager::gather_op_counter = 0;
+double BookSimCoSimManager::last_device_time = -1.0;
 // --- FIN CÓDIGO TFM ---
 
 namespace llm_system {
@@ -144,6 +153,16 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
 
   // --- INICIO CÓDIGO TFM: ORÁCULO SCATTER ---
   if (BookSimCoSimManager::calls_per_module[layer_name] == 0) {
+      if (BookSimCoSimManager::last_device_time >= 0 && device->status.device_time < BookSimCoSimManager::last_device_time) {
+          BookSimCoSimManager::scatter_op_counter = 0;
+          BookSimCoSimManager::gather_op_counter = 0;
+      }
+      BookSimCoSimManager::last_device_time = device->status.device_time;
+      BookSimCoSimManager::scatter_op_counter++;
+
+      double op_start_ns = device->status.device_time;
+      BookSim_StartOperation("Scatter", BookSimCoSimManager::scatter_op_counter, op_start_ns);
+
       // Somos la GPU 0 en llegar. Predecimos el tráfico de todo el clúster.
       int MTU = 256;          
       int HEADER_SIZE = 24;   
@@ -197,7 +216,11 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       }
 
       // Guardamos el resultado en caché (1 ciclo = 1 ns)
-      BookSimCoSimManager::cached_latency[layer_name] = cycles * 1.0;
+      double op_latency_ns = cycles * 1.0;
+      BookSimCoSimManager::cached_latency[layer_name] = op_latency_ns;
+
+      double op_end_ns = op_start_ns + op_latency_ns;
+      BookSim_FinishOperation(op_end_ns);
   }
 
   // Todas las GPUs (incluida la 0) leen la caché
@@ -258,6 +281,16 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
 
   // --- INICIO CÓDIGO TFM: ORÁCULO GATHER ---
   if (BookSimCoSimManager::calls_per_module[layer_name] == 0) {
+      if (BookSimCoSimManager::last_device_time >= 0 && device->status.device_time < BookSimCoSimManager::last_device_time) {
+          BookSimCoSimManager::scatter_op_counter = 0;
+          BookSimCoSimManager::gather_op_counter = 0;
+      }
+      BookSimCoSimManager::last_device_time = device->status.device_time;
+      BookSimCoSimManager::gather_op_counter++;
+
+      double op_start_ns = device->status.device_time;
+      BookSim_StartOperation("Gather", BookSimCoSimManager::gather_op_counter, op_start_ns);
+
       int MTU = 256;          
       int HEADER_SIZE = 24;   
       int FLIT_SIZE = 32;     
@@ -312,7 +345,11 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
           }
       }
 
-      BookSimCoSimManager::cached_latency[layer_name] = cycles * 1.0;
+      double op_latency_ns = cycles * 1.0;
+      BookSimCoSimManager::cached_latency[layer_name] = op_latency_ns;
+
+      double op_end_ns = op_start_ns + op_latency_ns;
+      BookSim_FinishOperation(op_end_ns);
   }
 
   network_latency_ns = BookSimCoSimManager::cached_latency[layer_name];

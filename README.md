@@ -29,12 +29,19 @@ BookSim2 models:
 
 * **Compute Engine (LLMSimulator):** Accurately models modern transformer building blocks, Grouped Query Attention (GQA), SwiGLU activations, and MoE routing on state-of-the-art accelerators (e.g., Nvidia B100).
 * **Network Engine (BookSim2):** Simulates flit-level packet traversal through routers, crossbars, and physical links.
-* **Flit-Level Packet Lifecycle Tracking (`--debug_pids`):**
+* **Flit-Level Packet Lifecycle & Network Throughput Tracking (`--debug_pids`):**
   * High-precision temporal tracking of every retired packet:
     * **`Creation_Cycle` ($ctime$):** Cycle at which the MoE communication layer generates the packet burst.
     * **`Inject_Cycle` ($itime$):** Cycle at which the head flit leaves the network interface controller (NIC) queue and enters the first router.
     * **`Receive_Cycle` ($atime$):** Cycle at which the tail flit is retired at the destination GPU.
   * Rigorous decomposition of total packet latency into **NIC Queueing Delay** ($itime - ctime$) and **NoC Flight Time** ($atime - itime$).
+  * **Flit-Level Network Productivity & Latency Metrics:**
+    * **Average Flit Latency (`Avg_Flit_Latency`):** Exact mean cycle latency across all individual flits composing the packet:
+      $$\text{Avg\_Flit\_Latency} = \frac{\sum_{i=1}^{N_{\text{flits}}} (t_{\text{retire}, i} - ctime)}{N_{\text{flits}}}$$
+    * **Network Throughput (`Throughput`):** Cumulative flit retirement productivity up to that cycle:
+      $$\text{Throughput} = \frac{\sum \text{Flits Received}}{\Delta \text{Cycles Simulated}} \quad [\text{flits/cycle}]$$
+  * **LLM Network Operation Context & Temporal Boundaries:**
+    * Automatic attribution of each packet to its LLM collective operation: `Op_Type` (`Scatter` or `Gather`), `Op_Idx` (correlative counter per iteration, reset upon clock drop), and absolute GPU chronogram window `Op_Start_NS` and `Op_End_NS`.
   * Comprehensive logging of Packet ID (`PID`), routing tuple (`Source`, `Dest`), flit count (`Num_Flits`), and physical wire footprint (`Size_Bytes`).
 * **Micro-Architectural Hierarchical Tracing:**
   * Propagation of the full C++ module namespace (`module_map_name`) into `.trc` event logs. This disambiguates generic compute entries (`Calc`) into specific operations: **ExpertFFN** (`gate_proj`, `up_proj`, `down_proj`, activations), **Attention** (QKV projections, self-attention, `o_proj`), **Linear**, **LayerNorm**, **Residual**, etc.
@@ -149,17 +156,32 @@ Visualizes the lifecycle of individual packets through the NoC using `packet_tra
 ```bash
 cd LLMSimulator
 
-# Generate Gantt charts with a 50-packet sliding window
-python3 plot_packet_tracking.py build/results/<simulation_folder>/ --samples 50
+# Default: Paginated Gantt for the last iteration (50 packets per page, up to 30 pages)
+python3 plot_packet_tracking.py build/results/<simulation_folder>/
+
+# Custom pagination parameters (e.g. 50 samples per page, all pages)
+python3 plot_packet_tracking.py build/results/<simulation_folder>/ --samples 50 --max_pages 0
+
+# Include all simulation iterations (disable automatic last-iteration filtering)
+python3 plot_packet_tracking.py build/results/<simulation_folder>/ --all_iters
 ```
 
 **Key Features & Visual Output:**
+* **Automated Last-Iteration Filtering:** Automatically detects simulation iterations by tracking decreases in `Op_Start_NS`, isolating the steady-state final iteration by default (use `--all_iters` to inspect every iteration).
+* **Paginated Output (`gantt/` Subdirectory):**
+  * Generates sequential high-definition plots `gantt/gantt_page_XXX_pids_X_to_Y.png` partitioned into chunks of 50 packets (`--samples 50`).
+  * Supports `--max_pages <N>` (default `30`, or `0` for all pages) to keep visualization generation fast and manageable even with hundreds of thousands of packets.
 * **Dual-Segment Horizontal Bars:**
   * 🟧 **NIC Queueing Delay:** Time spent waiting in the network interface injection buffer ($itime - ctime$). Highlights injection buffer saturation.
-  * 🟦 **NoC Flight Time:** Time spent actively traversing the network routers and channels ($atime - itime$). Reflects physical link contention and buffer arbitrations.
-* **Per-Packet Contextual Annotation:**
-  * Annotates each packet with its route and payload size: `S{src}→D{dst} (9 flits / 288 B)`.
-* **Three Congestion Snapshots:**
+  * 🟦 **NoC Flight Time:** Time spent actively traversing network routers and channels ($atime - itime$). Reflects physical link contention and buffer arbitrations.
+* **Enriched Flit-Level Metric Labels:**
+  * Every bar displays routing, wire size, average flit latency, and cumulative network productivity:
+    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c`
+* **Network Operation Shading & Badges:**
+  * Alternating soft background bands (`ax.axhspan`) differentiate consecutive operations (light blue for `Scatter`, light purple for `Gather`).
+  * Dashed dividing lines separate distinct operations cleanly.
+  * Operation badges positioned on the right-hand margin identify the collective operation and absolute GPU timeline window: e.g. `Scatter Nº1 \n NS 6362 - 10547`.
+* **Three Congestion Landmarks:**
   * **`gantt_1_fase_libre.png` (Free Phase):** Initial packets traversing an uncongested network (zero queueing, minimal flight latency).
   * **`gantt_2_congestion_media.png` (Moderate Congestion):** Window centered around the first packets exceeding 1,500 clock cycles, showing the characteristic staircase pattern of queue buildup.
   * **`gantt_3_congestion_critica.png` (Critical Bottleneck):** Window centered around packets taking over 2,000 cycles, showcasing structural saturation during massive All-to-All MoE bursts.
