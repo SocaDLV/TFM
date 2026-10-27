@@ -27,7 +27,7 @@ Tensor::Ptr LayerNorm::forward(const Tensor::Ptr input,
   assertTrue(k == layer_norm_weight->shape[0], "input shape doesn't match with layer norm weight (= hidden dim)");
 
   long size = input->getSize();
-  if (size == 0) {
+  if (size == 0 || !device->perform_execution) {
     return output;
   }
 

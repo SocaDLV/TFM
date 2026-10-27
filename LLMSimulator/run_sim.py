@@ -29,7 +29,8 @@ def parse_args():
     parser.add_argument("--gantt", action="store_true", help="Export Gantt charts")
 
     # Opciones de Debugging
-    parser.add_argument("--debug_pids", action="store_true", help="Genera el CSV de ciclo de vida de los paquetes (Gantt)")
+    parser.add_argument("--debug_pids", action="store_true", default=True, help="Genera el CSV de ciclo de vida de los paquetes (Gantt) [Activo por defecto]")
+    parser.add_argument("--no_debug_pids", action="store_true", help="Desactiva la generación del CSV de seguimiento de paquetes")
     
     return parser.parse_args()
 
@@ -144,10 +145,11 @@ def main():
     # ==========================================
 
     # --- INYECTAR MODO DEBUG PARA C++ ---
-    if args.debug_pids:
+    enable_debug_pids = not args.no_debug_pids
+    if enable_debug_pids:
         os.environ["SIM_DEBUG_PIDS"] = "1"
     else:
-        os.environ.pop("SIM_DEBUG_PIDS", None)
+        os.environ["SIM_DEBUG_PIDS"] = "0"
     # ------------------------------------
 
     dims_str = "x".join(map(str, args.net_dims))
@@ -201,13 +203,13 @@ def main():
             
     print(f"✅ Simulación terminada. Se movieron {moved_trcs} archivos .trc. Datos sellados en: {output_dir}")
 
-    # Escribir el CSV del Tracking si estábamos en Debug Mode
-    if args.debug_pids and track_pids_data:
+    # Escribir el CSV del Tracking si está activo
+    if enable_debug_pids and track_pids_data:
         csv_path = os.path.join(output_dir, "packet_tracking_debug.csv")
         with open(csv_path, "w") as f:
             f.write("PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes,Avg_Flit_Latency,Throughput,Op_Type,Op_Idx,Op_Start_NS,Op_End_NS\n")
             f.write("\n".join(track_pids_data))
-        print(f"🐛 Trazas PID (Modo Debug) guardadas en: {csv_path}\n")
+        print(f"🐛 Trazas PID guardadas en: {csv_path}\n")
 
     else:
         print("")

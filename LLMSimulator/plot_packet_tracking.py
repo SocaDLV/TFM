@@ -102,8 +102,12 @@ def render_gantt_page(df_page, title, output_png, is_summary=False):
         bytes_val = int(row['Size_Bytes'])
         avg_flit_lat = float(row.get('Avg_Flit_Latency', row.get('Total_Latency', 0.0)))
         prod = float(row.get('Throughput', 0.0))
+        op_start_ns = float(row.get('Op_Start_NS', 0.0))
+        c_cycle = float(row.get('Creation_Cycle', 0.0))
+        g_start_ns = op_start_ns + (row['Inject_Cycle'] - c_cycle)
+        g_end_ns = op_start_ns + (row['Receive_Cycle'] - c_cycle)
 
-        label_txt = f"S{src}→D{dst} ({flits} flits / {bytes_val}B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c"
+        label_txt = f"S{src}→D{dst} ({flits} flits / {bytes_val}B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start_ns:.0f}-{g_end_ns:.0f}"
         ax.text(x_val, y_val, label_txt, va='center', ha='left', fontsize=7.8, color='#111111', zorder=4)
 
     # Configuración de Ejes y Estética
@@ -113,12 +117,25 @@ def render_gantt_page(df_page, title, output_png, is_summary=False):
 
     ax.set_xlabel("Ciclos de Reloj (BookSim2)", fontsize=12, fontweight='semibold')
     ax.set_ylabel("Packet ID (PID Secuencial)", fontsize=12, fontweight='semibold')
-    ax.set_title(title, fontsize=14, fontweight='bold', pad=36)
+    ax.set_title(title, fontsize=14, fontweight='bold', pad=56)
     ax.grid(axis='x', linestyle=':', alpha=0.6, zorder=1)
-    ax.legend(loc='lower left', bbox_to_anchor=(0.0, 1.01), ncol=2, framealpha=0.95, fontsize=10)
+
+    # Eje Secundario Superior: Tiempo Global LLM en Nanosegundos
+    ref_row = df_page.iloc[0]
+    ref_start_ns = float(ref_row.get('Op_Start_NS', 0.0))
+    ref_start_cycle = float(ref_row.get('Creation_Cycle', 0.0))
+
+    secax = ax.secondary_xaxis('top', functions=(
+        lambda c: ref_start_ns + (c - ref_start_cycle),
+        lambda ns: ref_start_cycle + (ns - ref_start_ns)
+    ))
+    secax.set_xlabel("Tiempo Global LLM (ns)", fontsize=11, fontweight='semibold', labelpad=7)
+    secax.tick_params(labelsize=8.5)
+
+    ax.legend(loc='lower left', bbox_to_anchor=(0.0, 1.13), ncol=2, framealpha=0.95, fontsize=10)
 
     # Margen derecho suficiente para etiquetas y badges de operación
-    ax.set_xlim(left=max(0, min_x - x_span * 0.02), right=max_x + x_span * 0.65)
+    ax.set_xlim(left=max(0, min_x - x_span * 0.02), right=max_x + x_span * 0.72)
 
     plt.tight_layout()
     plt.savefig(output_png, dpi=300, bbox_inches='tight')

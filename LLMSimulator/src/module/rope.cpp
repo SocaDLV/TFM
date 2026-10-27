@@ -34,7 +34,7 @@ Tensor::Ptr RoPE::forward(const Tensor::Ptr input,
   Tensor::Ptr output = get_activation("rope_out", input->shape);
 
   long size = input->getSize();
-  if (size == 0) {
+  if (size == 0 || !device->perform_execution) {
     return output;
   }
 
@@ -101,8 +101,8 @@ TensorVec BatchedRoPE::forward(const TensorVec input,
   Tensor::Ptr output = get_activation("rope_out", input[0]->shape);
 
   long size = input[0]->getSize();
-  if (size == 0) {
-  return input;
+  if (size == 0 || !device->perform_execution) {
+    return input;
   }
 
   hw_metric compute_peak_flops = device->config.compute_peak_flops;

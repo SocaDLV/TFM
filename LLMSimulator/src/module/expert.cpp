@@ -114,13 +114,18 @@ ExpertFFN::ExpertFFN(std::string& prefix, std::string& name,
   auto sync_0 = Sync::Create(module_map_name, "sync_0", device_list, device);
   add_module(sync_0);
 
-  auto sync_for_moe_scatter = Sync::Create(module_map_name, "sync_for_moe_scatter", device_list, device);
+  // sync_for_moe_scatter solo sincroniza el dispositivo local para permitir que GPUs que reciban
+  // menos tokens inicien ExpertFFN inmediatamente sin esperar al resto del clúster.
+  auto sync_for_moe_scatter = Sync::Create(module_map_name, "sync_for_moe_scatter", {device->device_total_rank}, device);
   add_module(sync_for_moe_scatter);
 
-  auto sync_2 = Sync::Create(module_map_name, "sync_2", device_list, device);
+  // sync_2 sincroniza el grupo de Expert Tensor Parallelism (e_tp_dg)
+  auto sync_2 = Sync::Create(module_map_name, "sync_2", expert_device_list, device);
   add_module(sync_2);
 
-  auto sync_3 = Sync::Create(module_map_name, "sync_3", device_list, device);
+  // sync_3 asegura que todas las GPUs hayan completado su ExpertFFN antes de MoEGather,
+  // pero con equalize_time = false para preservar sus tiempos reales de llegada (t_src)
+  auto sync_3 = Sync::Create(module_map_name, "sync_3", device_list, device, false);
   add_module(sync_3);
 
   auto sync_for_moe_gather = Sync::Create(module_map_name, "sync_for_moe_gather", device_list, device);

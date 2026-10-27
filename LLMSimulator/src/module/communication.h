@@ -122,15 +122,16 @@ class Sync : public Module {
 
   [[nodiscard]] static Ptr Create(std::string prefix, std::string name,
                                   std::vector<int> device_list,
-                                  Device::Ptr device) {
-    Ptr ptr = Ptr(new Sync(prefix, name, device_list, device));
+                                  Device::Ptr device,
+                                  bool equalize_time = true) {
+    Ptr ptr = Ptr(new Sync(prefix, name, device_list, device, equalize_time));
     ptr->set_tensor_module();
     return ptr;
   };
 
  private:
   Sync(std::string& prefix, std::string& name, std::vector<int> device_list,
-       Device::Ptr device);
+       Device::Ptr device, bool equalize_time = true);
   Sync() = default;
 
   Tensor::Ptr forward(const Tensor::Ptr input,
@@ -164,15 +165,16 @@ class Sync__ : public Module {
 
   [[nodiscard]] static Ptr Create(std::string prefix, std::string name,
                                   std::vector<int> device_list,
-                                  Device::Ptr device) {
-    Ptr ptr = Ptr(new Sync__(prefix, name, device_list, device));
+                                  Device::Ptr device,
+                                  bool equalize_time = true) {
+    Ptr ptr = Ptr(new Sync__(prefix, name, device_list, device, equalize_time));
     ptr->set_tensor_module();
     return ptr;
   };
 
  private:
   Sync__(std::string& prefix, std::string& name, std::vector<int> device_list,
-         Device::Ptr device);
+         Device::Ptr device, bool equalize_time = true);
   Sync__() = default;
 
   Tensor::Ptr forward(const Tensor::Ptr input,

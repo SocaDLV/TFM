@@ -28,6 +28,7 @@ public:
     std::queue<BookSimPacketInfo> arrived_packets;
     std::map<int, long> flit_latency_sum;
     long op_flits_received = 0;
+    long long op_flit_latency_sum = 0;
     int op_start_cycle = 0;
     std::string current_op_type = "Scatter";
     int current_op_idx = 1;
@@ -45,6 +46,7 @@ public:
     void StartOperation(const std::string& op_type, int op_idx, double op_start_ns) {
         op_start_cycle = _time;
         op_flits_received = 0;
+        op_flit_latency_sum = 0;
         current_op_type = op_type;
         current_op_idx = op_idx;
         current_op_start_ns = op_start_ns;
@@ -54,7 +56,7 @@ public:
 
     void FinishOperation(double op_end_ns) {
         static const char* debug_env = std::getenv("SIM_DEBUG_PIDS");
-        bool debug_pids = (debug_env && std::string(debug_env) == "1");
+        bool debug_pids = (debug_env == nullptr || std::string(debug_env) != "0");
 
         if (debug_pids) {
             for (auto& pkt : current_op_packets) {
@@ -107,9 +109,10 @@ public:
 
     // Interceptamos los flits cuando se retiran de la red al llegar a destino
     virtual void _RetireFlit(Flit *f, int dest) override {
-        // Acumular latencia del flit individual (tiempo de llegada - tiempo de creación)
-        flit_latency_sum[f->pid] += (_time - f->ctime);
+        // Acumular métricas de flit a nivel global de la operación y por paquete
         op_flits_received++;
+        op_flit_latency_sum += (_time - f->ctime);
+        flit_latency_sum[f->pid] += (_time - f->ctime);
 
         if (f->tail) { // Si es el último flit del paquete, registramos la llegada
             Flit * head = nullptr;
@@ -134,9 +137,11 @@ public:
             int num_flits = head ? (f->id - head->id + 1) : 1;
             int size_bytes = num_flits * 32;
 
-            double avg_flit_lat = (num_flits > 0) ? ((double)flit_latency_sum[pid] / (double)num_flits) : (double)total_latency;
+            // Métrica solicitada por el tutor: Avg_Flit_Latency global acumulada hasta este ciclo exacto _time
+            double avg_flit_lat = (op_flits_received > 0) ? ((double)op_flit_latency_sum / (double)op_flits_received) : (double)total_latency;
             flit_latency_sum.erase(pid);
 
+            // Métrica de Productividad (Throughput) global en flits/ciclo hasta este ciclo exacto _time
             int sim_cycles = _time - op_start_cycle;
             if (sim_cycles <= 0) sim_cycles = 1;
             double throughput = (double)op_flits_received / (double)sim_cycles;

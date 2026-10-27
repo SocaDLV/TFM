@@ -56,8 +56,10 @@ bool ModuleGraph::check_ready() {
     if (!checkListReady(dependency_tensor_list)) {
       return false;
     }
-    // all operations are doned, we have to sync the devices
-    sync_devices();
+    // all operations are doned, we have to sync the devices if equalize_time is enabled
+    if (module->equalize_time) {
+      sync_devices();
+    }
     return true;
   } else {
     if (input && input->ready) {

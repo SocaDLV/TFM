@@ -19,9 +19,9 @@ project(spdlog-populate NONE)
 # Pass through things we've already detected in the main project to avoid
 # paying the cost of redetecting them again in ExternalProject_Add()
 set(GIT_EXECUTABLE [==[/usr/bin/git]==])
-set(GIT_VERSION_STRING [==[2.55.0]==])
+set(GIT_VERSION_STRING [==[2.56.0]==])
 set_property(GLOBAL PROPERTY _CMAKE_FindGit_GIT_EXECUTABLE_VERSION
-  [==[/usr/bin/git;2.55.0]==]
+  [==[/usr/bin/git;2.56.0]==]
 )
 
 

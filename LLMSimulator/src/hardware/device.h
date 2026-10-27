@@ -72,7 +72,7 @@ class Device : public std::enable_shared_from_this<Device> {
 
   void restartGraph();
 
-  void setPerformExecution(bool perform) { perform_execution = perform; }
+  void setPerformExecution(bool perform);
 
   // execute operations and update time;
   void execution(Tensor_Ptr input, Tensor_Ptr weight, Tensor_Ptr output);

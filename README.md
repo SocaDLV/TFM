@@ -29,17 +29,17 @@ BookSim2 models:
 
 * **Compute Engine (LLMSimulator):** Accurately models modern transformer building blocks, Grouped Query Attention (GQA), SwiGLU activations, and MoE routing on state-of-the-art accelerators (e.g., Nvidia B100).
 * **Network Engine (BookSim2):** Simulates flit-level packet traversal through routers, crossbars, and physical links.
-* **Flit-Level Packet Lifecycle & Network Throughput Tracking (`--debug_pids`):**
-  * High-precision temporal tracking of every retired packet:
+* **Flit-Level Packet Lifecycle & Network Throughput Tracking (Default Enabled):**
+  * High-precision temporal tracking of every retired packet (active by default, bypass with `--no_debug_pids`):
     * **`Creation_Cycle` ($ctime$):** Cycle at which the MoE communication layer generates the packet burst.
     * **`Inject_Cycle` ($itime$):** Cycle at which the head flit leaves the network interface controller (NIC) queue and enters the first router.
     * **`Receive_Cycle` ($atime$):** Cycle at which the tail flit is retired at the destination GPU.
   * Rigorous decomposition of total packet latency into **NIC Queueing Delay** ($itime - ctime$) and **NoC Flight Time** ($atime - itime$).
-  * **Flit-Level Network Productivity & Latency Metrics:**
-    * **Average Flit Latency (`Avg_Flit_Latency`):** Exact mean cycle latency across all individual flits composing the packet:
-      $$\text{Avg\_Flit\_Latency} = \frac{\sum_{i=1}^{N_{\text{flits}}} (t_{\text{retire}, i} - ctime)}{N_{\text{flits}}}$$
-    * **Network Throughput (`Throughput`):** Cumulative flit retirement productivity up to that cycle:
-      $$\text{Throughput} = \frac{\sum \text{Flits Received}}{\Delta \text{Cycles Simulated}} \quad [\text{flits/cycle}]$$
+  * **Flit-Level Network Productivity & Latency Metrics (Cumulative at $atime$):**
+    * **Cumulative Operation Average Flit Latency (`Avg_Flit_Latency`):** Exact accumulated mean cycle latency of *all* flits received across the entire collective network operation up to cycle $t_{\text{retire}}$:
+      $$\text{Avg\_Flit\_Latency} = \frac{\sum_{\text{all flits in op up to } \_time} (t_{\text{retire}} - ctime)}{\text{Total Flits Received in Op up to } \_time} \quad [\text{cycles}]$$
+    * **Cumulative Network Throughput (`Throughput`):** Total flits received in the operation divided by elapsed network cycles:
+      $$\text{Throughput} = \frac{\text{Total Flits Received in Op up to } \_time}{\max(1, \_time - t_{\text{start\_op}})} \quad [\text{flits/cycle}]$$
   * **LLM Network Operation Context & Temporal Boundaries:**
     * Automatic attribution of each packet to its LLM collective operation: `Op_Type` (`Scatter` or `Gather`), `Op_Idx` (correlative counter per iteration, reset upon clock drop), and absolute GPU chronogram window `Op_Start_NS` and `Op_End_NS`.
   * Comprehensive logging of Packet ID (`PID`), routing tuple (`Source`, `Dest`), flit count (`Num_Flits`), and physical wire footprint (`Size_Bytes`).
@@ -48,7 +48,13 @@ BookSim2 models:
 * **Rigorous Packetization Modeling:**
   * Precise segmentation into Maximum Transmission Units ($\text{MTU} = 256\text{ B}$), headers ($\text{Header} = 24\text{ B}$), and flits ($\text{Flit Size} = 32\text{ B}$).
   * Exact physical wire modeling: activation vectors of $4096\text{ B}$ (Mixtral) partition into exactly 16 packets with $256\text{ B}$ payload $+ 24\text{ B}$ header $= 280\text{ B}$, requiring $\lceil 280 / 32 \rceil = 9\text{ flits}$ ($288\text{ B}$ physically transferred over the wire).
+* **Physical Causality & Asynchronous Interconnect Fidelity (Bloque C):**
+  * **Individualized Network Latency per Destination GPU (`latency_per_dst`):** Rather than assigning a uniform scalar duration based on the slowest tail flit of the entire cluster, BookSim2 records the exact arrival cycle `atime` of the last packet destined to each specific GPU $dst$. Each GPU advances its local clock strictly by its own network latency $\text{network\_latency\_ns}[dst] = (t_{\min} + \text{max\_relative\_atime}[dst]) - t_{\text{src}}[dst]$.
+  * **Immediate Local Compute Unblocking in MoEScatter:** Scoped synchronization in `sync_for_moe_scatter` allows GPUs receiving fewer tokens to immediately enter `ExpertFFN` local execution without waiting for slower GPUs to finish receiving remote tokens.
+  * **Causal Staggered Packet Injection ($\Delta t_{src}$):** When GPUs reach communication phases (`MoEGather`, or unsynchronized `MoEScatter`) at varying timestamps $t_{\text{src}}$, the Oracle computes relative injection delays $\Delta t_{\text{src}} = \text{round}(t_{\text{src}} - t_{\min})$ and dynamically injects packets into BookSim2 exactly when `cycles == delta_t[src]`. Fast GPUs inject and traverse the NoC earlier, realistically modeling dynamic contention.
+  * **Emergent Collective Synchronization Stalls (`NETWORK_STALL`):** At the subsequent collective barrier (`sync_for_moe_gather`), faster GPUs wait for straggler GPUs, realistically capturing synchronization bubbles (`NETWORK_STALL`) in trace logs and cycle-to-cycle cronograms.
 * **Architectural Corrections & Simulator Stability:**
+  * **Clean Trace Initialization (Elimination of 128 Ghost Lines):** Silenced static graph construction executions in `LayerNorm`, `Residual`, `RoPE`, and `Communication` before `Cluster::run()` via explicit `perform_execution` checking, truncating `.trc` files to guarantee execution traces start cleanly at $0.0000\text{ ns}$.
   * Clean Oracle state resets and queue flushing between layers and decoding iterations.
   * Strict synchronization barriers in MoE and SwiGLU dependency chains.
   * Elimination of unconditional timeboard clock overwrites to preserve true asynchronous causality.
@@ -89,14 +95,14 @@ All simulations and post-processing tools are launched from within the `LLMSimul
 ```bash
 cd LLMSimulator
 
-# Example 1: 1D Torus Topology (8 GPUs) with Batch Size 32
+# Example 1: 1D Torus Topology (8 GPUs) with Batch Size 32 (Packet Tracking automatically generated)
 python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 4 --batch_size 32
 
 # Example 2: 2D Mesh Topology (4x4 = 16 GPUs)
 python3 run_sim.py --model mixtral --net_dims 4 4 --topology mesh --vcs 4
 
-# Example 3: Packet Debug Mode (Generates packet_tracking_debug.csv)
-python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch_size 32 --iter 1 --output_len 2 --debug_pids
+# Example 3: Fast execution without packet tracing I/O overhead
+python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch_size 32 --no_debug_pids
 ```
 
 ### Simulation CLI Parameters (`run_sim.py`)
@@ -121,7 +127,8 @@ python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch
 #### Execution & Debug Options
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--debug_pids` | `flag` | `False` | **Packet Tracking:** Intercepts every packet retirement in BookSim2 and exports `packet_tracking_debug.csv` containing $ctime$, $itime$, and $atime$. |
+| `--debug_pids` | `flag` | `True` | **Packet Tracking (Default On):** Intercepts every packet retirement in BookSim2 and exports `packet_tracking_debug.csv` containing $ctime$, $itime$, $atime$, and flit metrics. |
+| `--no_debug_pids` | `flag` | `False` | Disables packet tracking export to reduce disk I/O overhead for long benchmark sweeps. |
 | `--parallel` | `flag` | `False` | Enables parallel compute execution for heterogeneous xPU + PIM architectures. |
 | `--data_mode` | `str` | `synthesis` | Compute execution mode (`synthesis` for trace-based, `analytical` for Roofline). |
 
@@ -151,7 +158,7 @@ python3 analyze_traces.py --model mixtral --recent 5
 
 ### 2. Network Congestion Gantt Visualizer (`plot_packet_tracking.py`)
 
-Visualizes the lifecycle of individual packets through the NoC using `packet_tracking_debug.csv` (requires running the simulation with `--debug_pids`).
+Visualizes the lifecycle of individual packets through the NoC using `packet_tracking_debug.csv` (generated by default).
 
 ```bash
 cd LLMSimulator
@@ -167,6 +174,9 @@ python3 plot_packet_tracking.py build/results/<simulation_folder>/ --all_iters
 ```
 
 **Key Features & Visual Output:**
+* **Dual X-Axis (BookSim2 Cycles & Global LLM Nanoseconds):**
+  * **Primary Bottom X-Axis:** BookSim2 network simulation cycles ($ctime \to itime \to atime$).
+  * **Secondary Top X-Axis:** Global LLM Simulator Clock ($Global\_NS = Op\_Start\_NS + (Cycle - Op\_Start\_Cycle)$), establishing complete temporal congruence with the GPU cycle-to-cycle chronogram.
 * **Automated Last-Iteration Filtering:** Automatically detects simulation iterations by tracking decreases in `Op_Start_NS`, isolating the steady-state final iteration by default (use `--all_iters` to inspect every iteration).
 * **Paginated Output (`gantt/` Subdirectory):**
   * Generates sequential high-definition plots `gantt/gantt_page_XXX_pids_X_to_Y.png` partitioned into chunks of 50 packets (`--samples 50`).
@@ -175,8 +185,8 @@ python3 plot_packet_tracking.py build/results/<simulation_folder>/ --all_iters
   * 🟧 **NIC Queueing Delay:** Time spent waiting in the network interface injection buffer ($itime - ctime$). Highlights injection buffer saturation.
   * 🟦 **NoC Flight Time:** Time spent actively traversing network routers and channels ($atime - itime$). Reflects physical link contention and buffer arbitrations.
 * **Enriched Flit-Level Metric Labels:**
-  * Every bar displays routing, wire size, average flit latency, and cumulative network productivity:
-    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c`
+  * Every bar displays routing, wire size, average flit latency, cumulative network productivity, and global LLM nanosecond timestamps:
+    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start}-{g_end}`
 * **Network Operation Shading & Badges:**
   * Alternating soft background bands (`ax.axhspan`) differentiate consecutive operations (light blue for `Scatter`, light purple for `Gather`).
   * Dashed dividing lines separate distinct operations cleanly.
@@ -204,6 +214,11 @@ python3 plot_cronograma.py build/results/<simulation_folder>/ --window 100000
 
 **Key Features & Visual Output:**
 * Plots are saved sequentially inside the `cycle-to-cycle/` subdirectory (`timeline_part_XXX_...png`).
+* **Enriched Network Blocks with PIDs & Network Metrics:**
+  * Blue network blocks (`Scatter` and `Gather`) automatically correlate with `packet_tracking_debug.csv` (isolating the final iteration) and display inside the block:
+    * Collective operation name (e.g. `Scatter Nº1`).
+    * PID range and total packets transferred (e.g. `PIDs 0-895 (896 pkts)`).
+    * Cumulative operation network metrics: `Lat.Mitja: 1631.2c | Prod: 2.05 flits/c`.
 * **Dual-Label Compute Rendering:**
   * Green compute boxes display `"Calc"` in the upper half and the specific operation name (**ExpertFFN**, **Attention**, **Linear**, etc.) in **bold** directly below it.
 * **Intelligent Algorithmic Coalescing:**

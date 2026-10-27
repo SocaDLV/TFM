@@ -23,7 +23,7 @@ Tensor::Ptr Residual::forward(const Tensor::Ptr input,
   Tensor::Ptr output = get_activation("residual_out", input->shape);
 
   long size = input->getSize();
-  if (size == 0) {
+  if (size == 0 || !device->perform_execution) {
     return output;
   }
 

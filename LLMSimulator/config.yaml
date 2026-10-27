@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_bs32_20261027_201016/
-  gantt_directory: build/results/mixtral_8dev_torus_bs32_20261027_201016/gantt/
+  output_directory: build/results/mixtral_8dev_torus_bs32_20261028_000504/
+  gantt_directory: build/results/mixtral_8dev_torus_bs32_20261028_000504/gantt/

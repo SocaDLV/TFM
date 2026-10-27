@@ -85,6 +85,22 @@ void Device::run(std::vector<BatchedSequence::Ptr> sequences_metadata_list) {
 
 void Device::restartGraph() { top_module_graph->restart_graph(); }
 
+void Device::setPerformExecution(bool perform) {
+  if (!perform_execution && perform) {
+    // Transición a ejecución real: reiniciar el estado y garantizar que el .trc comience limpio en 0 ns
+    reset_status();
+    if (tfm_trace_file.is_open()) {
+      tfm_trace_file.close();
+      std::string filename = "TFM_device_" + std::to_string(device_total_rank) + ".trc";
+      tfm_trace_file.open(filename, std::ios::out | std::ios::trunc);
+      if (tfm_trace_file.is_open()) {
+        tfm_trace_file << "START_NS,END_NS,DURATION,TYPE,DETAILS\n";
+      }
+    }
+  }
+  perform_execution = perform;
+}
+
 void Device::connectTopModuleGraph() {
   top_module_graph->connectDevice(get_ptr());
 }
@@ -233,6 +249,7 @@ void Device::initializeDRAM(int ProcessorType, DramEnergy dramEnergy) {
 }
 
 void Device::log_tfm_event(time_ns start, time_ns end, const std::string& event_type, const std::string& details) {
+    if (!perform_execution) return;
     if (tfm_trace_file.is_open() && end >= start) {
         tfm_trace_file << std::fixed << std::setprecision(4)
                        << start << "," 

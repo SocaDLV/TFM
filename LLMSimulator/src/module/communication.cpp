@@ -1,5 +1,6 @@
 #include "module/communication.h"
 #include "scheduler/scheduler.h"
+#include "hardware/cluster.h"
 #include "common/assert.h"
 
 // --- INICIO CÓDIGO TFM: ORÁCULO DE BOOKSIM2 ---
@@ -10,10 +11,18 @@
 
 #include "booksim_api.hpp"
 
+struct PendingPacket {
+    int src;
+    int dst;
+    int flits;
+    int delta_cycle;
+};
+
 class BookSimCoSimManager {
 public:
     static std::map<std::string, int> calls_per_module;
     static std::map<std::string, double> cached_latency;
+    static std::map<std::string, std::map<int, double>> cached_latency_per_gpu;
     static int total_injected;
     static int total_received;
     static bool initialized;
@@ -36,6 +45,7 @@ public:
 
 std::map<std::string, int> BookSimCoSimManager::calls_per_module;
 std::map<std::string, double> BookSimCoSimManager::cached_latency;
+std::map<std::string, std::map<int, double>> BookSimCoSimManager::cached_latency_per_gpu;
 int BookSimCoSimManager::total_injected = 0;
 int BookSimCoSimManager::total_received = 0;
 bool BookSimCoSimManager::initialized = false;
@@ -62,7 +72,7 @@ Tensor::Ptr AllReduce::forward(const Tensor::Ptr input,
   Tensor::Ptr output = get_activation("allreduce_output", input->shape);
 
   long size = input->getSize();
-  if (size == 0) {
+  if (size == 0 || !device->perform_execution) {
     return output;
   }
 
@@ -129,6 +139,7 @@ Tensor::Ptr AllScatter::forward(const Tensor::Ptr input,
 MoEScatter::MoEScatter(std::string& prefix, std::string& name,
                        std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true, true) {
+  equalize_time = false;
   std::vector<int> shape = {1, 1};
   Tensor::Ptr output = Tensor::Create("moe_scatter_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
@@ -153,37 +164,56 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
 
   // --- INICIO CÓDIGO TFM: ORÁCULO SCATTER ---
   if (BookSimCoSimManager::calls_per_module[layer_name] == 0) {
-      if (BookSimCoSimManager::last_device_time >= 0 && device->status.device_time < BookSimCoSimManager::last_device_time) {
+      // 1. Recolectar tiempos reales t_src de cada GPU y calcular t_min
+      std::vector<double> t_src(total_num_device, 0.0);
+      double t_min = -1.0;
+      for (int s = 0; s < total_num_device; s++) {
+          t_src[s] = device->cluster->get_device(s)->get_time();
+          if (t_min < 0.0 || t_src[s] < t_min) {
+              t_min = t_src[s];
+          }
+      }
+      if (t_min < 0.0) t_min = 0.0;
+
+      if (BookSimCoSimManager::last_device_time >= 0 && t_min < BookSimCoSimManager::last_device_time) {
           BookSimCoSimManager::scatter_op_counter = 0;
           BookSimCoSimManager::gather_op_counter = 0;
       }
-      BookSimCoSimManager::last_device_time = device->status.device_time;
+      BookSimCoSimManager::last_device_time = t_min;
       BookSimCoSimManager::scatter_op_counter++;
 
-      double op_start_ns = device->status.device_time;
-      BookSim_StartOperation("Scatter", BookSimCoSimManager::scatter_op_counter, op_start_ns);
+      // 2. Calcular desfases de inyección delta_t[src] en ciclos (1 ciclo = 1 ns)
+      std::vector<int> delta_t(total_num_device, 0);
+      for (int s = 0; s < total_num_device; s++) {
+          delta_t[s] = (int)std::round(t_src[s] - t_min);
+          if (delta_t[s] < 0) delta_t[s] = 0;
+      }
 
-      // Somos la GPU 0 en llegar. Predecimos el tráfico de todo el clúster.
+      BookSim_StartOperation("Scatter", BookSimCoSimManager::scatter_op_counter, t_min);
+
       int MTU = 256;          
       int HEADER_SIZE = 24;   
       int FLIT_SIZE = 32;     
 
-      for(int src = 0; src < total_num_device; src++) {
+      std::map<int, std::vector<PendingPacket>> packets_by_cycle;
+      int total_packets_to_inject = 0;
+
+      for (int src = 0; src < total_num_device; src++) {
           int src_dp_idx = src / ne_tp_dg;
           std::vector<int> tp_sharing_device_list = {};
           int device_list_offset = src / ne_tp_dg * ne_tp_dg;
-          for(int device_idx = device_list_offset; device_idx < device_list_offset + ne_tp_dg; device_idx++){
-            tp_sharing_device_list.push_back(device_idx);
+          for (int device_idx = device_list_offset; device_idx < device_list_offset + ne_tp_dg; device_idx++) {
+              tp_sharing_device_list.push_back(device_idx);
           }
           std::unordered_set<int> set_tp_devices(tp_sharing_device_list.begin(), tp_sharing_device_list.end());
 
-          for(int dst = 0; dst < total_num_device; dst++) {
-              if(set_tp_devices.count(dst) == 0 && src != dst) {
+          for (int dst = 0; dst < total_num_device; dst++) {
+              if (set_tp_devices.count(dst) == 0 && src != dst) {
                   int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst / e_tp_dg) * e_tp_dg;
                   int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
                   
                   int tokens_to_dst = 0;
-                  for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
+                  for (int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
                       tokens_to_dst += sequences_metadata->scheduler->running_queue[src_dp_idx]->local_num_token_in_expert[e_id];
                   }
 
@@ -196,35 +226,67 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
                           if (payload == 0) payload = MTU;
                           int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
                           
-                          BookSim_InjectPacket(src, dst, flits);
-                          BookSimCoSimManager::total_injected++;
+                          packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
+                          total_packets_to_inject++;
                       }
                   }
               }
           }
       }
 
-      // Simulamos toda la capa en BookSim2 de golpe
       int cycles = 0;
+      int total_injected = 0;
+      int total_received = 0;
+      std::vector<int> max_relative_atime(total_num_device, 0);
+      for (int d = 0; d < total_num_device; d++) {
+          max_relative_atime[d] = delta_t[d];
+      }
+
       BookSimPacketInfo pkt_info;
-      while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
+      while (total_received < total_packets_to_inject || total_injected < total_packets_to_inject) {
+          auto it = packets_by_cycle.find(cycles);
+          if (it != packets_by_cycle.end()) {
+              for (const auto& pkt : it->second) {
+                  BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
+                  total_injected++;
+              }
+          }
+
           BookSim_AdvanceCycle();
           cycles++;
-          while(BookSim_CheckReceived(pkt_info)) { 
-              BookSimCoSimManager::total_received++;
+
+          while (BookSim_CheckReceived(pkt_info)) { 
+              total_received++;
+              int rel_atime = cycles;
+              if (rel_atime > max_relative_atime[pkt_info.dst]) {
+                  max_relative_atime[pkt_info.dst] = rel_atime;
+              }
+          }
+
+          if (cycles > 10000000) {
+              std::cerr << "[WARNING] BookSim2 Scatter exceeded 10M cycles. Breaking." << std::endl;
+              break;
           }
       }
 
-      // Guardamos el resultado en caché (1 ciclo = 1 ns)
       double op_latency_ns = cycles * 1.0;
       BookSimCoSimManager::cached_latency[layer_name] = op_latency_ns;
 
-      double op_end_ns = op_start_ns + op_latency_ns;
+      double op_end_ns = t_min + op_latency_ns;
       BookSim_FinishOperation(op_end_ns);
+
+      // Calcular la latencia individual por GPU destino
+      for (int dst = 0; dst < total_num_device; dst++) {
+          double t_end_dst = t_min + (double)max_relative_atime[dst];
+          double lat = t_end_dst - t_src[dst];
+          if (lat < 0.0) lat = 0.0;
+          BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst] = lat;
+      }
   }
 
-  // Todas las GPUs (incluida la 0) leen la caché
-  network_latency_ns = BookSimCoSimManager::cached_latency[layer_name];
+  // Cada GPU lee su latencia individualizada
+  int my_rank = device->device_total_rank;
+  network_latency_ns = BookSimCoSimManager::cached_latency_per_gpu[layer_name][my_rank];
 
   // Aplicar latencia al reloj. Esto se guardará de forma NATIVA en el .trc
   if (input->parallel_execution && !device->config.communication_hiding) {
@@ -234,11 +296,11 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       device->status.low_time += network_latency_ns;
     }
   }
+  time_ns start_time = device->status.device_time;
   device->status.device_time += network_latency_ns;
+  time_ns end_time = device->status.device_time;
 
   // --- INICIO AÑADIDO PARA LOGGER ---
-  time_ns start_time = device->status.device_time - network_latency_ns;
-  time_ns end_time = device->status.device_time;
   std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
   device->log_tfm_event(start_time, end_time, layer_name, details);
   // --- FIN AÑADIDO PARA LOGGER ---
@@ -248,6 +310,7 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
   if (BookSimCoSimManager::calls_per_module[layer_name] == total_num_device) {
       BookSimCoSimManager::calls_per_module[layer_name] = 0;
       BookSimCoSimManager::cached_latency.erase(layer_name);
+      BookSimCoSimManager::cached_latency_per_gpu.erase(layer_name);
       BookSimCoSimManager::total_injected = 0;
       BookSimCoSimManager::total_received = 0;
   }
@@ -259,6 +322,7 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
 MoEGather::MoEGather(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true) {
+  equalize_time = false;
   std::vector<int> shape = {1, 1};
   Tensor::Ptr output = Tensor::Create("moe_gather_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
@@ -281,43 +345,63 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
 
   // --- INICIO CÓDIGO TFM: ORÁCULO GATHER ---
   if (BookSimCoSimManager::calls_per_module[layer_name] == 0) {
-      if (BookSimCoSimManager::last_device_time >= 0 && device->status.device_time < BookSimCoSimManager::last_device_time) {
+      // 1. Recolectar tiempos reales t_src de cada GPU y calcular t_min
+      std::vector<double> t_src(total_num_device, 0.0);
+      double t_min = -1.0;
+      for (int s = 0; s < total_num_device; s++) {
+          t_src[s] = device->cluster->get_device(s)->get_time();
+          if (t_min < 0.0 || t_src[s] < t_min) {
+              t_min = t_src[s];
+          }
+      }
+      if (t_min < 0.0) t_min = 0.0;
+
+      if (BookSimCoSimManager::last_device_time >= 0 && t_min < BookSimCoSimManager::last_device_time) {
           BookSimCoSimManager::scatter_op_counter = 0;
           BookSimCoSimManager::gather_op_counter = 0;
       }
-      BookSimCoSimManager::last_device_time = device->status.device_time;
+      BookSimCoSimManager::last_device_time = t_min;
       BookSimCoSimManager::gather_op_counter++;
 
-      double op_start_ns = device->status.device_time;
-      BookSim_StartOperation("Gather", BookSimCoSimManager::gather_op_counter, op_start_ns);
+      // 2. Calcular desfases de inyección delta_t[src] en ciclos (1 ciclo = 1 ns)
+      std::vector<int> delta_t(total_num_device, 0);
+      for (int s = 0; s < total_num_device; s++) {
+          delta_t[s] = (int)std::round(t_src[s] - t_min);
+          if (delta_t[s] < 0) delta_t[s] = 0;
+      }
+
+      BookSim_StartOperation("Gather", BookSimCoSimManager::gather_op_counter, t_min);
 
       int MTU = 256;          
       int HEADER_SIZE = 24;   
       int FLIT_SIZE = 32;     
 
-      for(int dst = 0; dst < total_num_device; dst++) {
+      std::map<int, std::vector<PendingPacket>> packets_by_cycle;
+      int total_packets_to_inject = 0;
+
+      for (int dst = 0; dst < total_num_device; dst++) {
           int dst_dp_idx = dst / ne_tp_dg;
           std::vector<int> e_tp_sharing_device_list = {};
           int device_list_offset = dst / e_tp_dg * e_tp_dg;
-          for(int device_idx = device_list_offset; device_idx < device_list_offset + e_tp_dg; device_idx++){
-            e_tp_sharing_device_list.push_back(device_idx);
+          for (int device_idx = device_list_offset; device_idx < device_list_offset + e_tp_dg; device_idx++) {
+              e_tp_sharing_device_list.push_back(device_idx);
           }
           std::unordered_set<int> set_e_tp_devices(e_tp_sharing_device_list.begin(), e_tp_sharing_device_list.end());
 
-          for(int src = 0; src < total_num_device; src++) {
-              if(set_e_tp_devices.count(src) == 0 && src != dst) { 
+          for (int src = 0; src < total_num_device; src++) {
+              if (set_e_tp_devices.count(src) == 0 && src != dst) { 
                   int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (src / e_tp_dg) * e_tp_dg;
                   int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
 
                   int tokens_from_src = 0;
-                  for(int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++){
-                    tokens_from_src += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id];
+                  for (int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
+                      tokens_from_src += sequences_metadata->scheduler->running_queue[dst_dp_idx]->local_num_token_in_expert[e_id];
                   }
 
                   long bytes_from_src = 1.0 * tokens_from_src * k * input->precision_byte / e_tp_dg / ne_tp_dg;
 
-                  if ((device->model_config.model_name == "deepseekV3") && device->model_config.precision_byte == 1){
-                    bytes_from_src *= 2;
+                  if ((device->model_config.model_name == "deepseekV3") && device->model_config.precision_byte == 1) {
+                      bytes_from_src *= 2;
                   }
 
                   if (bytes_from_src > 0) {
@@ -327,8 +411,8 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
                           if (payload == 0) payload = MTU;
                           int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
                           
-                          BookSim_InjectPacket(src, dst, flits);
-                          BookSimCoSimManager::total_injected++;
+                          packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
+                          total_packets_to_inject++;
                       }
                   }
               }
@@ -336,23 +420,58 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       }
 
       int cycles = 0;
+      int total_injected = 0;
+      int total_received = 0;
+      std::vector<int> max_relative_atime(total_num_device, 0);
+      for (int d = 0; d < total_num_device; d++) {
+          max_relative_atime[d] = delta_t[d];
+      }
+
       BookSimPacketInfo pkt_info;
-      while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
+      while (total_received < total_packets_to_inject || total_injected < total_packets_to_inject) {
+          auto it = packets_by_cycle.find(cycles);
+          if (it != packets_by_cycle.end()) {
+              for (const auto& pkt : it->second) {
+                  BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
+                  total_injected++;
+              }
+          }
+
           BookSim_AdvanceCycle();
           cycles++;
-          while(BookSim_CheckReceived(pkt_info)) {
-              BookSimCoSimManager::total_received++;
+
+          while (BookSim_CheckReceived(pkt_info)) {
+              total_received++;
+              int rel_atime = cycles;
+              if (rel_atime > max_relative_atime[pkt_info.dst]) {
+                  max_relative_atime[pkt_info.dst] = rel_atime;
+              }
+          }
+
+          if (cycles > 10000000) {
+              std::cerr << "[WARNING] BookSim2 Gather exceeded 10M cycles. Breaking." << std::endl;
+              break;
           }
       }
 
       double op_latency_ns = cycles * 1.0;
       BookSimCoSimManager::cached_latency[layer_name] = op_latency_ns;
 
-      double op_end_ns = op_start_ns + op_latency_ns;
+      double op_end_ns = t_min + op_latency_ns;
       BookSim_FinishOperation(op_end_ns);
+
+      // Calcular la latencia individual por GPU destino
+      for (int dst = 0; dst < total_num_device; dst++) {
+          double t_end_dst = t_min + (double)max_relative_atime[dst];
+          double lat = t_end_dst - t_src[dst];
+          if (lat < 0.0) lat = 0.0;
+          BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst] = lat;
+      }
   }
 
-  network_latency_ns = BookSimCoSimManager::cached_latency[layer_name];
+  // Cada GPU lee su latencia individualizada
+  int my_rank = device->device_total_rank;
+  network_latency_ns = BookSimCoSimManager::cached_latency_per_gpu[layer_name][my_rank];
 
   if (input->parallel_execution && !device->config.communication_hiding) {
     if (input->isPerformHigh()) {
@@ -361,11 +480,11 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       device->status.low_time += network_latency_ns;
     }
   }
+  time_ns start_time = device->status.device_time;
   device->status.device_time += network_latency_ns;
+  time_ns end_time = device->status.device_time;
 
   // --- INICIO AÑADIDO PARA LOGGER ---
-  time_ns start_time = device->status.device_time - network_latency_ns;
-  time_ns end_time = device->status.device_time;
   std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
   device->log_tfm_event(start_time, end_time, layer_name, details);
   // --- FIN AÑADIDO PARA LOGGER ---
@@ -374,6 +493,7 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
   if (BookSimCoSimManager::calls_per_module[layer_name] == total_num_device) {
       BookSimCoSimManager::calls_per_module[layer_name] = 0;
       BookSimCoSimManager::cached_latency.erase(layer_name);
+      BookSimCoSimManager::cached_latency_per_gpu.erase(layer_name);
       BookSimCoSimManager::total_injected = 0;
       BookSimCoSimManager::total_received = 0;
   }
@@ -383,11 +503,11 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
 }
 
 Sync::Sync(std::string& prefix, std::string& name, std::vector<int> device_list,
-           Device::Ptr device)
+           Device::Ptr device, bool equalize_time)
     : Module(prefix, name, device, device_list) {
   auto sync__set = Sync__Set::Create(module_map_name, "sync__set", device_list, device);
   add_module(sync__set);
-  auto sync__ = Sync__::Create(module_map_name, "sync__", device_list, device);
+  auto sync__ = Sync__::Create(module_map_name, "sync__", device_list, device, equalize_time);
   add_module(sync__);
 }
 
@@ -421,8 +541,10 @@ Tensor::Ptr Sync__Set::forward(const Tensor::Ptr input,
 }
 
 Sync__::Sync__(std::string& prefix, std::string& name,
-               std::vector<int> device_list, Device::Ptr device)
-    : Module(prefix, name, device, device_list, true, true) {}
+               std::vector<int> device_list, Device::Ptr device, bool equalize_time)
+    : Module(prefix, name, device, device_list, true, true) {
+  this->equalize_time = equalize_time;
+}
 
 Tensor::Ptr Sync__::forward(const Tensor::Ptr input,
                             BatchedSequence::Ptr sequences_metadata) {

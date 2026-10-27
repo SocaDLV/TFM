@@ -239,4 +239,7 @@ src/module/CMakeFiles/module.dir/communication.cpp.o: \
  /usr/include/c++/15/bits/algorithmfwd.h \
  /usr/include/c++/15/bits/stl_heap.h \
  /usr/include/c++/15/pstl/glue_algorithm_defs.h \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/cluster.h \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/node.h \
+ /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/stat.h \
  /home/igilolt/Escritorio/TFM/LLMSimulator/../booksim2/src/booksim_api.hpp

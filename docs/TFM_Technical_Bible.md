@@ -866,17 +866,42 @@ Para garantizar la ausencia absoluta de deadlocks sin requerir costosos protocol
 
 # CAPÍTULO 4: Nuestro Co-Simulador en Lazo Cerrado (LLMSimulator + BookSim2)
 
-## 4.1. El Paradigma de Integración Oráculo en Modo Bulk Synchronous Parallel (BSP)
+## 4.1. El Paradigma de Integración Oráculo Causal con Inyección Escalonada y Latencia por Destino (Bloque C)
 
-La integración entre LLMSimulator y BookSim2 implementa un **modelo Oráculo centralizado de predicción causal**:
+La integración entre LLMSimulator y BookSim2 implementa un **modelo Oráculo centralizado de predicción causal físicamente fiel**:
 
-Cuando el clúster alcanza una fase de comunicación colectiva en `MoEScatter` o `MoEGather` ([`src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp)):
-1. La primera GPU en alcanzar el módulo (GPU 0) detecta que `BookSimCoSimManager::calls_per_module[layer_name] == 0`.
-2. Como GPU 0 tiene acceso a la estructura global del planificador (`sequences_metadata->scheduler`), predice exhaustivamente la matriz completa de tráfico de todos los pares $(src, dst)$ del clúster.
-3. Inyecta todos los paquetes correspondientes en BookSim2 y ejecuta el bucle de reloj `BookSim_AdvanceCycle()` hasta que todos los paquetes inyectados son recibidos.
-4. Almacena la latencia resultante en nanosegundos en `BookSimCoSimManager::cached_latency[layer_name]`.
-5. Todas las GPUs (incluidas las que alcancen la fase posteriormente) leen esta latencia cacheada y avanzan sus relojes en consecuencia.
-6. La última GPU en procesar el módulo resetea los contadores del Oráculo, garantizando que la siguiente iteración comience con un estado completamente limpio.
+En lugar de imponer una barrera artificial rígida que obligue a todas las GPUs a esperar a la más lenta y asignarles una latencia uniforme de red idéntica a la del peor caso del clúster, el simulador desacopla el avance temporal en `MoEScatter` y `MoEGather` ([`src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp)):
+
+1. **Detección y Cómputo del Desfase de Llegada ($t_{\text{src}}$ y $\Delta t_{\text{src}}$):**
+   La primera GPU en alcanzar el módulo de red (GPU 0) detecta que `BookSimCoSimManager::calls_per_module[layer_name] == 0`.
+   GPU 0 inspecciona los relojes físicos absolutos de todos los dispositivos del clúster:
+   $$t_{\text{src}}[s] = \text{device}[s]\to\text{get\_time}(), \quad \forall s \in [0, N-1]$$
+   Determina el instante temporal mínimo de llegada al módulo de red:
+   $$t_{\min} = \min_{s \in [0, N-1]} t_{\text{src}}[s]$$
+   Y calcula el desfase causal relativo de inyección en ciclos (dado que la frecuencia de reloj de red es $1\text{ GHz}$, $1\text{ ciclo} = 1.0\text{ ns}$):
+   $$\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$$
+
+2. **Inyección Causal Escalonada (`packets_by_cycle`):**
+   GPU 0 construye la matriz completa de paquetes del clúster $src \to dst$ y asocia a cada paquete el ciclo exacto de liberación de su GPU origen: `delta_cycle = delta_t[src]`.
+   Los paquetes se organizan en un mapa indexado por ciclo:
+   $$\text{packets\_by\_cycle}[\Delta t_{\text{src}}]$$
+   Se inicializa la operación en la API de BookSim2 en el instante $t_{\min}$ mediante `BookSim_StartOperation(op_type, op_idx, t_min)`.
+
+3. **Bucle de Simulación de Red con Registro de Llegada Individual (`atime` por GPU Destino):**
+   BookSim2 avanza ciclo a ciclo (`BookSim_AdvanceCycle()`). En cada ciclo `cycles`:
+   - Si `packets_by_cycle` contiene paquetes programados para ese ciclo exacto (`cycles`), se inyectan en las colas del NIC de BookSim2. Las GPUs que terminaron su fase previa antes comienzan a transmitir de inmediato, compitiendo por los canales y buffers de la red sin esperar a las GPUs rezagadas.
+   - A medida que `BookSim_CheckReceived(pkt_info)` retira paquetes completados, se actualiza el ciclo máximo de llegada del último paquete recibido por cada GPU destino específica:
+     $$\text{max\_relative\_atime}[dst] = \max(\text{max\_relative\_atime}[dst], \text{cycles})$$
+
+4. **Vectorización de Latencias Netas Individuales (`cached_latency_per_gpu`):**
+   Una vez retirados todos los paquetes del clúster, el Oráculo calcula la latencia neta individual experimentada por cada GPU $dst$:
+   $$t_{\text{end}}[dst] = t_{\min} + \text{max\_relative\_atime}[dst]$$
+   $$\text{network\_latency\_ns}[dst] = t_{\text{end}}[dst] - t_{\text{src}}[dst]$$
+   Almacena este valor en `BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst]`.
+
+5. **Aplicación y Registro Asíncrono en Cada GPU:**
+   Cada GPU $i$, al ejecutar su propio `forward()`, recupera su latencia individual `cached_latency_per_gpu[layer_name][i]`, avanza su reloj local `device->status.device_time += network_latency_ns[i]` y emite su evento `.trc` correspondiente.
+   La última GPU en procesar el módulo resetea los registros para la siguiente fase.
 
 ---
 
@@ -941,7 +966,7 @@ Por consiguiente:
 
 ---
 
-## 4.4. Secuencia Causal de Barreras en la Capa MoE: De Attention a MoEGather
+## 4.4. Secuencia Causal de Barreras en la Capa MoE: De Attention a MoEGather (Arquitectura Desacoplada)
 
 El flujo de control y sincronización a través de una capa MoE se rige por la siguiente secuencia estricta en [`src/module/expert.cpp:L136-L207`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/expert.cpp#L136-L207):
 
@@ -955,13 +980,13 @@ El flujo de control y sincronización a través de una capa MoE se rige por la s
     2. gate_fn + gate_update (~0.06 us)
               │
               ▼
-    3. MoEScatter (sync=true) ◄─── BARRERA GLOBAL PREVIA (sync_devices)
-              │                    GPU 0 ejecuta el Oráculo BookSim2 (~3.9 us)
+    3. MoEScatter (equalize_time=false) ◄────── Oráculo evalúa t_src, inyecta delta_t[src]
+              │                                 Calcula max_atime[dst] por GPU individual
               ▼
-    4. sync_for_moe_scatter (sync=false)
-              │
+    4. sync_for_moe_scatter ◄────────────────── BARRERA LOCAL {device_total_rank}
+              │                                 GPU que recibe sus tokens inicia FFN de inmediato!
               ▼
-    5. ExpertFFN (~22.1 us) ────── Ejecución Local de los Expertos (Memory-Bound)
+    5. ExpertFFN (~22.1 us) ─────────────────── Cómputo Local de Expertos (Asimétrico y Desfasado)
               │
               ▼
     6. sync_2 (sync=false)
@@ -970,65 +995,118 @@ El flujo de control y sincronización a través de una capa MoE se rige por la s
     7. all_reduce_for_e_tp
               │
               ▼
-    8. sync_3 (sync=true) ◄─────── BARRERA GLOBAL DE COMPILACIÓN (sync_devices)
-              │                    Las GPUs esperan a la más lenta en computar FFN
+    8. sync_3 (equalize_time=false) ◄────────── Barrera de Dependencia de Datos (Sin aplanar relojes)
+              │                                 Verifica que todas las GPUs terminen FFN
               ▼
-    9. MoEGather (sync=false) ◄─── Oráculo BookSim2 ejecutado por GPU 0 (~4.5 us)
-              │
+    9. MoEGather (equalize_time=false) ◄─────── Oráculo escalona inyección según fin de FFN (delta_t)
+              │                                 Calcula latencia de reunión individual por GPU
               ▼
-   10. sync_for_moe_gather (sync=false)
-              │
+   10. sync_for_moe_gather (equalize_time=true) ◄ BARRERA COLECTIVA GLOBAL (sync_devices)
+              │                                   Las GPUs rápidas esperan a la rezagada:
+              │                                   ¡Genera el NETWORK_STALL físico real!
               ▼
    11. Residual + Siguiente Capa
 ```
 
-### Análisis Detallado de los Flags `sync`:
-- **`MoEScatter` (`sync = true`):** Obliga a que todas las GPUs sincronicen sus relojes al valor máximo antes de que se inicie la dispersión de red. Cuando GPU 0 entra a ejecutar el Oráculo de BookSim2, **los relojes de todas las GPUs ya han sido igualados previamente en `sync_devices()`**.
-- **`sync_3` (`sync = true`):** Situado inmediatamente antes de `MoEGather`. Obliga a que ninguna GPU comience a recopilar resultados de expertos remotos hasta que la GPU más lenta haya terminado de procesar su `ExpertFFN`. Es aquí donde se absorben las diferencias de nanosegundos del cómputo local mediante eventos `NETWORK_STALL`.
-- **`MoEGather` (`sync = false`):** No requiere barrera previa directa porque `sync_3` ya garantizó la sincronización global del clúster instantes antes.
+### Análisis Detallado de los Flags de Sincronización y `equalize_time`:
+- **`MoEScatter` (`equalize_time = false`):** Las GPUs entran a la fase de dispersión en sus respectivos instantes físicos. El Oráculo mide $t_{\text{src}}$, inyecta paquetes de forma escalonada según $\Delta t_{\text{src}}$, y calcula el ciclo de llegada individual `latency_per_dst[dst]`.
+- **`sync_for_moe_scatter` (`device_list = {device_total_rank}`):** Se restringe la sincronización a la propia GPU local. Esto permite que una GPU cuyos tokens ya han terminado de llegar a su experto local comience de inmediato su cómputo `ExpertFFN` sin esperar a que terminen de llegar los paquetes a las GPUs restantes del clúster.
+- **`sync_3` (`equalize_time = false`):** Situado entre el cómputo de expertos y `MoEGather`. Garantiza que todos los expertos locales hayan terminado de generar sus activaciones antes de que se proceda a recolectarlas, pero al tener `equalize_time = false`, **no aplana los relojes en `sync_devices()`**. De este modo, los instantes de finalización asimétricos de `ExpertFFN` llegan intactos al Oráculo de `MoEGather`.
+- **`MoEGather` (`equalize_time = false`):** Inyecta los paquetes de cada GPU con el desfase $\Delta t_{\text{src}} = \text{round}(t_{\text{src}} - t_{\min})$ derivado de los tiempos reales de término de `ExpertFFN`. Cada GPU experimenta su duración de red individual hasta recibir su último token.
+- **`sync_for_moe_gather` (`equalize_time = true`):** Barrera de sincronización colectiva global previa a la conexión residual y la siguiente capa de atención. Al ejecutar `sync_devices()`, todas las GPUs que terminaron su fase de red antes esperan a la GPU más lenta, registrando con absoluta precisión micro-arquitectural el tiempo ocioso en el bloque rojo **`NETWORK_STALL`**.
 
 ---
 
-## 4.5. Auditoría Crítica de `cached_latency[layer_name]`: Escalar Global vs. Vector por GPU Destino
+## 4.5. Fidelidad Física Alcanzada: Latencia Individual por GPU Destino (`cached_latency_per_gpu`) y Desfase Causal de Inyección ($\Delta t_{src}$)
 
-### El Mecanismo Actual y su Limitación
-Actualmente, el código de `communication.cpp` finaliza la simulación de BookSim2 con:
+### Mecanismo Matemático y Estructuras C++
+
+En [`src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp), la clase `BookSimCoSimManager` gestiona el almacenamiento vectorizado:
 
 ```cpp
-while(BookSimCoSimManager::total_received < BookSimCoSimManager::total_injected) {
-    BookSim_AdvanceCycle();
-    cycles++;
-    while(BookSim_CheckReceived(pkt_info)) { 
-        BookSimCoSimManager::total_received++;
-    }
-}
-BookSimCoSimManager::cached_latency[layer_name] = cycles * 1.0;
+static std::map<std::string, std::map<int, double>> cached_latency_per_gpu;
 ```
 
-El valor `cycles` devuelto representa el ciclo de llegada del **último paquete de toda la red**. Este valor es almacenado como un escalar único y asignado por igual a todas las 8 GPUs:
+#### Paso 1: Muestreo de Relojes de Inyección
+Al invocar `forward()` sobre la primera GPU del clúster:
+```cpp
+std::vector<double> t_src(total_num_device, 0.0);
+for (int s = 0; s < total_num_device; s++) {
+    t_src[s] = device->cluster->get_device(s)->get_time();
+}
+double t_min = *std::min_element(t_src.begin(), t_src.end());
+std::vector<int> delta_t(total_num_device, 0);
+for (int s = 0; s < total_num_device; s++) {
+    delta_t[s] = std::max(0, (int)std::round(t_src[s] - t_min));
+}
+```
 
-$$\text{network\_latency\_ns}(\text{GPU}_i) = \text{cached\_latency}[layer\_name] = \max_{p \in \text{Paquetes}} (atime_p) \quad \forall i \in [0, 7]$$
+#### Paso 2: Planificación Temporal de Paquetes en el Reloj de BookSim2
+Cada paquete unicast generado se almacena según su instante relativo de disponibilidad:
+```cpp
+struct PendingPacket { int src; int dst; int flits; int delta_cycle; };
+std::map<int, std::vector<PendingPacket>> packets_by_cycle;
+// Al generar paquetes:
+packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
+```
 
-### Efecto en el Cronograma Actual
-Todas las GPUs dibujan una barra azul de comunicación de exactamente la misma longitud (ej. 3.933 ns en Scatter, 3.962 ns en Gather), comenzando y terminando al mismo tiempo.
+#### Paso 3: Retiro de Flits y Medición de Llegada por Destino
+Durante el bucle de avance de BookSim2:
+```cpp
+std::map<int, int> max_relative_atime;
+for (int d = 0; d < total_num_device; d++) max_relative_atime[d] = delta_t[d];
 
-### Análisis Teórico: ¿Qué Ocurriría si Usamos `max_atime_per_dst[dst]`?
-Si modificamos el Oráculo para registrar el ciclo máximo de llegada individual para cada GPU receptora:
+while (total_received < total_injected) {
+    if (packets_by_cycle.count(cycles)) {
+        for (const auto& pkt : packets_by_cycle[cycles]) {
+            BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
+        }
+        packets_by_cycle.erase(cycles);
+    }
+    BookSim_AdvanceCycle();
+    cycles++;
+    while (BookSim_CheckReceived(pkt_info)) {
+        total_received++;
+        if (cycles > max_relative_atime[pkt_info.dst]) {
+            max_relative_atime[pkt_info.dst] = cycles;
+        }
+    }
+}
+```
 
-$$\text{latency\_per\_dst}[dst] = \max_{p \in \text{Paquetes},\, p.dest == dst} (atime_p)$$
+#### Paso 4: Asignación Individual y Registro
+Para cada dispositivo $dst$:
+```cpp
+for (int d = 0; d < total_num_device; d++) {
+    double t_end = t_min + (double)max_relative_atime[d];
+    double net_lat = std::max(0.0, t_end - t_src[d]);
+    cached_latency_per_gpu[layer_name][d] = net_lat;
+}
+```
 
-1. **Variación en la Llegada de Red:**
-   - Una GPU situada a solo 1 salto de red o que recibe menos tokens (ej. GPU 7 con 4 tokens) terminaría de recibir sus datos mucho antes (ej. ciclo 1200 en vez de 3933).
-   - Su barra azul de comunicación sería considerablemente más corta.
-2. **Impacto en el Cómputo de `ExpertFFN`:**
-   - La GPU 7 podría comenzar su cómputo de `ExpertFFN` de inmediato (en el ciclo 1200).
-   - Como su FFN dura ~22.155 ns, terminaría su cómputo aproximadamente en el ciclo 23.355 ns.
-3. **El Destino Inevitable en `sync_3`:**
-   - Sin embargo, antes de `MoEGather`, el grafo impone la barrera `sync_3 (sync = true)`.
-   - La GPU más rezagada en la red (GPU 0 o GPU 5, que recibieron 11 tokens) termina su comunicación en el ciclo 3.933 ns y su FFN en el ciclo 26.088 ns.
-   - **En `sync_3`, la GPU 7 sufriría un `NETWORK_STALL` idéntico a la diferencia temporal ganada**:
-     $$\text{STALL}_{\text{GPU 7}} = 26,088\text{ ns} - 23,355\text{ ns} = \mathbf{2,733 \text{ ns}}$$
-4. **Conclusión:** La latencia total de la capa no variaría, pero el cronograma mostraría un comportamiento micro-arquitectural asimétrico y mucho más realista: finalizaciones escalonadas de red, solapamiento parcial de cómputo en GPUs ligeras y grandes bloques rojos de `NETWORK_STALL` en las GPUs que esperan en `sync_3`.
+### Validación Empírica en Mixtral 8x7B (8 GPUs, Topología Torus, Batch Size 32)
+
+La ejecución empírica de una simulación completa de Mixtral demuestra de forma concluyente la ruptura de la simetría y la emergencia de fenómenos físicos reales:
+
+#### Comparativa Capa MoE 0 (Nanosegundos Absolutos):
+| Métrica / Fase | GPU 0 (Receptora Rápida) | GPU 7 (Receptora Lenta / Desfasada) |
+| :--- | :--- | :--- |
+| **Inicio MoEScatter** | $6.361,42\text{ ns}$ | $6.361,42\text{ ns}$ |
+| **Duración MoEScatter** | $\mathbf{1.729,00\text{ ns}}$ | $\mathbf{3.933,00\text{ ns}}$ |
+| **Fin Scatter / Inicio FFN** | $\mathbf{8.090,42\text{ ns}}$ | $\mathbf{10.294,42\text{ ns}}$ |
+| **Duración ExpertFFN** | $22.118,40\text{ ns}$ | $22.130,68\text{ ns}$ |
+| **Fin FFN / Inicio MoEGather** | $\mathbf{30.208,82\text{ ns}}$ | $\mathbf{32.425,11\text{ ns}}$ |
+| **Desfase de Inyección Gather ($\Delta t_{\text{src}}$)** | $0\text{ ns}$ (Primer emisor) | $\mathbf{+2.216,29\text{ ns}}$ (Emisor tardío) |
+| **Duración MoEGather** | $1.978,00\text{ ns}$ | $2.407,71\text{ ns}$ |
+| **Fin Gather** | $32.186,82\text{ ns}$ | $34.832,82\text{ ns}$ |
+| **`NETWORK_STALL` en `sync_for_moe_gather`** | $\mathbf{2.651,00\text{ ns}}$ (Espera a GPU 7) | $\mathbf{5,00\text{ ns}}$ (Prácticamente nulo) |
+| **Reloj Sincronizado Final** | $\mathbf{34.837,82\text{ ns}}$ | $\mathbf{34.837,82\text{ ns}}$ |
+
+#### Conclusiones Científicas de los Resultados:
+1. **Asimetría Real de Transferencia:** En MoEScatter, GPU 0 recibe sus tokens en solo $1.729\text{ ns}$, mientras GPU 7 requiere $3.933\text{ ns}$.
+2. **Inicio Desacoplado de Cómputo:** GPU 0 no permanece ociosa esperando a GPU 7; arranca su `ExpertFFN` en $t = 8.090,42\text{ ns}$, adelantándose en $2.204\text{ ns}$ a la GPU 7.
+3. **Inyección Físicamente Causal en Gather:** Al terminar `ExpertFFN` antes, GPU 0 inyecta sus resultados en BookSim2 a los $30.208,82\text{ ns}$, mientras GPU 7 no comienza a emitir flits hasta los $32.425,11\text{ ns}$.
+4. **Emergencia Causal de `NETWORK_STALL`:** La barrera `sync_for_moe_gather` absorbe la discrepancia temporal de llegada. GPU 0 registra un `NETWORK_STALL` de $2.651\text{ ns}$ mientras espera a que GPU 7 termine su recepción de red. Ambos dispositivos emergen sincronizados a los $34.837,82\text{ ns}$ con fidelidad a nivel de ciclo.
 
 ---
 
@@ -1109,10 +1187,39 @@ Para dotar al co-simulador de observabilidad completa, se implementó un motor n
    ```csv
    START_NS,END_NS,DURATION,TYPE,DETAILS
    ```
-   Utiliza `std::fixed` junto con `std::setprecision(4)` (`#include <iomanip>`) para asegurar que las marcas de tiempo en nanosegundos (superiores a $10^6$ ns) no se trunquen por el formato estándar a notación científica (`float` de 6 cifras significativas), preservando la fidelidad temporal exacta. Asimismo, emplea `std::endl` para vaciar el búfer del sistema operativo de inmediato, protegiendo los datos contra interrupciones anormales del simulador.
+   Incorpora una guarda estricta `if (!perform_execution) return;` que impide registrar cualquier evento durante las fases preliminares de construcción estática del modelo. Utiliza `std::fixed` junto con `std::setprecision(4)` (`#include <iomanip>`) para asegurar que las marcas de tiempo en nanosegundos (superiores a $10^6$ ns) no se trunquen por el formato estándar a notación científica (`float` de 6 cifras significativas), preservando la fidelidad temporal exacta. Asimismo, emplea `std::endl` para vaciar el búfer del sistema operativo de inmediato, protegiendo los datos contra interrupciones anormales del simulador.
 3. **Filtrado de Eventos Nulos y Guarda Anti-Doble Registro:**
    - En [`src/module/module_graph.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module_graph.cpp), solo se registran eventos con `exec_status.total_duration > 0`, eliminando del archivo miles de llamadas declarativas nulas que saturaban el almacenamiento.
    - En `TopModuleGraph::set_pop_status()`, se implementa una guarda explícita (`is_self_logged`) que comprueba el nombre canónico del módulo (`norm`, `residual`, `rope`, `scatter`, `gather`, `all_reduce`). Si el módulo pertenece a una de estas clases que ya autogestionan su propio registro en `forward()`, se omite la emisión de un segundo registro POP, previniendo solapamientos temporales o doble contabilidad de latencias en el archivo `.trc`.
+
+### 6.1.1. Supresión de Trazas Fantasma de Inicialización Estática (Eliminación de 128 Líneas Previas a $t=0$)
+Durante la fase de instanciación del modelo (`Model::Model()`), LLMSimulator construye el grafo de dependencias estático invocando el método `forward()` de los componentes con `perform_execution = false` para dimensionar los tensores de activación. En la implementación previa, mientras que las operaciones lineales respetaban dicha bandera, los módulos analíticos `LayerNorm`, `Residual`, `RoPE` y `Communication` (`AllReduce`) avanzaban incondicionalmente el reloj de la GPU (`device_time`) y llamaban a `log_tfm_event()`.
+
+En una arquitectura de 32 capas decodificadoras, esto producía exactamente:
+$$32\text{ capas} \times 4\text{ módulos autologgeados} = 128\text{ líneas fantasma iniciales}$$
+Estas 128 líneas ocupaban un rango temporal ficticio desde $0.0000\text{ ns}$ hasta $\sim 1{,}34\text{ M ns}$, antes de que el motor reiniciara el reloj a $0\text{ ns}$ al comenzar la simulación real.
+
+**Solución Arquitectónica Implementada:**
+1. **Guarda de Ejecución en Módulos C++:** En `LayerNorm::forward()`, `Residual::forward()`, `RoPE::forward()` y `AllReduce::forward()`, se añadió la guarda previa:
+   ```cpp
+   if (size == 0 || !device->perform_execution) return output;
+   ```
+2. **Guarda en Logger:** En `Device::log_tfm_event()`, se verifica `if (!perform_execution) return;`.
+3. **Truncamiento y Sincronización en `Device::setPerformExecution()`:** Se implementó `Device::setPerformExecution(bool perform)`. Al pasar de `false` a `true` al inicio de `Cluster::run()` o `runIteration()`, se ejecuta `reset_status()`, se reabre el flujo `tfm_trace_file` con `std::ios::trunc` y se reescribe la cabecera CSV:
+   ```cpp
+   void Device::setPerformExecution(bool perform) {
+       if (!perform_execution && perform) {
+           reset_status();
+           if (tfm_trace_file.is_open()) {
+               tfm_trace_file.close();
+               tfm_trace_file.open(tfm_trace_filename, std::ios::out | std::ios::trunc);
+               tfm_trace_file << "START_NS,END_NS,DURATION,TYPE,DETAILS\n";
+           }
+       }
+       perform_execution = perform;
+   }
+   ```
+   Con esto, se garantiza que las trazas `.trc` arranquen limpiamente en $0.0000\text{ ns}$ con estricta congruencia causal.
 
 ---
 
@@ -1141,7 +1248,7 @@ Esto genera en los archivos `.trc` entradas con trazabilidad absoluta:
 Ubicado en [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py), actúa como orquestador integral:
 - Genera dinámicamente las configuraciones acopladas `config.yaml` (LLMSimulator) y `test.cfg` (BookSim2).
 - Impone **guardarraíles de arquitectura**: verifica que topologías Torus tengan al menos 2 VCs para evitar deadlocks y que las dimensiones sean simétricas.
-- Si se pasa `--debug_pids`, intercepta mediante pipes de subproceso las líneas que comienzan por `[TRACK_PID]` emitidas por BookSim2 y las vuelca estructuradas a `packet_tracking_debug.csv`.
+- **Trazabilidad de Paquetes Activa por Defecto:** Activa de forma predeterminada `SIM_DEBUG_PIDS="1"`, interceptando mediante pipes de subproceso las líneas `[TRACK_PID]` emitidas por BookSim2 y volcándolas de forma estructurada a `packet_tracking_debug.csv`. Incorpora el flag `--no_debug_pids` para deshabilitar esta exportación en barridos masivos de baja sobrecarga de I/O.
 - Sella y organiza los archivos generados en subdirectorios únicos por marca temporal en `build/results/<experimento>/`.
 
 ---
@@ -1201,6 +1308,9 @@ El script exporta de forma automatizada a `build/analysis/analisis_<timestamp>/`
 
 Ubicado en [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py):
 - **Parsea `packet_tracking_debug.csv`** (17 columnas) y reconstruye la vida de los paquetes flit a flit.
+- **Doble Eje X de Congruencia Temporal (Ciclos BookSim2 y Nanosegundos Globales LLM):**
+  - **Eje inferior (X):** Ciclos de simulación de red en BookSim2 ($ctime \to itime \to atime$).
+  - **Eje superior secundario (X2):** Tiempo Global LLM en nanosegundos ($Global\_NS = Op\_Start\_NS + (Cycle - Op\_Start\_Cycle)$). Dado que la red corre a $1\text{ GHz}$ ($1\text{ ciclo} = 1.0\text{ ns}$), se establece una congruencia unívoca con el cronograma cycle-to-cycle del simulador de cómputo.
 - **Filtro Anti-Appends de Última Iteración:** Detecta automáticamente retrocesos temporales en `Op_Start_NS` (`df['Op_Start_NS'].diff() < 0`) causados por reinicios de reloj al pasar a una nueva iteración de inferencia. Por defecto, aísla con exactitud los paquetes de la última iteración (permite `--all_iters` para analizar todas las iteraciones).
 - **Paginación Dinámica en Subcarpeta `gantt/`:**
   - Divide las decenas de miles de paquetes en bloques manejables de 50 en 50 paquetes (`--samples 50`).
@@ -1210,8 +1320,11 @@ Ubicado en [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escrito
   - 🟧 **Espera en Cola del NIC (Queueing Delay):** Desde $ctime$ hasta $itime$ (saturación de interfaces de red).
   - 🟦 **Vuelo en Red (NoC Flight Time):** Desde $itime$ hasta $atime$ (contención y arbitraje de conmutadores).
 - **Etiquetas Micro-Arquitecturales Enriquecidas por Paquete:**
-  - Al lado derecho de cada barra se muestra la tupla de ruta, tamaño físico, latencia media de flits y productividad acumulada:
-    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c`
+  - Al lado derecho de cada barra se muestra la tupla de ruta, tamaño físico, latencia media de flits acumulada, productividad acumulada y la ventana global de nanosegundos:
+    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`
+  - **Formulación Matemática de las Métricas Acumuladas:**
+    $$\text{Avg\_Flit\_Latency}(atime) = \frac{\sum_{k \in \text{flits recibidos en la op hasta } atime} (t_{\text{retire}, k} - ctime)}{\text{Total global de flits recibidos en la op hasta } atime} \quad [\text{ciclos}]$$
+    $$\text{Throughput}(atime) = \frac{\text{Total global de flits recibidos en la op hasta } atime}{\max(1, atime - t_{\text{start\_op}})} \quad [\text{flits/ciclo}]$$
 - **Sombreado Semántico por Operación de Red (`ax.axhspan`):**
   - Identifica transiciones entre operaciones colectivas sucesivas (`Scatter NºX` vs. `Gather NºX`).
   - Aplica franjas horizontales de fondo suaves alternas (azul claro para Scatter, violeta/verde claro para Gather).
@@ -1229,6 +1342,12 @@ Ubicado en [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escrito
 
 Ubicado en [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py):
 - Genera cortes temporales de alta resolución (ej. ventanas de 10.000 ns a 100.000 ns) en `cycle-to-cycle/`.
+- **Enriquecimiento de Bloques de Red con PIDs y Métricas de Flits:**
+  - Cruza la información temporal de `TFM_device_X.trc` con el registro de `packet_tracking_debug.csv` (filtrando la última iteración).
+  - Para cada bloque de red colectivo (`Scatter` y `Gather`), calcula el subconjunto de paquetes asociados a la operación y muestra en el interior del bloque azul:
+    - Título ordinal de la macro-operación: ej. `Scatter Nº1`.
+    - Rango de identificadores y número total de paquetes: ej. `PIDs 0-895 (896 pkts)`.
+    - Métricas de rendimiento de red: ej. `Lat.Mitja: 1631.2c | Prod: 2.05 flits/c`.
 - **Clasificación Semántica y Coalescencia Algorítmica:**
   Inspecciona `TYPE` y `DETAILS` (`Module:`). Fusiona automáticamente micropasos consecutivos de una misma operación lógica (ej. `gate_proj`, `activation`, `up_proj`, `down_proj` se consolidan como un único bloque continuo de **ExpertFFN**).
 - **Renderizado Dual en Cómputo Verde:**
@@ -1241,36 +1360,40 @@ Ubicado en [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/T
 
 Para mantener el máximo rigor científico en esta investigación de Máster, se declaran de manera transparente las simplificaciones y limitaciones presentes en el entorno de co-simulación actual.
 
-## 7.1. Simplificaciones Asumidas en el Co-Simulador Actual
+## 7.1. Estado de las Simplificaciones del Simulador y Resoluciones del Bloque C
 
-1. **Latencia de Red como Escalar Global en el Oráculo:**
-   El Oráculo actual computa el ciclo de llegada del último paquete global de la red y aplica ese escalar uniforme a todas las GPUs. Como se analizó en la Sección 4.5, en una red física real las GPUs destino más cercanas o con menor carga terminan de recibir sus paquetes antes.
-2. **Desacoplamiento Temporal de la Inyección:**
-   Cuando la GPU 0 invoca a BookSim2, inyecta todos los paquetes del clúster con $ctime = 0$ relativo al inicio de la fase de red. En una ejecución física real, si una GPU termina su capa de atención $100\text{ ns}$ antes que otra, comenzaría a inyectar sus paquetes en la red antes, alterando los patrones de contención temporal.
-3. **Comunicaciones Colectivas No-MoE Analíticas:**
-   Operaciones como el `AllReduce` de la atención o los gradientes en entrenamiento se modelan mediante la fórmula estática de ancho de banda NVLink ($T = \text{Data} / \text{BW}$), delegando a BookSim2 únicamente las operaciones de dispersión y reunión MoE (`moe_scatter` y `moe_gather`).
-4. **Ausencia de Backpressure sobre la GPU:**
-   El simulador asume que las colas de software del NIC tienen capacidad infinita. En hardware real, si la red se colapsa, los buffers del NIC se llenan y aplican *backpressure* sobre los procesadores de la GPU, bloqueando el avance de las instrucciones de emisión.
+1. **Latencia de Red Individualizada por GPU Destino (Resuelto en Bloque C - ✅):**
+   *Estado Previo:* El Oráculo calculaba el ciclo de llegada del último paquete global de la red y aplicaba ese escalar uniforme a todas las GPUs.
+   *Resolución Implementada:* Mediante `BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst]`, el Oráculo ahora monitorea el ciclo exacto de recepción (`atime`) del último paquete dirigido a cada GPU $dst$. Cada GPU aplica exclusivamente su duración neta individual de red.
+2. **Desfase Causal de Inyección ($\Delta t_{src}$) según Reloj Real (Resuelto en Bloque C - ✅):**
+   *Estado Previo:* Todos los paquetes se inyectaban en BookSim2 asumiendo un reloj local relativo común en ciclo 0.
+   *Resolución Implementada:* El Oráculo muestrea los tiempos reales absolutos de llegada $t_{\text{src}}[s]$ de cada GPU al módulo de red, calcula el desfase relativo $\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$ e inyecta los paquetes en BookSim2 en el ciclo exacto `cycles == delta_t[src]`. Las GPUs rápidas comienzan a emitir de inmediato y las lentas entran posteriormente.
+3. **Desacoplamiento de Cómputo Local en `ExpertFFN` (Resuelto en Bloque C - ✅):**
+   *Estado Previo:* La barrera `sync_for_moe_scatter` contenía `device_list`, obligando a todo el clúster a sincronizarse antes de que cualquier GPU pudiera iniciar su cómputo.
+   *Resolución Implementada:* `sync_for_moe_scatter` se acota a `{device_total_rank}`, permitiendo a las GPUs que reciben menos tokens (o más cercanas) comenzar su cómputo `ExpertFFN` inmediatamente. La barrera previa a Gather (`sync_3`) opera con `equalize_time = false` para verificar la dependencia de datos sin aplanar los relojes de fin de cómputo, y la barrera colectiva `sync_for_moe_gather` (`equalize_time = true`) absorbe con precisión milimétrica el desbalance acumulado generando el bloque rojo **`NETWORK_STALL`**.
+4. **Comunicaciones Colectivas No-MoE Analíticas (Línea Base Preservada):**
+   Operaciones como el `AllReduce` de la atención se modelan mediante la formulación analítica de ancho de banda NVLink ($T = \text{Data} / \text{BW}$), delegando a BookSim2 el modelado de alta resolución para la dispersión y reunión MoE (`moe_scatter` y `moe_gather`).
+5. **Ausencia de Backpressure sobre la GPU:**
+   El simulador asume colas de software de red sin desbordamiento. Los flits son retenidos en BookSim2 en las colas de inyección sin aplicar contrapresión física bloqueante hacia los registros de ejecución de la GPU.
 
 ---
 
 ## 7.2. Evaluación de Impacto en la Precisión Científica
 
-A pesar de estas simplificaciones, el co-simulador proporciona una fidelidad inmensamente superior a los modelos analíticos convencionales:
-- Captura la saturación física real de los canales virtuales ante ráfagas All-to-All.
-- Identifica los cuellos de botella por arbitraje y enrutamiento en topologías restringidas (Torus vs. Mesh).
-- Modela con exactitud matemática el régimen memory-bound de los expertos MoE y cuantifica los bloqueos de sincronización BSP reales en las barreras de clúster.
+Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C**:
+- Se reproduce con total fidelidad la asincronía natural de los clústeres heterogéneos y la dispersión All-to-All desbalanceada.
+- Se cuantifica empíricamente el beneficio de solapamiento de cómputo en GPUs ligeras que reciben menos tokens.
+- Se capturan las burbujas reales de sincronización (`NETWORK_STALL`) en las barreras colectivas, permitiendo evaluar el coste exacto de la heterogeneidad de cómputo y de tráfico en la red de interconexión.
+- Se mantiene una congruencia temporal perfecta: la suma de Cómputo + Tránsito de Red + Bloqueos Stalls coincide hasta el último decimal de nanosegundo con el Wall-Clock Time de la simulación.
 
 ---
 
 ## 7.3. Hoja de Ruta y Roadmap de Extensiones Futuras
 
-Para evolucionar el co-simulador hacia una plataforma de publicación doctoral o industrial:
-
-1. **Vectorización de Latencias Receptora por Receptora:**
-   Modificar `BookSimCoSimManager::cached_latency` para que sea un `std::vector<time_ns> latency_per_dst(total_num_device)` indexado por GPU receptora, permitiendo a las GPUs con menos tokens finalizar su recepción de red antes y comenzar su cómputo de manera asíncrona.
-2. **Co-Simulación en Lazo Cerrado con Eventos Discretos Bidireccionales:**
-   Sustituir el enfoque de Oráculo de ráfaga completa por un bucle de avance conjunto paso a paso, donde cada GPU inyecte sus flits en BookSim2 exactamente en el nanosegundo en que su reloj local alcanza la instrucción de red.
+1. **[COMPLETADO - Bloque C] Vectorización de Latencias Receptora por Receptora:**
+   Implementado en `BookSimCoSimManager::cached_latency_per_gpu` y verificado en Mixtral 8x7B.
+2. **[COMPLETADO - Bloque C] Desfase Causal de Inyección ($\Delta t_{\text{src}}$):**
+   Implementado en `packets_by_cycle` dentro de `MoEScatter::forward()` y `MoEGather::forward()`.
 3. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
    Integrar una red de dos niveles en BookSim2: enlaces de ultra-alto ancho de banda ($900\text{ GB/s}$) intra-nodo y enlaces de red de área de sistema ($100\text{ GB/s}$) inter-nodo.
 4. **Modelado de Capacidad Finita de Buffers NIC:**
@@ -1379,7 +1502,7 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`src/hardware/device.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/device.h) & [`device.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/device.cpp)
 - **Propósito:** Representa un acelerador individual (GPU o procesador PIM). Gestiona el estado de reloj local (`device_time`), la caché de memoización analítica (`addExecutionCache`), y delega la ejecución de capas a los motores analíticos o a Ramulator2.
-- **Trazabilidad:** Implementa `log_tfm_event()` con formateador de alta precisión (`std::fixed`, `std::setprecision(4)`) para evitar redondeos o notación exponencial en las marcas temporales registradas en `TFM_device_<id>.trc`.
+- **Trazabilidad y Sincronización:** Implementa `log_tfm_event()` con formateador de alta precisión (`std::fixed`, `std::setprecision(4)`) protegido por la guarda `if (!perform_execution) return;`. Gestiona la transición de construcción a ejecución real mediante `setPerformExecution(bool)`: purga residuos de inicialización estática, resetea métricas con `reset_status()` y trunca `TFM_device_<id>.trc` asegurando un arranque limpio desde $0.0000\text{ ns}$.
 
 ### [`src/hardware/node.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/node.h) & [`node.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/node.cpp)
 - **Propósito:** Agrupa los dispositivos `Device` alojados en un mismo chasis/servidor físico, gestionando la interconexión intra-nodo (ej. NVLink).
@@ -1450,11 +1573,12 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`src/module/module.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module.h) & [`module.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module.cpp)
 - **Propósito:** Clase base de todos los módulos operacionales del simulador. Gestiona jerarquías de submódulos (`add_module`, `get_module`), mapeo de nombres jerárquicos (`module_map_name`), tensores locales y asociación con dispositivos hardware.
+- **Control de Sincronización Temporal (Bloque C):** Incorpora el miembro `bool equalize_time` (por defecto `true`). Cuando es `false` (configurado en `MoEScatter`, `MoEGather` y `sync_3`), indica al planificador de dependencias que no iguale forzosamente los relojes del clúster al tiempo máximo al resolver dependencias de datos, preservando los instantes reales de finalización asimétrica $t_{\text{src}}$.
 
 ### [`src/module/module_graph.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module_graph.h) & [`module_graph.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module_graph.cpp)
 - **Propósito:** Motor central de ejecución del grafo de dependencias estático.
 - **Clases Clave:**
-  - `ModuleGraph`: Grafo local por GPU. Mantiene la lista de nodos ordenados topológicamente (`topological_sort()`).
+  - `ModuleGraph`: Grafo local por GPU. Mantiene la lista de nodos ordenados topológicamente (`topological_sort()`). En `check_ready()`, evalúa `if (module->equalize_time) sync_devices();`, permitiendo barreras de control de datos que no aplastan artificialmente los relojes locales de las GPUs.
   - `TopModuleGraph`: Coordinador global que gobierna el bucle de ejecución de todas las GPUs mediante barreras `sync_devices()`, resolución de nodos PUSH/POP y avance causal de dependencias.
   - Acumula los contadores físicos de energía (`status.act_energy`, `status.mac_energy`, etc.).
   - En `set_pop_status()`, incorpora la guarda `is_self_logged` que filtra módulos autologgeados (`norm`, `residual`, `rope`, `scatter`, `gather`, `all_reduce`) para evitar registros duplicados o solapados en trazas `.trc`.
@@ -1475,13 +1599,13 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 - **Propósito:** Módulo específico de la arquitectura MLA para gestionar el almacenamiento y recuperación del vector latente comprimido de $512$ elementos y la clave RoPE desacoplada de $64$ elementos.
 
 ### [`src/module/layernorm.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/layernorm.h) & [`layernorm.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/layernorm.cpp)
-- **Propósito:** Normalización por capas (`RMSNorm` / `LayerNorm`). Operación memory-bound analítica.
+- **Propósito:** Normalización por capas (`RMSNorm` / `LayerNorm`). Operación memory-bound analítica. Incorpora guarda `if (!device->perform_execution) return output;` para prevenir trazas y avances de tiempo en la construcción del grafo.
 
 ### [`src/module/residual.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/residual.h) & [`residual.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/residual.cpp)
-- **Propósito:** Conexión residual que suma elemento a elemento la entrada del bloque con la salida de la atención o FFN.
+- **Propósito:** Conexión residual que suma elemento a elemento la entrada del bloque con la salida de la atención o FFN. Incorpora guarda de `perform_execution` en `forward()`.
 
 ### [`src/module/rope.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/rope.h) & [`rope.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/rope.cpp)
-- **Propósito:** Embebido posicional rotacional (Rotary Position Embedding). Aplica rotaciones ortogonales a los vectores de Query y Key.
+- **Propósito:** Embebido posicional rotacional (Rotary Position Embedding). Aplica rotaciones ortogonales a los vectores de Query y Key. Silenciado durante la inicialización mediante guarda de `perform_execution`.
 
 ### [`src/module/route.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/route.h) & [`route.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/route.cpp)
 - **Propósito:** Compuerta de enrutamiento MoE (Gating Network).
@@ -1491,6 +1615,10 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`src/module/expert.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/expert.h) & [`expert.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/expert.cpp)
 - **Propósito:** Módulo del conjunto de expertos MoE (`ExpertModule`). Ejecuta el bloque Feed-Forward Network (`SwiGLU`) para los tokens enrutados a los expertos locales alojados en la GPU.
+- **Topología de Barreras Asíncronas (Bloque C):**
+  - `sync_for_moe_scatter`: Instanciado con `{device->device_total_rank}`, eliminando la barrera cluster-wide y permitiendo a las GPUs con menos tokens iniciar `ExpertFFN` local inmediatamente tras recibir sus datos.
+  - `sync_3`: Instanciado con `equalize_time = false`, garantizando que todas las GPUs hayan completado `ExpertFFN` antes de iniciar la recolección en `MoEGather`, pero sin alterar sus relojes individuales.
+  - `sync_for_moe_gather`: Mantiene `equalize_time = true`, sincronizando el clúster globalmente y absorbiendo la dispersión asíncrona como tiempo de espera real (`NETWORK_STALL`).
 
 ### [`src/module/layer.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/layer.h) & [`layer.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/layer.cpp)
 - **Propósito:** Módulos de bloques funcionales completos: bloque de atención multi-cabezal (`AttentionModule`), bloque denso FFN (`FeedForwardModule`), y módulos de actualización de puertas (`GateUpdate`).
@@ -1510,8 +1638,8 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 - **Propósito:** Primitivas de división y fusión de tensores para paralelismo tensorial (`TensorSplit`, `TensorMerge`).
 
 ### [`src/module/communication.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.h) & [`communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp)
-- **Propósito:** Módulos de comunicación de red entre GPUs (`AllReduce`, `MoEScatter`, `MoEGather`).
-- **Punto Crítico de Integración:** Aloja el singleton `BookSimCoSimManager`. En `forward()`, GPU 0 evalúa el Oráculo de red, invoca a BookSim2, inyecta paquetes unicast y cachea la latencia para todas las GPUs.
+- **Propósito:** Módulos de comunicación de red entre GPUs (`AllReduce`, `MoEScatter`, `MoEGather`, `Sync`).
+- **Punto Crítico de Integración (Bloque C):** Aloja el singleton `BookSimCoSimManager`. En `forward()` de `MoEScatter` y `MoEGather`, GPU 0 calcula los instantes reales de llegada $t_{\text{src}}[s]$ y el desfase de inyección $\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$. Organiza los paquetes en `packets_by_cycle` para inyectarlos en BookSim2 exactamente cuando `cycles == delta_t[src]`. Registra el ciclo de llegada individual del último paquete para cada GPU en `cached_latency_per_gpu[layer_name][dst]`. Cada GPU suma únicamente su latencia neta individual a su reloj local `device_time`. Incorpora guarda de `perform_execution` en `AllReduce::forward()`.
 
 ### [`src/module/test.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/test.cpp)
 - **Propósito:** Pruebas unitarias sobre instanciación de módulos y operaciones del grafo.
@@ -1540,7 +1668,8 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py)
 - **Propósito:** Orquestador principal de experimentos. Automatiza la ejecución del binario compilado, gestiona parámetros CLI, captura salidas en consola y coordina la generación de artefactos (`dia1_exec1.txt`, `packet_tracking_debug.csv`).
 - **Mecanismos Clave:**
-  - Extrae y formatea el CSV de seguimiento de paquetes `packet_tracking_debug.csv` con 17 columnas canónicas: `PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes,Avg_Flit_Latency,Throughput,Op_Type,Op_Idx,Op_Start_NS,Op_End_NS`.
+  - Habilitación por defecto de la instrumentación de paquetes (`SIM_DEBUG_PIDS="1"`), interceptando las líneas `[TRACK_PID]` para generar `packet_tracking_debug.csv` (17 columnas) sin requerir parámetros manuales adicionales.
+  - Soporte para bandera `--no_debug_pids` para anular la captura en barridos masivos donde se desee máxima velocidad.
 
 ### [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py)
 - **Propósito:** Analizador macroscópico de trazas. Parsea los registros `.trc` de cada GPU, calcula promedios de latencia por tipo de capa y genera tablas resumen de tiempos de cómputo vs. comunicación.
@@ -1552,13 +1681,16 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
 - **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Reconstruye el ciclo de vida de los paquetes, descompone latencias ($ctime \to itime \to atime$), calcula productividad acumulada y segmenta la visualización por páginas de 50 paquetes en la subcarpeta `gantt/`.
 - **Mecanismos Clave:**
+  - **Doble Eje X de Congruencia Temporal:** Muestra ciclos de BookSim2 en el eje inferior y nanosegundos globales del LLM en el eje superior ($Global\_NS = Op\_Start\_NS + (Cycle - Op\_Start\_Cycle)$).
   - Filtro automático de última iteración mediante detección de retroceso temporal en `Op_Start_NS` (anulable con `--all_iters`).
   - Paginación dinámica en subcarpeta `gantt/` (`--samples 50`, `--max_pages 30`), con sombreado de franjas por operación (`Scatter` vs. `Gather`), líneas divisorias y badges laterales con marcas de tiempo en nanosegundos.
-  - Renderizado de etiquetas enriquecidas por paquete: `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c`.
-  - Generación de gráficos representativos de los regímenes de congestión: libre, media y crítica.
+  - Renderizado de etiquetas enriquecidas por paquete: `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`.
 
 ### [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py)
 - **Propósito:** Generador de cronogramas causales de alta precisión (Diagramas de Gantt cycle-to-cycle). Reconstruye la ejecución concurrente de todas las GPUs con resolución de nanosegundos, visualizando esperas por barrera, fases de cálculo y transferencias de red.
+- **Mecanismos Clave:**
+  - Cruce de datos con `packet_tracking_debug.csv` para enriquecer los bloques azules de red (`Scatter`/`Gather`) con el rango de PIDs, número de paquetes y métricas acumuladas de latencia media de flits y productividad global.
+  - Renderizado dual en cómputo verde (`Calc` + nombre de operación en negrita).
 
 ---
 
@@ -1567,9 +1699,10 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`booksim2/src/booksim_api.hpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp) & [`booksim_api.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.cpp)
 - **Propósito:** Wrapper y API en C++ para desacoplar BookSim2 como librería interactiva. Define `BookSim_Initialize()`, `BookSim_InjectPacket()`, `BookSim_AdvanceCycle()`, `BookSim_StartOperation()`, `BookSim_FinishOperation()` y gestiona la clase `API_TrafficManager`.
 - **Mecanismos Clave:**
-  - Acumula en `_RetireFlit()` la latencia exacta de todos los flits individuales por `PID` (`flit_latency_sum`) y el contador global de flits recibidos.
-  - Al retirarse el $tail$ flit, computa la latencia media de flits `avg_flit_lat` y la productividad acumulada `throughput` en flits/ciclo.
-  - Enlaza el contexto de cómputo del LLM (`Op_Type`, `Op_Idx`, `Op_Start_NS`, `Op_End_NS`) emitiendo el registro estructurado `[TRACK_PID]` con 17 columnas bajo la bandera `--debug_pids`.
+  - Activación por defecto del trazado de PIDs si la variable `SIM_DEBUG_PIDS` no es `"0"`.
+  - Acumula en `_RetireFlit()` la latencia exacta de todos los flits globales de la operación en curso (`op_flit_latency_sum`) junto con el total de flits recibidos (`op_flits_received`).
+  - Al retirarse el $tail$ flit, computa la latencia media de flits acumulada `avg_flit_lat` ($\sum latencias / total\_flits$) y la productividad acumulada `throughput` ($total\_flits / \Delta t$).
+  - Emite el registro estructurado `[TRACK_PID]` con 17 columnas canónicas.
 
 ### [`booksim2/src/trafficmanager.hpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.hpp) & [`trafficmanager.cpp`](file:///home/igilolt/Escritorio/TFM/booksim2/src/trafficmanager.cpp)
 - **Propósito:** Motor maestro de tráfico en BookSim2. Gobierna el bucle ciclo a ciclo `_Step()`, inyecta flits en las colas de red (`_Inject()`), evalúa el avance de conmutadores y retira flits completados en destino (`_RetireFlit()`).

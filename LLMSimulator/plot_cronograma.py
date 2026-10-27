@@ -88,7 +88,62 @@ def classify_operation(op_type, details=""):
         sub = "Linear" if "pop_operation" in op else str(op_type)[:10]
         return "#2ca02c", "Calc", sub
 
-def generate_window_plot(df, start_ns, end_ns, window_idx, output_dir):
+def load_packet_tracking(folder):
+    """
+    Carga packet_tracking_debug.csv de la misma carpeta, aísla la última iteración
+    y extrae estadísticas por operación (Op_Type, Op_Idx).
+    """
+    csv_path = os.path.join(folder, "packet_tracking_debug.csv")
+    if not os.path.exists(csv_path):
+        return []
+    
+    try:
+        df_p = pd.read_csv(csv_path)
+        if df_p.empty or 'Op_Type' not in df_p.columns:
+            return []
+        
+        # Filtro Anti-Appends: aislar la última iteración si hubo reinicios de reloj
+        if 'Op_Start_NS' in df_p.columns:
+            drops = df_p['Op_Start_NS'].diff() < 0
+            if drops.any():
+                last_drop_idx = drops[drops].index[-1]
+                df_p = df_p.loc[last_drop_idx:].copy()
+        
+        ops = []
+        for (op_type, op_idx), grp in df_p.groupby(['Op_Type', 'Op_Idx'], sort=False):
+            start_ns = float(grp['Op_Start_NS'].iloc[0])
+            end_ns = float(grp['Op_End_NS'].iloc[0])
+            min_pid = int(grp['PID'].min())
+            max_pid = int(grp['PID'].max())
+            total_pkts = len(grp)
+            final_avg_lat = float(grp['Avg_Flit_Latency'].iloc[-1])
+            final_prod = float(grp['Throughput'].iloc[-1])
+            ops.append({
+                'type': str(op_type),
+                'idx': int(op_idx),
+                'start_ns': start_ns,
+                'end_ns': end_ns,
+                'min_pid': min_pid,
+                'max_pid': max_pid,
+                'total_pkts': total_pkts,
+                'avg_flit_lat': final_avg_lat,
+                'throughput': final_prod
+            })
+        return ops
+    except Exception as e:
+        print(f"⚠️ Aviso al cargar packet_tracking_debug.csv: {e}")
+        return []
+
+def match_network_op(label, start_ns, end_ns, ops):
+    if not ops:
+        return None
+    for op in ops:
+        if op['type'].lower() in label.lower() or label.lower() in op['type'].lower():
+            if (start_ns < op['end_ns'] + 50.0 and end_ns > op['start_ns'] - 50.0):
+                return op
+    return None
+
+def generate_window_plot(df, start_ns, end_ns, window_idx, output_dir, network_ops=None):
     mask = (df['START_NS'] < end_ns) & (df['END_NS'] > start_ns)
     df_window = df[mask].copy()
     if df_window.empty: return
@@ -131,8 +186,9 @@ def generate_window_plot(df, start_ns, end_ns, window_idx, output_dir):
                                  linewidth=0.5, edgecolor='black', facecolor=color, alpha=1.0)
         ax.add_patch(rect)
         
-        # Etiquetado cuando el bloque es suficientemente ancho (> 3% de la ventana)
-        if dibujo_duration / (end_ns - start_ns) > 0.03:
+        rel_w = dibujo_duration / (end_ns - start_ns)
+        # Etiquetado cuando el bloque es suficientemente ancho (> 2.5% de la ventana)
+        if rel_w > 0.025:
             x_center = dibujo_start + (dibujo_duration / 2)
             if label == "Calc" and sublabel:
                 # Mostrar 'Calc' arriba y el nombre de la operación real justo abajo en NEGRITA
@@ -140,6 +196,31 @@ def generate_window_plot(df, start_ns, end_ns, window_idx, output_dir):
                         color='white', fontsize=8.5)
                 ax.text(x_center, gpu - 0.14, sublabel, ha='center', va='center', 
                         color='white', fontweight='bold', fontsize=8.5)
+            elif label in ["Scatter", "Gather"]:
+                net_op = match_network_op(label, row['START_NS'], row['END_NS'], network_ops)
+                if net_op and rel_w > 0.08:
+                    op_title = f"{net_op['type']} Nº{net_op['idx']}"
+                    op_pids = f"PIDs {net_op['min_pid']}-{net_op['max_pid']} ({net_op['total_pkts']} pkts)"
+                    op_metrics = f"Lat.Mitja: {net_op['avg_flit_lat']:.1f}c | Prod: {net_op['throughput']:.2f} flits/c"
+                    ax.text(x_center, gpu + 0.22, op_title, ha='center', va='center', 
+                            color='white', fontweight='bold', fontsize=8.0)
+                    ax.text(x_center, gpu + 0.01, op_pids, ha='center', va='center', 
+                            color='#e0f3ff', fontsize=7.2)
+                    ax.text(x_center, gpu - 0.20, op_metrics, ha='center', va='center', 
+                            color='#ffd180', fontsize=7.2)
+                elif net_op and rel_w > 0.04:
+                    op_line1 = f"{net_op['type']} Nº{net_op['idx']} ({net_op['total_pkts']} pkts)"
+                    op_line2 = f"Lat: {net_op['avg_flit_lat']:.1f}c | Prod: {net_op['throughput']:.2f} f/c"
+                    ax.text(x_center, gpu + 0.12, op_line1, ha='center', va='center', 
+                            color='white', fontweight='bold', fontsize=7.5)
+                    ax.text(x_center, gpu - 0.14, op_line2, ha='center', va='center', 
+                            color='#ffd180', fontsize=7.0)
+                elif net_op:
+                    ax.text(x_center, gpu, f"{net_op['type']} Nº{net_op['idx']}", ha='center', va='center', 
+                            color='white', fontweight='bold', fontsize=8.5)
+                else:
+                    ax.text(x_center, gpu, label, ha='center', va='center', 
+                            color='white', fontweight='bold', fontsize=9)
             else:
                 ax.text(x_center, gpu, label, ha='center', va='center', 
                         color='white', fontweight='bold', fontsize=9)
@@ -154,7 +235,7 @@ def generate_window_plot(df, start_ns, end_ns, window_idx, output_dir):
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], color='#2ca02c', lw=6, label='Cómputo (Calc: Linear, Attention, ExpertFFN...)'),
-        Line2D([0], [0], color='#1f77b4', lw=6, label='Red (MoE Scatter/Gather)'),
+        Line2D([0], [0], color='#1f77b4', lw=6, label='Red (MoE Scatter/Gather con PIDs y Flit Metrics)'),
         Line2D([0], [0], color='#d62728', lw=6, label='Bloqueo (NETWORK_STALL)')
     ]
     ax.legend(handles=legend_elements, loc='upper right', framealpha=0.9)
@@ -171,11 +252,15 @@ def main():
     output_dir = os.path.join(args.folder, "cycle-to-cycle")
     os.makedirs(output_dir, exist_ok=True)
     
+    network_ops = load_packet_tracking(args.folder)
+    if network_ops:
+        print(f"📊 Información de red vinculada: {len(network_ops)} operaciones de red encontradas en packet_tracking_debug.csv.")
+    
     max_time = int(df['END_NS'].max())
     window_idx = 1
     for start_ns in range(0, max_time + 1, args.window):
         end_ns = start_ns + args.window
-        generate_window_plot(df, start_ns, end_ns, window_idx, output_dir)
+        generate_window_plot(df, start_ns, end_ns, window_idx, output_dir, network_ops)
         window_idx += 1
         
     print(f"✅ Cronogramas generados en: {output_dir}")

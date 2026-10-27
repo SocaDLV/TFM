@@ -26,7 +26,8 @@ class Module : public std::enable_shared_from_this<Module> {
         device(device),
         device_list(device_list),
         graph_execution(graph_execution),
-        sync(sync) {
+        sync(sync),
+        equalize_time(true) {
     module_map_name = prefix + "::" + name;
     if (sync) {
       sync_master = device_list.at(0);
@@ -83,6 +84,7 @@ class Module : public std::enable_shared_from_this<Module> {
   std::string module_map_name;
   bool sync;
   bool need_to_aggregate;
+  bool equalize_time;
 
   std::vector<long> get_size();
 
