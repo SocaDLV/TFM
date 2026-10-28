@@ -214,20 +214,24 @@ python3 plot_cronograma.py build/results/<simulation_folder>/ --window 100000
 
 **Key Features & Visual Output:**
 * Plots are saved sequentially inside the `cycle-to-cycle/` subdirectory (`timeline_part_XXX_...png`).
-* **Enriched Network Blocks with PIDs & Network Metrics:**
-  * Blue network blocks (`Scatter` and `Gather`) automatically correlate with `packet_tracking_debug.csv` (isolating the final iteration) and display inside the block:
-    * Collective operation name (e.g. `Scatter Nº1`).
+* **Strict Transformer Layer Isolation:**
+  * Extracts the decoder layer index (`MoE_decoder_X` / `decoder_X`) and strictly forbids coalescing operations across consecutive layers, creating crisp vertical boundary markers between layers.
+* **Multi-Line Adaptive Information per Compute Block:**
+  * **Line 1 (Header):** Explicit layer index and macro-operation (e.g. `Layer 0 | Calc: Attention` or `Layer 0 | Calc: ExpertFFN`).
+  * **Line 2 (Sequence in Bold):** Ordered list of elementary operations executed within the block, such as `(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)` in Attention, or `(Exp#0: Gate_Proj + SiLU + Up_Proj + Down_Proj)` in ExpertFFN. For configurations with fewer GPUs than experts ($N_{\text{GPUs}} < E$, e.g. 4 GPUs running Mixtral), it clearly designates multi-expert sequential execution: `(Exp#0,1: 2x[Gate+SiLU+Up+Down])`.
+  * **Line 3 (Bottleneck Diagnosis):** Quantifies micro-architectural intensity from `.trc` accumulators (`Comp_ns` vs. `Mem_ns`): `Dur: 22.1us (Mem-Bound 99.8%)`.
+* **Physical Internal Sub-divisions:**
+  * Draws semi-transparent dashed white vertical lines (`alpha=0.6, linestyle='--'`) at the exact completion timestamps (`END_NS`) of each micro-operation, highlighting the relative duration of steps (e.g. `AttnGen` or `down_proj`) without breaking visual continuity.
+* **Enriched Network Blocks with Layer & Flit Metrics:**
+  * Blue network blocks (`Scatter` and `Gather`) display `Layer {L} | Scatter Nº{k}` and automatically correlate with `packet_tracking_debug.csv` (isolating the final iteration), detailing:
     * PID range and total packets transferred (e.g. `PIDs 0-895 (896 pkts)`).
     * Cumulative operation network metrics: `Lat.Mitja: 1631.2c | Prod: 2.05 flits/c`.
-* **Dual-Label Compute Rendering:**
-  * Green compute boxes display `"Calc"` in the upper half and the specific operation name (**ExpertFFN**, **Attention**, **Linear**, etc.) in **bold** directly below it.
-* **Intelligent Algorithmic Coalescing:**
-  * Contiguous micro-operations of the same logical stage (e.g., `gate_proj`, `activation`, `up_proj`, `down_proj`) are automatically unified into a single seamless **ExpertFFN** box.
 * **Semantic Color Coding:**
   * 🟩 **Green (Calc / Operation):** Productive GPU compute (`POP_OPERATION`).
   * 🟦 **Blue (Scatter / Gather):** Network communication serviced by BookSim2.
   * 🟥 **Red (Stall):** Idle GPU time waiting at a global synchronization barrier due to imbalance (`NETWORK_STALL`).
-* **Anti-Appends Filter:** Automatically detects and purges stale trace entries if `.trc` files were previously concatenated or reused across simulation runs.
+* **Anti-Appends Filter & Global Coalescing:**
+  * Trace coalescing is executed globally per GPU prior to windowing, ensuring seamless continuity across 10,000 ns window cuts. Automatically purges stale trace entries if `.trc` files contain concatenated runs.
 
 ---
 

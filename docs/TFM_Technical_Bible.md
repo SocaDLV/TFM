@@ -670,6 +670,117 @@ $$\frac{22,155\text{ ns}}{6,338.86\text{ ns}} = \mathbf{3.495 \approx 3.5}$$
 
 ---
 
+## 2.7. Matriz Completa de Compatibilidad y Asignación de Paralelismo de Expertos ($N_{\text{GPUs}} < E$, $N_{\text{GPUs}} = E$, $N_{\text{GPUs}} > E$)
+
+Una pregunta metodológica recurrente formulada por los revisores y directores de investigación es:
+> *¿Es compatible el paralelismo de expertos en LLMSimulator cuando hay menos GPUs que Expertos (ej. Mixtral con 8 expertos ejecutándose en 4 GPUs o 2 GPUs)? ¿Es capaz el simulador de alojar más de un experto por GPU? ¿Y qué ocurre si hay más GPUs que expertos (ej. 16 GPUs con 8 expertos)?*
+
+La respuesta arquitectural y analítica rigurosa se descompone en tres casos exhaustivos:
+
+### 1. Formulación Matemática de Asignación en C++ (`src/module/expert.cpp`)
+
+En [`src/module/expert.cpp:L48-L86`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/expert.cpp#L48-L86), la partición de expertos entre dispositivos se rige por:
+
+```cpp
+int parallel_num = device_list.size();
+int num_expert_tp_gr_rank = parallel_num / e_tp_dg;
+num_expert_per_device = model_config.num_routed_expert / (num_expert_tp_gr_rank);
+int device_rank = device->device_total_rank;
+expert_offset = num_expert_per_device * (device_rank / e_tp_dg);
+
+for (int expert_id = expert_offset; expert_id < expert_offset + num_expert_per_device; expert_id++) {
+    auto expert_ffn = FeedForward3Way::Create(module_map_name, "expert_FFN_" + std::to_string(expert_id), ...);
+    add_module(expert_ffn);
+}
+```
+
+Donde:
+- $E = \text{model\_config.num\_routed\_expert}$ (Número total de expertos enrutados, ej. 8 en Mixtral).
+- $N_{\text{GPUs}} = \text{parallel\_num}$ (Número de GPUs en el grupo MoE).
+- $e\_tp\_dg = \text{model\_config.e\_tp\_dg}$ (Grado de paralelismo tensorial interno dentro de cada experto).
+
+---
+
+### 2. Caso $N_{\text{GPUs}} < E$ (Menos GPUs que Expertos, ej. 4 GPUs o 2 GPUs con Mixtral $E=8$)
+
+**Compatibilidad: Total y Nativa (100% Soportado).**
+
+Cuando $N_{\text{GPUs}} < E$ (con $e\_tp\_dg = 1$):
+$$\text{num\_expert\_per\_device} = \frac{E}{N_{\text{GPUs}}}$$
+
+- **En 4 GPUs ($N_{\text{GPUs}} = 4$):**
+  $$\text{num\_expert\_per\_device} = \frac{8}{4} = \mathbf{2 \text{ expertos locales por GPU}}$$
+  - **GPU 0:** $\text{expert\_offset} = 0 \to$ Aloja e instancia `expert_FFN_0` y `expert_FFN_1`.
+  - **GPU 1:** $\text{expert\_offset} = 2 \to$ Aloja e instancia `expert_FFN_2` y `expert_FFN_3`.
+  - **GPU 2:** $\text{expert\_offset} = 4 \to$ Aloja e instancia `expert_FFN_4` y `expert_FFN_5`.
+  - **GPU 3:** $\text{expert\_offset} = 6 \to$ Aloja e instancia `expert_FFN_6` y `expert_FFN_7`.
+
+- **En 2 GPUs ($N_{\text{GPUs}} = 2$):**
+  $$\text{num\_expert\_per\_device} = \frac{8}{2} = \mathbf{4 \text{ expertos locales por GPU}}$$
+  - GPU 0 aloja `expert_FFN_0..3` y GPU 1 aloja `expert_FFN_4..7`.
+
+#### Comportamiento en Cómputo Silicio:
+El bucle `for` en `expert.cpp` añade $E / N_{\text{GPUs}}$ módulos `FeedForward3Way` secuenciales al grafo de ejecución local.
+Por tanto, la duración de `ExpertFFN` en silicio se escala casi linealmente:
+- **En 8 GPUs (1 experto/GPU):** $T_{\text{ExpertFFN}} \approx \mathbf{22.1 \,\mu\text{s}}$.
+- **En 4 GPUs (2 expertos/GPU):** $T_{\text{ExpertFFN}} \approx 2 \times 22.1\,\mu\text{s} \approx \mathbf{44.3 \,\mu\text{s}}$ (validado empíricamente en `mixtral_2x2dev_mesh_bs32_20261028_005051`).
+- **En 2 GPUs (4 expertos/GPU):** $T_{\text{ExpertFFN}} \approx 4 \times 22.1\,\mu\text{s} \approx \mathbf{88.5 \,\mu\text{s}}$.
+
+#### Comportamiento en el Tráfico de Red (`src/module/communication.cpp`):
+En `MoEScatter::forward()` y `MoEGather::forward()`, el Oráculo itera sobre el rango de expertos alojados en la GPU destino:
+```cpp
+int expert_id_offset = device->model_config.num_routed_expert / total_num_device * (dst / e_tp_dg) * e_tp_dg;
+int num_expert_per_device = device->model_config.num_routed_expert / total_num_device * e_tp_dg;
+
+int tokens_to_dst = 0;
+for (int e_id = expert_id_offset; e_id < expert_id_offset + num_expert_per_device; e_id++) {
+    tokens_to_dst += sequences_metadata->scheduler->running_queue[src_dp_idx]->local_num_token_in_expert[e_id];
+}
+```
+El Oráculo agrega automáticamente en un único flujo de paquetes todos los tokens dirigidos a cualquiera de los expertos locales de la GPU destino (ej. para GPU 0 en un clúster de 4 GPUs, suma los tokens de `expert_0` más `expert_1`), emitiendo la ráfaga unicast consolidada hacia ese nodo de red.
+
+---
+
+### 3. Caso $N_{\text{GPUs}} = E$ (Mismo Número de GPUs que Expertos, ej. 8 GPUs con Mixtral $E=8$)
+
+**Compatibilidad: Óptima y Canónica (100% Soportado).**
+
+- $\text{num\_expert\_per\_device} = 8 / 8 = \mathbf{1 \text{ experto local por GPU}}$.
+- Cada GPU aloja exactamente un experto (`expert_FFN_i`).
+- Representa el diseño base de paralelismo de expertos desarticulado, con latencia de cómputo uniforme de $\sim 22.1\,\mu\text{s}$ por GPU.
+
+---
+
+### 4. Caso $N_{\text{GPUs}} > E$ (Más GPUs que Expertos, ej. 16 GPUs con Mixtral $E=8$)
+
+**Compatibilidad: Condicionada a `e_tp_dg > 1` (Expert Tensor Parallelism).**
+
+En `src/module/expert.cpp:L53-L54`, el simulador impone una aserción estricta de coherencia:
+```cpp
+assertTrue((parallel_num / e_tp_dg) <= model_config.num_routed_expert,
+           "Expert tensor parallel degree is not supported");
+```
+
+- **Si se intenta ejecutar con Expert Parallelism puro ($e\_tp\_dg = 1$):**
+  $$\frac{\text{parallel\_num}}{e\_tp\_dg} = \frac{16}{1} = 16 > 8 \implies \mathbf{FALLO \ DE \ ASERCIÓN}$$
+  *Razón Arquitectural:* Con $e\_tp\_dg = 1$, no es posible asignar una fracción de experto ($< 1$ experto) a una GPU sin dividir sus matrices de proyección de pesos.
+- **Solución: Habilitar Expert Tensor Parallelism ($e\_tp\_dg \ge \lceil N_{\text{GPUs}} / E \rceil$):**
+  Para $N_{\text{GPUs}} = 16$ y $E = 8$, configurando $e\_tp\_dg = 2$:
+  $$\frac{\text{parallel\_num}}{e\_tp\_dg} = \frac{16}{2} = 8 \le 8 \implies \mathbf{VÁLIDO}$$
+  $$\text{num\_expert\_per\_device} = \frac{8}{8} \times 2 = 1 \text{ partición tensorial de experto por GPU}$$
+  Cada uno de los 8 expertos se divide entre 2 GPUs mediante paralelismo tensorial (las matrices `gate_proj`, `up_proj` y `down_proj` se dividen en mitades por columnas y filas), ejecutando un `moe_all_reduce_for_e_tp` interno tras el FFN.
+
+#### Tabla Resumen de Compatibilidad de Paralelismo de Expertos:
+| Escenario de Clúster | GPUs ($N$) | Expertos ($E$) | Configuración $e\_tp\_dg$ | Expertos por GPU | Duración Silicio FFN | Estado de Compatibilidad |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Menos GPUs que Expertos** | 2 | 8 | $e\_tp\_dg = 1$ | 4 expertos / GPU | $\sim 88.5\,\mu\text{s}$ | ✅ Totalmente Soportado (Nativo) |
+| **Menos GPUs que Expertos** | 4 | 8 | $e\_tp\_dg = 1$ | 2 expertos / GPU | $\sim 44.3\,\mu\text{s}$ | ✅ Totalmente Soportado (Nativo) |
+| **Balance Exacto** | 8 | 8 | $e\_tp\_dg = 1$ | 1 experto / GPU | $\sim 22.1\,\mu\text{s}$ | ✅ Totalmente Soportado (Canónico) |
+| **Más GPUs que Expertos** | 16 | 8 | $e\_tp\_dg = 1$ | Inválido ($< 1$) | N/A | ❌ Aserción: Requiere $e\_tp\_dg > 1$ |
+| **Más GPUs que Expertos** | 16 | 8 | $e\_tp\_dg = 2$ | 1 mitad de experto | $\sim 11.1\,\mu\text{s}$ + AllRed | ✅ Soportado con Expert TP |
+
+---
+
 # CAPÍTULO 3: Arquitectura Interna de BookSim2 y Nuestra Librería API (`booksim_api`)
 
 ## 3.1. El Motor de Simulación Ciclo a Ciclo de BookSim2 (`TrafficManager::_Step`)
@@ -1340,19 +1451,104 @@ Ubicado en [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escrito
 
 ## 6.6. Cronograma Micro-Arquitectural Causal GPU Cycle-to-Cycle (`plot_cronograma.py`)
 
-Ubicado en [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py):
-- Genera cortes temporales de alta resolución (ej. ventanas de 10.000 ns a 100.000 ns) en `cycle-to-cycle/`.
-- **Enriquecimiento de Bloques de Red con PIDs y Métricas de Flits:**
-  - Cruza la información temporal de `TFM_device_X.trc` con el registro de `packet_tracking_debug.csv` (filtrando la última iteración).
-  - Para cada bloque de red colectivo (`Scatter` y `Gather`), calcula el subconjunto de paquetes asociados a la operación y muestra en el interior del bloque azul:
-    - Título ordinal de la macro-operación: ej. `Scatter Nº1`.
-    - Rango de identificadores y número total de paquetes: ej. `PIDs 0-895 (896 pkts)`.
-    - Métricas de rendimiento de red: ej. `Lat.Mitja: 1631.2c | Prod: 2.05 flits/c`.
-- **Clasificación Semántica y Coalescencia Algorítmica:**
-  Inspecciona `TYPE` y `DETAILS` (`Module:`). Fusiona automáticamente micropasos consecutivos de una misma operación lógica (ej. `gate_proj`, `activation`, `up_proj`, `down_proj` se consolidan como un único bloque continuo de **ExpertFFN**).
-- **Renderizado Dual en Cómputo Verde:**
-  Dibuja en la parte superior del bloque `"Calc"` y en la parte inferior el nombre de la macro-operación real (**ExpertFFN**, **Attention**, **Linear**, etc.) en texto **blanco en negrita** (`fontweight='bold'`).
-- **Filtro Anti-Appends:** Detecta caídas en la serie temporal (`diff < 0`), garantizando que si una simulación concatenó datos antiguos en el archivo `.trc`, el visualizador extrae de forma limpia y exclusiva la última ejecución realizada.
+El script [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py) constituye el visualizador causal de más alta fidelidad del entorno de co-simulación. Genera diagramas de Gantt temporalmente continuos que representan el estado exacto de todas las GPUs ciclo a ciclo y nanosegundo a nanosegundo, segmentados en ventanas temporales de alta resolución (típicamente de $10.000\text{ ns}$ a $100.000\text{ ns}$) dentro del subdirectorio `cycle-to-cycle/`.
+
+### 6.6.1. Jerarquía Semántica de Tres Niveles (.trc vs. Renderizado Visual)
+
+A diferencia de los visualizadores convencionales que o bien dibujan miles de micro-rectángulos ilegibles o bien fusionan la traza en bloques opacos sin detalles internos, `plot_cronograma.py` implementa una arquitectura de interpretación semántica en 3 niveles jerárquicos:
+
+```
++-------------------------------------------------------------------------------------------------------+
+| NIVEL 1: Capa del Transformer (Layer L)                                                               |
+|  - Aislamiento estricto: MoE_decoder_0 NUNCA se fusiona con MoE_decoder_1                            |
++-------------------------------------------------------------------------------------------------------+
+    |
+    v
++-------------------------------------------------------------------------------------------------------+
+| NIVEL 2: Macro-Operación Causal (MacroOp)                                                             |
+|  - Fases del pipeline: Attention (Verde), Scatter (Azul), ExpertFFN (Verde), Gather (Azul), Stall (Rojo)|
++-------------------------------------------------------------------------------------------------------+
+    |
+    v
++-------------------------------------------------------------------------------------------------------+
+| NIVEL 3: Operaciones Elementales Reales + Sub-divisiones Internas                                     |
+|  - Secuencia ordenada abreviada: (LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)                      |
+|  - Sub-divisiones físicas: Líneas discontinuas blancas en los END_NS exactos de cada micro-operación   |
+|  - Diagnóstico cuantitativo: Duración real + Mem-Bound % calculado de Comp_ns y Mem_ns               |
++-------------------------------------------------------------------------------------------------------+
+```
+
+#### 1. Nivel 1: Capa del Transformer (`Layer L`) y Aislamiento Estricto
+- **Detección y Propagación Causal:** El parser examina la columna `DETAILS` buscando patrones regex como `MoE_decoder_(\d+)` o `decoder_(\d+)`. Módulos raíz como `input_layer_norm` fijan el inicio de la capa $L$. Para micro-operaciones y comunicaciones que carecen de etiqueta de capa explícita en su entrada de traza (como `residual_1`, `moe_scatter`, `moe_gather`, `post_attn_layer_norm` y `residual_2`), el parser propaga el identificador mediante forward-fill causal dentro de la GPU.
+- **Regla Inquebrantable de Aislamiento:** El algoritmo de coalescencia prohíbe taxativamente agrupar operaciones pertenecientes a capas decodificadoras distintas. Cuando concluye `MoE_decoder_0` e inicia `MoE_decoder_1`, se fuerza una separación física nítida entre bloques, permitiendo al investigador observar con total exactitud la frontera de transición inter-capa.
+
+#### 2. Nivel 2: Macro-Operación Causal (`MACRO_OP`) y Clasificación Semántica
+Las micro-operaciones del archivo `.trc` se clasifican semánticamente en categorías estructurales:
+- **`Attention` (🟩 Verde `#2e7d32`):** Agrupa `input_layer_norm`, proyecciones lineales QKV (`qkv_proj`), computación causal de atención (`attention_forward` / `AttnGen`), proyección de salida (`o_proj`), conexión residual (`residual_1`) y compuerta del router MoE (`gate`).
+- **`Scatter` (🟦 Azul `#1565c0`):** Comunicación de dispersión All-to-All gestionada por BookSim2 (`moe_scatter`).
+- **`ExpertFFN` (🟩 Verde `#2e7d32`):** Cómputo local de los expertos asignados a la GPU, agrupando `gate_proj`, activación no lineal (`silu`), `up_proj` y `down_proj`.
+- **`Gather` (🟦 Azul `#1565c0`):** Comunicación de reunión All-to-All gestionada por BookSim2 (`moe_gather`).
+- **`NETWORK_STALL` (🟥 Rojo `#c62828`):** Burbuja ociosa de sincronización en barrera colectiva provocada por desbalance de cómputo o colas en la red.
+- **`Residual` (⬜ Gris `#616161`):** Normalización final y residuo del bloque decodificador (`post_attn_layer_norm` y `residual_2`).
+
+#### 3. Nivel 3: Operaciones Elementales Reales y Despliegue de Expertos
+Durante la coalescencia continua de un macro-bloque verde, el algoritmo recolecta cronológicamente todas las operaciones elementales ejecutadas:
+- **En Bloques de Atención:** Abreviación estandarizada:
+  $$\text{SEQ\_STR} = \text{"(LN + QKV\_Proj + AttnGen + O\_Proj + Res + Gate)"}$$
+- **En Bloques de ExpertFFN:** Identificación y agrupamiento de los expertos locales:
+  - Si la GPU aloja **1 experto** ($N_{\text{GPUs}} = E = 8$):
+    $$\text{SEQ\_STR} = \text{"(Exp\#0: Gate\_Proj + SiLU + Up\_Proj + Down\_Proj)"}$$
+  - Si la GPU aloja **múltiples expertos** ($N_{\text{GPUs}} < E$, ej. 4 GPUs con 8 expertos $\implies 2$ expertos/GPU):
+    $$\text{SEQ\_STR} = \text{"(Exp\#0,1: 2x[Gate+SiLU+Up+Down])"}$$
+    El visualizador detecta que la GPU ejecuta secuencialmente ambos expertos y refleja tanto el conjunto de IDs locales (`Exp#0,1`) como el factor multiplicador de pasos elementales ($2\times$).
+
+### 6.6.2. Sub-divisiones Físicas Internas Discontinuas
+
+Para que el usuario pueda apreciar de un vistazo el peso temporal relativo de cada operación elemental sin perder la cohesión visual del macro-bloque, `plot_cronograma.py` dibuja **líneas verticales finas discontinuas** (`color='white'`, `alpha=0.6`, `linestyle='--'`, `linewidth=0.8`) en los límites temporales exactos `END_NS` de cada micro-operación interna.
+
+Esto resuelve una limitación clásica de los cronogramas agregados: ahora es posible constatar visualmente en la imagen cómo `AttnGen` o `down_proj` consumen la mayor parte del tiempo del bloque verde, mientras que `LN` o `silu` representan delgadas franjas de apenas unos cientos de nanosegundos.
+
+### 6.6.3. Texto Multilínea Rico y Diagnóstico de Cuello de Botella
+
+Dentro de cada bloque verde de cómputo, el visualizador formatea un texto informativo de hasta 3 líneas, adaptando dinámicamente el nivel de detalle al ancho físico en nanosegundos (`dibujo_dur`):
+
+1. **Línea 1 (Cabecera):** Identificador de capa y macro-operación:
+   ```
+   Layer {L} | Calc: {MacroOp}
+   ```
+   *(Ejemplo: `Layer 0 | Calc: Attention` o `Layer 0 | Calc: ExpertFFN`).*
+2. **Línea 2 (Secuencia en Negrita):** Cadena secuencial de micro-operaciones:
+   ```
+   (LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)
+   ```
+   *(Renderizado con `fontweight='bold'` y color `#e8f5e9`).*
+3. **Línea 3 (Diagnóstico Cuantitativo de Cuello de Botella):**
+   ```
+   Dur: {dur_us:.1f}us (Mem-Bound {mem_pct:.1f}%)
+   ```
+   - **Cálculo del Cuello de Botella:** Se extraen los acumuladores de nanosegundos de cómputo en ALU (`Comp_ns`) y tiempo de transferencia a memoria HBM (`Mem_ns`) registrados en el `.trc` para todas las micro-operaciones del bloque:
+     $$\text{Mem\_Pct} = \frac{\sum \text{Mem\_ns}}{\sum \text{Comp\_ns} + \sum \text{Mem\_ns}} \times 100$$
+   - Si $\text{Mem\_Pct} \ge 50.0\%$, se reporta como `Mem-Bound {Mem_Pct:.1f}%` (el caso habitual en inferencia decodificadora con Batch Size 32, típicamente entre el $95\%$ y el $99.8\%$). Si fuese inferior, se reporta como `Compute-Bound {100 - Mem_Pct:.1f}%`.
+
+#### Umbrales Adaptativos de Renderizado
+Para prevenir cualquier solapamiento tipográfico o desbordamiento fuera de las cajas de tiempo:
+- **`dibujo_dur >= 2500 ns`:** Renderizado completo de 3 líneas (tamaño de fuente entre $6.5\text{ pt}$ y $7.5\text{ pt}$).
+- **`1500 ns <= dibujo_dur < 2500 ns`:** Renderizado balanceado de 2 líneas (Cabecera + Secuencia de operaciones).
+- **`dibujo_dur < 1500 ns`:** Renderizado ultracompacto de 1 línea (`L{L} | {MacroOp}` a $6.0\text{ pt}$).
+
+### 6.6.4. Enriquecimiento de Bloques de Red Colectivos (Scatter y Gather)
+
+Los bloques azules de comunicación física en BookSim2 incorporan:
+- **Cabecera con Capa y Operación Ordinal:** `Layer {L} | Scatter Nº{k}` o `Layer {L} | Gather Nº{k}`.
+- **Cruce en Memoria con `packet_tracking_debug.csv` (Última Iteración):**
+  - **Identificadores de Paquetes:** Rango exacto de identificadores y recuento total: `PIDs {min}-{max} ({count} pkts)`.
+  - **Métricas de Flits en Tiempo Real:** Latencia media por flit y productividad acumulada calculadas en BookSim2:
+    $$\text{"Lat.Mitja: 1631.2c | Prod: 2.05 flits/c"}$$
+
+### 6.6.5. Coalescencia Causal Global Previa a la Ventana y Filtro Anti-Appends
+
+- **Coalescencia Global Invariante:** Para evitar que un bloque largo de cómputo (por ejemplo, un `ExpertFFN` de $44.3\,\mu\text{s}$ en 4 GPUs) resulte fracturado o pierda su diagnóstico de operaciones al cruzar el límite de una ventana de $10.000\text{ ns}$, la coalescencia se efectúa a escala completa sobre toda la traza de cada GPU antes de segmentar en ventanas.
+- **Filtro Anti-Appends:** Detecta automáticamente saltos negativos en la columna `START_NS` ($\Delta t < 0$), saneando las trazas si el archivo `.trc` contenía ejecuciones previas y analizando exclusivamente la última iteración simulada.
 
 ---
 
@@ -1687,10 +1883,14 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - Renderizado de etiquetas enriquecidas por paquete: `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`.
 
 ### [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py)
-- **Propósito:** Generador de cronogramas causales de alta precisión (Diagramas de Gantt cycle-to-cycle). Reconstruye la ejecución concurrente de todas las GPUs con resolución de nanosegundos, visualizando esperas por barrera, fases de cálculo y transferencias de red.
+- **Propósito:** Generador de cronogramas causales de alta resolución (Diagramas de Gantt cycle-to-cycle). Reconstruye la ejecución concurrente de todas las GPUs con granularidad de ciclo y nanosegundo, exportando secuencias de imágenes de alta fidelidad en `cycle-to-cycle/timeline_part_*.png`.
 - **Mecanismos Clave:**
-  - Cruce de datos con `packet_tracking_debug.csv` para enriquecer los bloques azules de red (`Scatter`/`Gather`) con el rango de PIDs, número de paquetes y métricas acumuladas de latencia media de flits y productividad global.
-  - Renderizado dual en cómputo verde (`Calc` + nombre de operación en negrita).
+  - **Aislamiento Estricto por Capa:** Extrae el identificador de capa (`MoE_decoder_X` / `decoder_X`) y prohíbe taxativamente la fusión entre operaciones de capas decodificadoras distintas.
+  - **Identificación de Operaciones Elementales y Multi-Experto:** Reconstruye la secuencia ordenada de pasos elementales (`(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)`) y desglosa los expertos locales asignados a la GPU, identificando ejecuciones multi-experto secuenciales (`(Exp#0,1: 2x[Gate+SiLU+Up+Down])`) cuando $N_{\text{GPUs}} < E$.
+  - **Sub-divisiones Físicas Internas:** Dibuja líneas discontinuas blancas (`alpha=0.6, linestyle='--'`) en las marcas exactas `END_NS` de cada micro-operación interna dentro del macro-bloque verde.
+  - **Diagnóstico Cuantitativo de Cuello de Botella:** Calcula el ratio $\sum Mem\_ns / (\sum Comp\_ns + \sum Mem\_ns)$ y despliega en la tercera línea del bloque el veredicto arquitectural (`Mem-Bound XX.X%` vs. `Compute-Bound XX.X%`).
+  - **Enriquecimiento de Red:** Cruza datos con `packet_tracking_debug.csv` mostrando en los bloques azules la capa, PIDs, número de paquetes, latencia media de flits y productividad en flits/ciclo.
+  - **Coalescencia Causal Global:** Procesa toda la traza de cada GPU de forma previa a la partición en ventanas para garantizar que las operaciones que cruzan fronteras de visualización mantengan íntegro su contexto analítico.
 
 ---
 
