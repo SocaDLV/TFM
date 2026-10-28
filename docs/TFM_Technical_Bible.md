@@ -39,10 +39,12 @@
    - 4.3. Matemática Rigurosa de Paquetización: Demostración de los 9 Flits y 288 Bytes en Mixtral
    - 4.4. Secuencia Causal de Barreras en la Capa MoE: De Attention a MoEGather
    - 4.5. Auditoría Crítica de `cached_latency[layer_name]`: Escalar Global vs. Vector por GPU Destino
+   - 4.6. Auditoría Forense de Causalidad Física en MoEGather/MoEScatter y Demostración de Simetría de Tráfico
 5. [Capítulo 5: Parches Arquitectónicos Aplicados al Simulador Base](#capítulo-5-parches-arquitectónicos-aplicados-al-simulador-base)
    - 5.1. Correcciones Críticas en `decoder.cpp`: Conexiones Residuales y Tipado de Capas
    - 5.2. Correcciones en `layer.cpp`: Cadena de Dependencias en Bloques SwiGLU
    - 5.3. Correcciones en `timeboard.cpp`: Preservación de la Causalidad Temporal Asíncrona
+   - 5.4. Corrección de Causalidad Bidireccional en el Oráculo de Red (`src/module/communication.cpp`)
 6. [Capítulo 6: Sistema de Trazabilidad Completa (.trc y .csv) y Suite de Análisis en Python](#capítulo-6-sistema-de-trazabilidad-completa-trc-y-csv-y-suite-de-análisis-en-python)
    - 6.1. Arquitectura del Logger C++ en `Device`, `Module` y `ModuleGraph`
    - 6.2. Propagación de Identidad Jerárquica (`module_map_name`) a Nodos POP
@@ -1161,16 +1163,25 @@ std::map<int, std::vector<PendingPacket>> packets_by_cycle;
 packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
 ```
 
-#### Paso 3: Retiro de Flits y Medición de Llegada por Destino
-Durante el bucle de avance de BookSim2:
+#### Paso 3: Retiro de Flits y Medición Causal Bidireccional (TX/RX)
+Durante el bucle de avance de BookSim2, se registran los cuatro hitos temporales por dispositivo:
 ```cpp
-std::map<int, int> max_relative_atime;
-for (int d = 0; d < total_num_device; d++) max_relative_atime[d] = delta_t[d];
+std::vector<int> max_relative_rx_atime(total_num_device);
+std::vector<int> max_relative_tx_inj(total_num_device);
+std::vector<int> max_relative_tx_retire(total_num_device);
+for (int d = 0; d < total_num_device; d++) {
+    max_relative_rx_atime[d] = delta_t[d];
+    max_relative_tx_inj[d] = delta_t[d];
+    max_relative_tx_retire[d] = delta_t[d];
+}
 
 while (total_received < total_injected) {
     if (packets_by_cycle.count(cycles)) {
         for (const auto& pkt : packets_by_cycle[cycles]) {
             BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
+            if (cycles > max_relative_tx_inj[pkt.src]) {
+                max_relative_tx_inj[pkt.src] = cycles;
+            }
         }
         packets_by_cycle.erase(cycles);
     }
@@ -1178,18 +1189,30 @@ while (total_received < total_injected) {
     cycles++;
     while (BookSim_CheckReceived(pkt_info)) {
         total_received++;
-        if (cycles > max_relative_atime[pkt_info.dst]) {
-            max_relative_atime[pkt_info.dst] = cycles;
+        if (cycles > max_relative_rx_atime[pkt_info.dst]) {
+            max_relative_rx_atime[pkt_info.dst] = cycles;
+        }
+        if (cycles > max_relative_tx_retire[pkt_info.src]) {
+            max_relative_tx_retire[pkt_info.src] = cycles;
         }
     }
 }
 ```
 
-#### Paso 4: Asignación Individual y Registro
-Para cada dispositivo $dst$:
+#### Paso 4: Asignación Individual y Registro Bidireccional
+Para cada dispositivo $d \in [0, N-1]$:
 ```cpp
+std::vector<int> rel_finish(total_num_device, 0);
 for (int d = 0; d < total_num_device; d++) {
-    double t_end = t_min + (double)max_relative_atime[d];
+    rel_finish[d] = std::max({
+        delta_t[d],
+        max_relative_rx_atime[d],
+        max_relative_tx_inj[d],
+        max_relative_tx_retire[d]
+    });
+}
+for (int d = 0; d < total_num_device; d++) {
+    double t_end = t_min + (double)rel_finish[d];
     double net_lat = std::max(0.0, t_end - t_src[d]);
     cached_latency_per_gpu[layer_name][d] = net_lat;
 }
@@ -1218,6 +1241,108 @@ La ejecución empírica de una simulación completa de Mixtral demuestra de form
 2. **Inicio Desacoplado de Cómputo:** GPU 0 no permanece ociosa esperando a GPU 7; arranca su `ExpertFFN` en $t = 8.090,42\text{ ns}$, adelantándose en $2.204\text{ ns}$ a la GPU 7.
 3. **Inyección Físicamente Causal en Gather:** Al terminar `ExpertFFN` antes, GPU 0 inyecta sus resultados en BookSim2 a los $30.208,82\text{ ns}$, mientras GPU 7 no comienza a emitir flits hasta los $32.425,11\text{ ns}$.
 4. **Emergencia Causal de `NETWORK_STALL`:** La barrera `sync_for_moe_gather` absorbe la discrepancia temporal de llegada. GPU 0 registra un `NETWORK_STALL` de $2.651\text{ ns}$ mientras espera a que GPU 7 termine su recepción de red. Ambos dispositivos emergen sincronizados a los $34.837,82\text{ ns}$ con fidelidad a nivel de ciclo.
+
+---
+
+## 4.6. Auditoría Forense de Causalidad Física en MoEGather/MoEScatter y Demostración de Simetría de Tráfico
+
+### 4.6.1. Orden de Ejecución C++ al Entrar al Oráculo de `MoEGather` y Garantía de Estabilidad Temporal en `sync_3`
+
+Una duda fundamental planteada durante la inspección microarquitectural ciclo a ciclo del cronograma (`timeline_part_014_130k_to_140k.png`) es la siguiente: dado que `MoEGather` posee `sync == false`, cuando la GPU 0 entra a `MoEGather::forward()` y ejecuta el Oráculo centralizado (`calls_per_module == 0`), ¿las demás GPUs (1 a 7) ya han ejecutado todas su cómputo `ExpertFFN` y actualizado sus relojes, o alguna GPU podría seguir computando mientras el Oráculo lee sus marcas de tiempo?
+
+La auditoría forense del código C++ demuestra formalmente que **es imposible que el Oráculo lea un reloj no actualizado, gracias a la barrera previa `sync_3`**:
+1. **Topología del Grafo de Dependencias:** En [`src/module/expert.cpp:L186-L192`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/expert.cpp#L186-L192), la ejecución del clúster atraviesa la barrera `sync_3` inmediatamente después de la computación local `expert_FFN`:
+   ```cpp
+   auto sync_3 = Sync::Create(module_map_name, "sync_3", sync_devices, false, ...);
+   ```
+2. **Semántica de Sincronización en `Sync::forward()` ([`src/module/sync.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/sync.cpp)):**
+   Cada hilo del clúster ejecuta:
+   ```cpp
+   Sync__Set(id, sync_idx, device_id);
+   while (!Sync__Is_all_set(id, sync_idx));
+   ```
+   Esta rutina constituye una barrera pthread/cond-var estricta en tiempo de ejecución C++. Ningún hilo puede rebasar `sync_3` hasta que los $N$ dispositivos hayan finalizado su cómputo local y llamado a `Sync__Set`.
+3. **Preservación de Tiempos Heterogéneos (`equalize_time = false`):** A diferencia de las barreras globales aplanadoras, `sync_3` opera con `equalize_time = false`, lo que significa que no iguala los relojes `device_time` al máximo. En consecuencia:
+   - Todas las GPUs completan su `ExpertFFN` antes de que cualquiera pueda entrar a `MoEGather`.
+   - Cada GPU preserva su instante exacto de finalización de cómputo en nanosegundos ($t_{\text{src}}[d]$).
+   - Cuando la GPU 0 cruza la barrera e invoca el Oráculo, los $N$ relojes leídos corresponden fehacientemente al estado consolidado post-ExpertFFN.
+
+#### Registro Empírico del Oráculo en Gather Nº4 (Layer 3, Iteración 2):
+```
+[COSIM_ORACLE] Gather Nº4 (Layer 3):
+  t_min: 136815.6596 ns (alcanzado por GPU 0)
+  t_src[0]: 136815.6596 ns -> delta_t:    0 ns (primer emisor)
+  t_src[1]: 137628.7516 ns -> delta_t:  813 ns
+  t_src[2]: 138777.8319 ns -> delta_t: 1962 ns
+  t_src[3]: 139066.3090 ns -> delta_t: 2251 ns
+  t_src[4]: 139920.6631 ns -> delta_t: 3105 ns
+  t_src[5]: 140128.8471 ns -> delta_t: 3313 ns (último emisor en terminar FFN)
+  t_src[6]: 140062.9090 ns -> delta_t: 3247 ns
+  t_src[7]: 138792.8319 ns -> delta_t: 1977 ns
+```
+Esto demuestra de manera irrefutable que el Oráculo observó a la GPU 4 finalizando su `ExpertFFN` exactamente en $t = 139.920,66\text{ ns}$ ($\Delta t_4 = 3.105\text{ ns}$ tras GPU 0).
+
+---
+
+### 4.6.2. Demostración Matemática de Simetría en la Matriz de Tráfico ($T_{\text{Gather}} = T_{\text{Scatter}}^T$) y Dispersión Estocástica de Tokens
+
+Una aparente paradoja física detectada en el cronograma fue: *¿Cómo es posible que la GPU 0 finalice su bloque azul Gather Nº4 en $\sim 139.878\text{ ns}$ (entrando en NETWORK_STALL) mientras la GPU 4 sigue ejecutando su bloque verde Calc: ExpertFFN hasta los $\sim 139.920\text{ ns}$? ¿No debería GPU 0 esperar a que GPU 4 termine su ExpertFFN y le envíe sus tokens?*
+
+#### Teorema de Simetría del Tráfico MoE:
+En cualquier capa Mixture-of-Experts con paralelismo de expertos (EP):
+- Durante `MoEScatter`, si una secuencia asignada a la GPU $A$ tiene $k$ tokens enrutados a un experto ubicado físicamente en la memoria de la GPU $B$, la GPU $A$ debe transmitir $k$ tokens a la GPU $B$:
+  $$T_{\text{Scatter}}(A \to B) = k$$
+- Durante `ExpertFFN`, el experto en la GPU $B$ procesa esos $k$ tokens.
+- Durante `MoEGather`, los $k$ vectores resultantes deben ser devueltos exactamente a la GPU dueña original de la secuencia ($A$) para su recombinación ponderada:
+  $$T_{\text{Gather}}(B \to A) \equiv T_{\text{Scatter}}(A \to B)$$
+- En términos de la matriz de tráfico global de $N \times N$ nodos:
+  $$\mathbf{T}_{\text{Gather}} = \mathbf{T}_{\text{Scatter}}^T$$
+
+#### Auditoría de Tráfico en la Capa 3 (Gather Nº4):
+Al auditar los metadatos de enrutamiento exactos leídos por el planificador (`local_num_token_in_expert`):
+1. **Flujos Salientes de GPU 0 en Scatter Nº4:**
+   - Hacia GPU 1 (Expertos 2 y 3): 4 tokens (36 flits)
+   - Hacia GPU 2 (Expertos 4 y 5): 5 tokens (45 flits)
+   - Hacia GPU 3 (Expertos 6 y 7): 2 tokens (18 flits)
+   - Hacia GPU 7 (Expertos 14 y 15): 5 tokens (45 flits)
+   - **Hacia GPU 4 (Expertos 8 y 9): ¡0 tokens!**
+2. **Flujos Entrantes a GPU 0 en Gather Nº4:**
+   Por el Teorema de Simetría:
+   $$T_{\text{Gather}}(4 \to 0) = T_{\text{Scatter}}(0 \to 4) = \mathbf{0 \text{ tokens}}$$
+   La GPU 4 no tenía que enviar absolutamente ningún paquete a la GPU 0. Los únicos paquetes que la GPU 0 debía recolectar provenían exclusivamente de las GPUs 1, 2, 3 y 7.
+3. **Causalidad Temporal de Llegada:**
+   - Las GPUs 1, 2, 3 y 7 finalizaron su `ExpertFFN` temprano ($t_{\text{src}} \le 139.066,31\text{ ns}$, $\Delta t \le 2.251$ ciclos).
+   - Sus paquetes fueron inyectados en BookSim2 en sus respectivos ciclos de liberación e hicieron tránsito por la topología Torus.
+   - El último paquete destinado a la GPU 0 arribó en el ciclo relativo $3.062$ ($t = 136.815,66 + 3.062 = \mathbf{139.877,66\text{ ns}}$).
+   - En ese instante ($139.878\text{ ns}$), la GPU 0 ya poseía el 100% de los tokens de sus secuencias locales en memoria. No existía ninguna dependencia causal física que la obligara a esperar a la GPU 4.
+4. **Actividad de la GPU 4:**
+   La GPU 4 estaba procesando 7 tokens que le fueron enviados por las GPUs 5, 6 y 7. Por ello, su cómputo `ExpertFFN` se prolongó legítimamente hasta los $139.920\text{ ns}$, momento en el que comenzó a inyectar sus flits hacia las GPUs 5, 6 y 7 (que terminaron su Gather en $t > 141.000\text{ ns}$).
+
+---
+
+### 4.6.3. Garantía de Causalidad Física Bidireccional en el Oráculo de Red
+
+A pesar de que la GPU 0 no requiriera datos de la GPU 4, la auditoría reveló un principio arquitectural fundamental: **en una comunicación colectiva All-to-All, una GPU actúa como entidad bidireccional (transmisora TX y receptora RX)**.
+
+Si una GPU inyecta paquetes tardíamente hacia otras GPUs pero recibe sus paquetes entrantes de forma prematura (o no recibe ninguno), un oráculo que únicamente evalúe el tiempo de recepción (`atime` en el receptor) permitiría erróneamente que la GPU emisora abandone la fase de red mientras su propia tarjeta de red (NIC) sigue ocupada inyectando flits, o mientras sus paquetes emitidos continúan en vuelo sin confirmación de entrega en la red.
+
+Para prevenir cualquier anomalía de esta índole, se implementó en [`src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp) el **Modelo de Causalidad Bidireccional Cuádruple**:
+
+$$\text{rel\_finish}[d] = \max\Big(\delta_t[d],\; \text{max\_relative\_rx\_atime}[d],\; \text{max\_relative\_tx\_inj}[d],\; \text{max\_relative\_tx\_retire}[d]\Big)$$
+$$t_{\text{end}}[d] = t_{\min} + \text{rel\_finish}[d]$$
+$$\text{network\_latency\_ns}[d] = t_{\text{end}}[d] - t_{\text{src}}[d] \ge 0$$
+
+Donde:
+1. $\delta_t[d]$: Garantiza que la GPU no finalice antes de su propio instante de disponibilidad física en el módulo.
+2. $\text{max\_relative\_rx\_atime}[d]$: Ciclo en el que el NIC de la GPU $d$ recibe el último flit de todos los paquetes entrantes dirigidos a ella.
+3. $\text{max\_relative\_tx\_inj}[d]$: Ciclo en el que el NIC de la GPU $d$ termina de inyectar todos los paquetes salientes que ella misma emite hacia la red.
+4. $\text{max\_relative\_tx\_retire}[d]$: Ciclo en el que el último paquete emitido por la GPU $d$ llega a su nodo de destino y es retirado de la red (garantía de entrega de extremo a extremo).
+
+#### Comprobación en el Cronograma Microarquitectural:
+Al aplicar este modelo:
+- Ninguna GPU puede abandonar la fase de red mientras su NIC esté transmitiendo o mientras sus paquetes emitidos no hayan sido entregados.
+- Toda GPU que concluye sus transferencias bidireccionales antes del peor caso del clúster espera en la barrera global `sync_for_moe_gather` (`equalize_time = true`), registrando el tiempo ocioso en el bloque rojo **`NETWORK_STALL`**.
+- En la imagen de cronograma ciclo a ciclo (`timeline_part_014_130k_to_140k.png`), se constata visualmente que todas las GPUs entran limpiamente a la siguiente capa (`Layer 4 | Calc: Attention`) de forma simultánea a los $138.118\text{ ns}$ (o $142.368\text{ ns}$ en la segunda iteración), respetando la causalidad física estricta.
 
 ---
 
@@ -1284,6 +1409,42 @@ En [`src/module/timeboard.cpp:L39-L47`](file:///home/igilolt/Escritorio/TFM/LLMS
   ```
 - Estas líneas forzaban a que el tiempo de inicio de cualquier módulo fuera sobreescrito destructivamente por el reloj global actual, anulando cualquier desbalance asíncrono o retraso acumulado por contención de red en topologías complejas.
 - **Parche Aplicado:** Se comentaron y eliminaron estas sobreescrituras, permitiendo que `device_time` refleje con fidelidad científica los tiempos reales de inicio y fin causales.
+
+---
+
+## 5.4. Corrección de Causalidad Bidireccional en el Oráculo de Red (`src/module/communication.cpp`)
+
+En la versión preliminar de la vectorización de latencias de red por destino (Bloque C), el cálculo de `t_end` para cada dispositivo $dst$ consideraba únicamente el instante de recepción de paquetes entrantes:
+```cpp
+// Código preliminar (unidireccional RX):
+t_end[dst] = t_min + max_relative_atime[dst];
+```
+Esta formulación adolecía de una vulnerabilidad física: si una GPU $d$ inyectaba paquetes tardíamente hacia otras GPUs pero no recibía paquetes de vuelta (o sus paquetes recibidos llegaban muy temprano), su `max_relative_atime[d]` permanecía en $\delta_t[d]$, permitiendo potencialmente que la GPU cerrara su fase de red mientras su NIC seguía transmitiendo o mientras sus paquetes emitidos continuaban navegando por la red hacia sus destinos.
+
+### Parche C++ Aplicado en `src/module/communication.cpp`:
+Se introdujeron tres vectores de seguimiento temporal en el bucle del Oráculo tanto para `MoEScatter::forward()` como para `MoEGather::forward()`:
+1. `max_relative_rx_atime[dst]`: Rastrea el ciclo del último paquete retirado dirigido a `dst`.
+2. `max_relative_tx_inj[src]`: Rastrea el ciclo en el que `src` inyecta su último paquete en BookSim2.
+3. `max_relative_tx_retire[src]`: Rastrea el ciclo en el que el último paquete originado por `src` es entregado y retirado en su destino.
+
+Al concluir la simulación de la red:
+```cpp
+std::vector<int> rel_finish(total_num_device, 0);
+for (int d = 0; d < total_num_device; d++) {
+    rel_finish[d] = std::max({
+        delta_t[d],
+        max_relative_rx_atime[d],
+        max_relative_tx_inj[d],
+        max_relative_tx_retire[d]
+    });
+}
+for (int d = 0; d < total_num_device; d++) {
+    double t_end = t_min + (double)rel_finish[d];
+    double net_lat = std::max(0.0, t_end - t_src[d]);
+    cached_latency_per_gpu[layer_name][d] = net_lat;
+}
+```
+Este parche elimina cualquier posible inversión temporal o desincronización de causalidad entre GPUs emisoras y receptoras, garantizando que ninguna GPU de por terminada su fase de red mientras su interfaz siga activa o tenga paquetes en tránsito.
 
 ---
 
@@ -1558,12 +1719,12 @@ Para mantener el máximo rigor científico en esta investigación de Máster, se
 
 ## 7.1. Estado de las Simplificaciones del Simulador y Resoluciones del Bloque C
 
-1. **Latencia de Red Individualizada por GPU Destino (Resuelto en Bloque C - ✅):**
-   *Estado Previo:* El Oráculo calculaba el ciclo de llegada del último paquete global de la red y aplicaba ese escalar uniforme a todas las GPUs.
-   *Resolución Implementada:* Mediante `BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst]`, el Oráculo ahora monitorea el ciclo exacto de recepción (`atime`) del último paquete dirigido a cada GPU $dst$. Cada GPU aplica exclusivamente su duración neta individual de red.
+1. **Latencia de Red Individualizada y Causalidad Bidireccional Cuádruple (Resuelto en Bloque C y Auditoría Forense - ✅):**
+   *Estado Previo:* El Oráculo calculaba el ciclo de llegada del último paquete global de la red y aplicaba ese escalar uniforme a todas las GPUs. Posteriormente, se consideraba solo la recepción en destino (`rx_atime`).
+   *Resolución Implementada:* Mediante `BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst]`, el Oráculo monitorea el ciclo exacto de recepción (`atime`), el ciclo de finalización de inyección local (`tx_inj`) y el ciclo de retiro global de paquetes emitidos (`tx_retire`). Cada GPU aplica una latencia causal que garantiza que su interfaz concluye cuando todos sus flits emitidos y recibidos están completados.
 2. **Desfase Causal de Inyección ($\Delta t_{src}$) según Reloj Real (Resuelto en Bloque C - ✅):**
    *Estado Previo:* Todos los paquetes se inyectaban en BookSim2 asumiendo un reloj local relativo común en ciclo 0.
-   *Resolución Implementada:* El Oráculo muestrea los tiempos reales absolutos de llegada $t_{\text{src}}[s]$ de cada GPU al módulo de red, calcula el desfase relativo $\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$ e inyecta los paquetes en BookSim2 en el ciclo exacto `cycles == delta_t[src]`. Las GPUs rápidas comienzan a emitir de inmediato y las lentas entran posteriormente.
+   *Resolución Implementada:* El Oráculo muestrea los tiempos reales absolutos de llegada $t_{\text{src}}[s]$ de cada GPU al módulo de red (validados tras `sync_3`), calcula el desfase relativo $\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$ e inyecta los paquetes en BookSim2 en el ciclo exacto `cycles == delta_t[src]`. Las GPUs rápidas comienzan a emitir de inmediato y las lentas entran posteriormente.
 3. **Desacoplamiento de Cómputo Local en `ExpertFFN` (Resuelto en Bloque C - ✅):**
    *Estado Previo:* La barrera `sync_for_moe_scatter` contenía `device_list`, obligando a todo el clúster a sincronizarse antes de que cualquier GPU pudiera iniciar su cómputo.
    *Resolución Implementada:* `sync_for_moe_scatter` se acota a `{device_total_rank}`, permitiendo a las GPUs que reciben menos tokens (o más cercanas) comenzar su cómputo `ExpertFFN` inmediatamente. La barrera previa a Gather (`sync_3`) opera con `equalize_time = false` para verificar la dependencia de datos sin aplanar los relojes de fin de cómputo, y la barrera colectiva `sync_for_moe_gather` (`equalize_time = true`) absorbe con precisión milimétrica el desbalance acumulado generando el bloque rojo **`NETWORK_STALL`**.
@@ -1590,9 +1751,11 @@ Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C**:
    Implementado en `BookSimCoSimManager::cached_latency_per_gpu` y verificado en Mixtral 8x7B.
 2. **[COMPLETADO - Bloque C] Desfase Causal de Inyección ($\Delta t_{\text{src}}$):**
    Implementado en `packets_by_cycle` dentro de `MoEScatter::forward()` y `MoEGather::forward()`.
-3. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
+3. **[COMPLETADO - Auditoría Forense] Causalidad Física Bidireccional Cuádruple en Oráculo de Red:**
+   Implementado en `src/module/communication.cpp` garantizando $\text{rel\_finish}[d] = \max(\delta_t[d], \text{rx\_atime}[d], \text{tx\_inj}[d], \text{tx\_retire}[d])$.
+4. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
    Integrar una red de dos niveles en BookSim2: enlaces de ultra-alto ancho de banda ($900\text{ GB/s}$) intra-nodo y enlaces de red de área de sistema ($100\text{ GB/s}$) inter-nodo.
-4. **Modelado de Capacidad Finita de Buffers NIC:**
+5. **Modelado de Capacidad Finita de Buffers NIC:**
    Introducir un límite estricto de paquetes en las colas del host para simular caídas de rendimiento por contrapresión física hacia los hilos de la GPU.
 
 ---

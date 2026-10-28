@@ -671,10 +671,13 @@ src/module/CMakeFiles/module.dir/communication.cpp.o: /home/igilolt/Escritorio/T
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/power.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/dram/ramulator2/src/base/type.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/base.h \
+  /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/cluster.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/device.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/executor.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/hardware_config.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/layer_impl.h \
+  /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/node.h \
+  /home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/stat.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/model/model_config.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/base.h \
   /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.h \
@@ -6395,10 +6398,6 @@ src/module/CMakeFiles/module.dir/timeboard.cpp.o: /home/igilolt/Escritorio/TFM/L
 
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module_graph.cpp:
 
-/home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/stat.h:
-
-/home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/cluster.h:
-
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/module.cpp:
 
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/linear.cpp:
@@ -6436,6 +6435,10 @@ src/module/CMakeFiles/module.dir/timeboard.cpp.o: /home/igilolt/Escritorio/TFM/L
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/scheduler/scheduler.h:
 
 /home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.h:
+
+/home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/stat.h:
+
+/home/igilolt/Escritorio/TFM/LLMSimulator/src/hardware/cluster.h:
 
 /home/igilolt/Escritorio/TFM/booksim2/src/booksim_api.hpp:
 

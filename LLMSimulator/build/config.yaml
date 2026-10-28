@@ -6,7 +6,7 @@ system:
   nvlink_gen: 5
   infiniband_gen: 800
   num_node: 1
-  num_device: 8
+  num_device: 4
   processor_type: GPU
   distribution:
     expert_tensor_degree: 1
@@ -33,7 +33,7 @@ serving:
 simulation:
   data: synthesis
   input_len: 1024
-  output_len: 2
+  output_len: 10
   precision_byte: 1
   skewness: 0.0
   iter: 1
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_bs32_20261027_234048/
-  gantt_directory: build/results/mixtral_8dev_torus_bs32_20261027_234048/gantt/
+  output_directory: build/results/mixtral_2x2dev_mesh_bs32_20261028_005051/
+  gantt_directory: build/results/mixtral_2x2dev_mesh_bs32_20261028_005051/gantt/

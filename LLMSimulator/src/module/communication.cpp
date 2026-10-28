@@ -234,12 +234,25 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
           }
       }
 
+      if (BookSimCoSimManager::scatter_op_counter <= 5) {
+          std::cout << "[COSIM_ORACLE] Scatter #" << BookSimCoSimManager::scatter_op_counter
+                    << " (" << layer_name << ") t_min=" << t_min << " ns, t_src=[";
+          for (int s = 0; s < total_num_device; s++) {
+              std::cout << "G" << s << ":" << t_src[s] << (s == total_num_device - 1 ? "" : ", ");
+          }
+          std::cout << "]" << std::endl;
+      }
+
       int cycles = 0;
       int total_injected = 0;
       int total_received = 0;
-      std::vector<int> max_relative_atime(total_num_device, 0);
+      std::vector<int> max_relative_rx_atime(total_num_device, 0);
+      std::vector<int> max_relative_tx_inj(total_num_device, 0);
+      std::vector<int> max_relative_tx_retire(total_num_device, 0);
       for (int d = 0; d < total_num_device; d++) {
-          max_relative_atime[d] = delta_t[d];
+          max_relative_rx_atime[d] = delta_t[d];
+          max_relative_tx_inj[d] = delta_t[d];
+          max_relative_tx_retire[d] = delta_t[d];
       }
 
       BookSimPacketInfo pkt_info;
@@ -249,6 +262,9 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
               for (const auto& pkt : it->second) {
                   BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
                   total_injected++;
+                  if (cycles > max_relative_tx_inj[pkt.src]) {
+                      max_relative_tx_inj[pkt.src] = cycles;
+                  }
               }
           }
 
@@ -258,8 +274,11 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
           while (BookSim_CheckReceived(pkt_info)) { 
               total_received++;
               int rel_atime = cycles;
-              if (rel_atime > max_relative_atime[pkt_info.dst]) {
-                  max_relative_atime[pkt_info.dst] = rel_atime;
+              if (rel_atime > max_relative_rx_atime[pkt_info.dst]) {
+                  max_relative_rx_atime[pkt_info.dst] = rel_atime;
+              }
+              if (rel_atime > max_relative_tx_retire[pkt_info.src]) {
+                  max_relative_tx_retire[pkt_info.src] = rel_atime;
               }
           }
 
@@ -275,12 +294,17 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       double op_end_ns = t_min + op_latency_ns;
       BookSim_FinishOperation(op_end_ns);
 
-      // Calcular la latencia individual por GPU destino
-      for (int dst = 0; dst < total_num_device; dst++) {
-          double t_end_dst = t_min + (double)max_relative_atime[dst];
-          double lat = t_end_dst - t_src[dst];
+      // Calcular la latencia individual por GPU: max(recepcion, inyeccion saliente, entrega de paquetes enviados)
+      for (int d = 0; d < total_num_device; d++) {
+          int rel_finish = delta_t[d];
+          if (max_relative_rx_atime[d] > rel_finish) rel_finish = max_relative_rx_atime[d];
+          if (max_relative_tx_inj[d] > rel_finish) rel_finish = max_relative_tx_inj[d];
+          if (max_relative_tx_retire[d] > rel_finish) rel_finish = max_relative_tx_retire[d];
+
+          double t_end_d = t_min + (double)rel_finish;
+          double lat = t_end_d - t_src[d];
           if (lat < 0.0) lat = 0.0;
-          BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst] = lat;
+          BookSimCoSimManager::cached_latency_per_gpu[layer_name][d] = lat;
       }
   }
 
@@ -419,12 +443,25 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
           }
       }
 
+      if (BookSimCoSimManager::gather_op_counter <= 5) {
+          std::cout << "[COSIM_ORACLE] Gather #" << BookSimCoSimManager::gather_op_counter
+                    << " (" << layer_name << ") t_min=" << t_min << " ns, t_src=[";
+          for (int s = 0; s < total_num_device; s++) {
+              std::cout << "G" << s << ":" << t_src[s] << (s == total_num_device - 1 ? "" : ", ");
+          }
+          std::cout << "]" << std::endl;
+      }
+
       int cycles = 0;
       int total_injected = 0;
       int total_received = 0;
-      std::vector<int> max_relative_atime(total_num_device, 0);
+      std::vector<int> max_relative_rx_atime(total_num_device, 0);
+      std::vector<int> max_relative_tx_inj(total_num_device, 0);
+      std::vector<int> max_relative_tx_retire(total_num_device, 0);
       for (int d = 0; d < total_num_device; d++) {
-          max_relative_atime[d] = delta_t[d];
+          max_relative_rx_atime[d] = delta_t[d];
+          max_relative_tx_inj[d] = delta_t[d];
+          max_relative_tx_retire[d] = delta_t[d];
       }
 
       BookSimPacketInfo pkt_info;
@@ -434,6 +471,9 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
               for (const auto& pkt : it->second) {
                   BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
                   total_injected++;
+                  if (cycles > max_relative_tx_inj[pkt.src]) {
+                      max_relative_tx_inj[pkt.src] = cycles;
+                  }
               }
           }
 
@@ -443,8 +483,11 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
           while (BookSim_CheckReceived(pkt_info)) {
               total_received++;
               int rel_atime = cycles;
-              if (rel_atime > max_relative_atime[pkt_info.dst]) {
-                  max_relative_atime[pkt_info.dst] = rel_atime;
+              if (rel_atime > max_relative_rx_atime[pkt_info.dst]) {
+                  max_relative_rx_atime[pkt_info.dst] = rel_atime;
+              }
+              if (rel_atime > max_relative_tx_retire[pkt_info.src]) {
+                  max_relative_tx_retire[pkt_info.src] = rel_atime;
               }
           }
 
@@ -460,12 +503,17 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       double op_end_ns = t_min + op_latency_ns;
       BookSim_FinishOperation(op_end_ns);
 
-      // Calcular la latencia individual por GPU destino
-      for (int dst = 0; dst < total_num_device; dst++) {
-          double t_end_dst = t_min + (double)max_relative_atime[dst];
-          double lat = t_end_dst - t_src[dst];
+      // Calcular la latencia individual por GPU: max(recepcion, inyeccion saliente, entrega de paquetes enviados)
+      for (int d = 0; d < total_num_device; d++) {
+          int rel_finish = delta_t[d];
+          if (max_relative_rx_atime[d] > rel_finish) rel_finish = max_relative_rx_atime[d];
+          if (max_relative_tx_inj[d] > rel_finish) rel_finish = max_relative_tx_inj[d];
+          if (max_relative_tx_retire[d] > rel_finish) rel_finish = max_relative_tx_retire[d];
+
+          double t_end_d = t_min + (double)rel_finish;
+          double lat = t_end_d - t_src[d];
           if (lat < 0.0) lat = 0.0;
-          BookSimCoSimManager::cached_latency_per_gpu[layer_name][dst] = lat;
+          BookSimCoSimManager::cached_latency_per_gpu[layer_name][d] = lat;
       }
   }
 
