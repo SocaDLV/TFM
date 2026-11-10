@@ -124,6 +124,7 @@ python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch
 | :--- | :--- | :--- | :--- |
 | `--model` | `str` | `mixtral` | Target LLM architecture (`mixtral`, `llama`). |
 | `--batch_size` | `int` | `32` | Maximum concurrent batch size for continuous batching. |
+| `--skewness` / `--skew` | `float` | `0.0` | MoE token routing distribution factor (Zipfian exponent $s$). $0.0$ generates uniform routing; $> 0$ concentrates tokens on low-indexed experts, inducing severe network in-cast congestion and barrier stragglers. |
 | `--tensor_degree` / `--tp` | `int` | `1` | Tensor Parallelism degree for non-expert layers (Attention/linear projections). When $> 1$, Ring-AllReduce is simulated cycle-accurately in BookSim2. |
 | `--input_len` | `int` | `1024` | Prompt length (prefill tokens). |
 | `--output_len` | `int` | `10` | Tokens to generate per iteration (drives sustained MoE traffic). |
@@ -164,7 +165,7 @@ python3 analyze_traces.py --recent 3 --semilog
 * **`curva_saturacion_red.png`:** The fundamental Network-on-Chip (NoC) saturation curve (Mean Network Latency vs. Real Injected Offered Load $\lambda$ in flits/cycle/node). Features:
   * **Real Injected Load ($\lambda$, X-Axis):** Measured in flits/cycle/node as $\lambda = \frac{\text{Total Flits}}{N_{\text{GPUs}} \times \Delta\text{Cycles}_{\text{collective}}}$.
   * **Network Latency (Y-Axis):** Cycle-accurate `Avg_Flit_Latency` in BookSim2 cycles, with auto-detection of semilogarithmic scaling for wide latency dispersion.
-  * **Dual-Level Visualization:** Displays per-layer collective dispersion clouds (light markers) alongside prominent macro-operating points labeled with topology, Virtual Channels (VCs), batch size, and Tensor Parallelism degree (e.g. `8dev Torus (VCs=4, BS=32, TP=2)`).
+  * **Dual-Level Visualization:** Displays per-layer collective dispersion clouds (light markers) alongside prominent macro-operating points labeled with topology, Virtual Channels (VCs), batch size, Tensor Parallelism degree, and skewness factor (e.g. `8dev Torus (VCs=4, BS=32, Skew=0.5)`).
   * **Robust Fallback:** Safely omits the saturation curve if historical result folders lack `packet_tracking_debug.csv` without interrupting latency breakdowns.
 
 ---
@@ -235,16 +236,21 @@ python3 plot_cronograma.py build/results/<simulation_folder>/ --window 100000
   * **Line 3 (Bottleneck Diagnosis):** Quantifies micro-architectural intensity from `.trc` accumulators (`Comp_ns` vs. `Mem_ns`): `Dur: 22.1us (Mem-Bound 99.8%)`.
 * **Physical Internal Sub-divisions:**
   * Draws semi-transparent dashed white vertical lines (`alpha=0.6, linestyle='--'`) at the exact completion timestamps (`END_NS`) of each micro-operation, highlighting the relative duration of steps (e.g. `AttnGen` or `down_proj`) without breaking visual continuity.
-* **Enriched Network Blocks with Layer & Flit Metrics:**
-  * Blue network blocks (`Scatter` and `Gather`) display `Layer {L} | Scatter Nº{k}` and automatically correlate with `packet_tracking_debug.csv` (isolating the final iteration), detailing:
-    * PID range and total packets transferred (e.g. `PIDs 0-895 (896 pkts)`).
-    * Cumulative operation network metrics: `Lat.Media: 1631.2c | Prod: 2.05 flits/c`.
+* **Individualized Per-GPU Network Metrics (Local MoE Imbalance):**
+  * Blue network blocks (`Scatter` and `Gather`) and purple blocks (`AllReduce`) automatically correlate with `packet_tracking_debug.csv` (isolating the final iteration) and personalize metrics for each specific GPU row $d \in [0, N-1]$:
+    * **`Scatter` (Incoming Tokens):** Evaluates incoming packets where $\text{Dest} == d$ ($N_{\text{rx}}[d]$), calculating the mean local packet latency and RX throughput. Highlighting hotspot expert accumulation.
+    * **`Gather` (Outgoing Activations):** Evaluates outgoing packets where $\text{Source} == d$ ($N_{\text{tx}}[d]$), revealing the heavier activation emission from congested experts.
+    * **`AllReduce` (Tensor Parallelism):** Isolates local packets received and injected by device $d$ within its ring sub-group.
+  * Dynamically renders individualized metrics:
+    `L{L} | {Op} Nº{k} ({N_local} pkts)`
+    `Lat.Media: {lat_local}c | Prod: {prod_local} f/c`
+    *(e.g. `L2 | Gather Nº3 (336 pkts) | Lat.Media: 2315.4c | Prod: 0.69 f/c` on hotspot GPU 0 versus `L2 | Gather Nº3 (48 pkts) | Lat.Media: 237.1c | Prod: 0.11 f/c` on GPU 7 under Zipfian skewness $s=1.0$).* If a GPU has no traffic in that collective, it clearly designates `(0 pkts)`.
 * **Adaptive Block Duration Formatting & Anti-Overflow Protection:**
   * Automatically calculates the visible temporal width $\Delta t = \text{end\_ns} - \text{start\_ns}$ for each block:
     * **$\Delta t < 800\text{ ns}$:** Text is omitted entirely to prevent visual clutter in narrow residual transitions or micro-stalls.
-    * **$800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$ (Ultra-Compact 1-Line):** Displays a concise centered label (e.g., `AR Nº{k} (1.2us)` or `AR`, `Stall`, `L{L} | {Op}`) at `fontsize=6.5`.
-    * **$2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$ (Compact 2-Line):** Renders up to two compact lines (`fontsize=6.8/6.2`) balancing operation metadata without crowding.
-    * **$\Delta t \ge 6{,}000\text{ ns}$ (Full 3-Line):** Displays complete header, ordered sequence, and micro-architectural diagnostics.
+    * **$800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$ (Ultra-Compact 1-Line):** Displays a concise centered label (e.g., `{Op} Nº{k} ({N_local}p)` or `AR Nº{k} (1.2us)`, `Stall`, `L{L} | {Op}`) at `fontsize=6.5`.
+    * **$2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$ (Compact 2-Line):** Renders up to two compact lines (`fontsize=6.8/6.2`) balancing operation metadata and per-GPU network metrics without crowding.
+    * **$\Delta t \ge 6{,}000\text{ ns}$ (Full 3-Line):** Displays complete header, ordered sequence, PIDs range, and micro-architectural diagnostics.
   * **Strict Bounding-Box Clipping (`set_clip_path(rect)`):** Every text label is hard-clipped to its parent rectangle patch (`clip_on=True`), mathematically guaranteeing zero text spill into adjacent blocks.
   * **Top-Margin Legend Padding:** Dynamically expands the upper axis limit to keep the global legend completely above GPU 7 without obscuring execution blocks.
 * **Semantic Color Coding:**

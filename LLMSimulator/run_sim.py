@@ -23,6 +23,7 @@ def parse_args():
     parser.add_argument("--iter", type=int, default=5, help="Number of statistical iterations to run")
     parser.add_argument("--batch_size", type=int, default=32, help="Max batch size for continuous batching")
     parser.add_argument("--tensor_degree", "--tp", type=int, default=1, help="Grado de paralelismo de tensores no-experto (Atención TP, por defecto: 1)")
+    parser.add_argument("--skewness", "--skew", type=float, default=0.0, help="Factor de desbalanceo de enrutamiento MoE (0.0=uniforme, >0=distribución Zipfiana)")
     
     # Opciones de Simulación
     parser.add_argument("--parallel", action="store_true", help="Enable parallel_execution (xPU + PIM overlapping)")
@@ -91,7 +92,7 @@ simulation:
   input_len: {args.input_len}
   output_len: {args.output_len}
   precision_byte: 1
-  skewness: 0.0
+  skewness: {args.skewness}
   iter: {args.iter}
   injection_rate: 0
   exit_out_of_memory: off
@@ -160,9 +161,10 @@ def main():
 
     dims_str = "x".join(map(str, args.net_dims))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Naming incorporando grado de Tensor Parallelism
+    # Naming incorporando grado de Tensor Parallelism y Skewness
     tp_suffix = f"_tp{args.tensor_degree}" if args.tensor_degree > 1 else ""
-    folder_name = f"{args.model}_{dims_str}dev_{args.topology}{tp_suffix}_bs{args.batch_size}_{timestamp}"
+    skew_suffix = f"_skew{args.skewness}" if args.skewness > 0.0 else ""
+    folder_name = f"{args.model}_{dims_str}dev_{args.topology}{tp_suffix}_bs{args.batch_size}{skew_suffix}_{timestamp}"
     output_dir = os.path.join("build", "results", folder_name)
     os.makedirs(os.path.join(output_dir, "gantt"), exist_ok=True)
     
@@ -178,6 +180,8 @@ def main():
     print(f"\n🚀 Iniciando Co-Simulación...")
     print(f"🖥️ Red: {dims_str} {args.topology.upper()} | VCs: {args.vcs} | Enrutamiento: {args.routing}")
     print(f"🧩 Paralelismo: Tensor Parallelism (TP) = {args.tensor_degree} | Expert TP = 1")
+    skew_desc = f"{args.skewness} (Zipfian Distribution)" if args.skewness > 0.0 else "0.0 (Uniform Distribution)"
+    print(f"⚖️ Desbalanceo MoE: Skewness = {skew_desc}")
     print(f"🧠 Concurrencia: Batch Size {args.batch_size} (Max. secuencias simultáneas)")
     print(f"🔄 Estadística: {args.iter} Iteraciones (Trazas pre-cargadas de 10 tokens)")
     print(f"📁 Resultados irán a: {output_dir}")

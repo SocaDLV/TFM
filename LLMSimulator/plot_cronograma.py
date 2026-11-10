@@ -16,7 +16,8 @@ def parse_args():
 def load_packet_tracking(folder):
     """
     Carga packet_tracking_debug.csv de la misma carpeta, aísla la última iteración
-    y extrae estadísticas por operación (Op_Type, Op_Idx).
+    y extrae estadísticas por operación (Op_Type, Op_Idx) tanto globales como
+    individualizadas por GPU (device_id) para reflejar fielmente el desbalanceo MoE.
     """
     csv_path = os.path.join(folder, "packet_tracking_debug.csv")
     if not os.path.exists(csv_path):
@@ -34,6 +35,15 @@ def load_packet_tracking(folder):
                 last_drop_idx = drops[drops].index[-1]
                 df_p = df_p.loc[last_drop_idx:].copy()
         
+        # Determinar conjunto de GPUs involucradas
+        all_nodes = set()
+        if 'Source' in df_p.columns:
+            all_nodes.update(df_p['Source'].dropna().unique())
+        if 'Dest' in df_p.columns:
+            all_nodes.update(df_p['Dest'].dropna().unique())
+        max_node = int(max(all_nodes)) if all_nodes else 7
+        num_gpus = max(8, max_node + 1)
+
         ops = []
         for (op_type, op_idx), grp in df_p.groupby(['Op_Type', 'Op_Idx'], sort=False):
             start_ns = float(grp['Op_Start_NS'].iloc[0])
@@ -43,6 +53,44 @@ def load_packet_tracking(folder):
             total_pkts = len(grp)
             final_avg_lat = float(grp['Avg_Flit_Latency'].iloc[-1])
             final_prod = float(grp['Throughput'].iloc[-1])
+
+            op_type_lower = str(op_type).lower()
+            gpu_data = {}
+            for d in range(num_gpus):
+                if 'scatter' in op_type_lower:
+                    # En Scatter, la GPU d es el destino (experto que recibe los tokens)
+                    sub = grp[grp['Dest'] == d]
+                elif 'gather' in op_type_lower:
+                    # En Gather, la GPU d es el origen (experto que devuelve las activaciones)
+                    sub = grp[grp['Source'] == d]
+                elif 'allreduce' in op_type_lower or 'all_reduce' in op_type_lower:
+                    # En AllReduce, la GPU d recibe y envía paquetes en su subgrupo de anillo
+                    sub = grp[grp['Dest'] == d]
+                    if sub.empty:
+                        sub = grp[grp['Source'] == d]
+                else:
+                    sub = grp[(grp['Dest'] == d) | (grp['Source'] == d)]
+
+                n_local = len(sub)
+                if n_local > 0:
+                    lat_local = float(sub['Total_Latency'].mean())
+                    flits_local = int(sub['Num_Flits'].sum())
+                    min_pid_local = int(sub['PID'].min())
+                    max_pid_local = int(sub['PID'].max())
+                else:
+                    lat_local = 0.0
+                    flits_local = 0
+                    min_pid_local = 0
+                    max_pid_local = 0
+
+                gpu_data[d] = {
+                    'pkts': n_local,
+                    'lat': lat_local,
+                    'flits': flits_local,
+                    'min_pid': min_pid_local,
+                    'max_pid': max_pid_local
+                }
+
             ops.append({
                 'type': str(op_type),
                 'idx': int(op_idx),
@@ -52,7 +100,8 @@ def load_packet_tracking(folder):
                 'max_pid': max_pid,
                 'total_pkts': total_pkts,
                 'avg_flit_lat': final_avg_lat,
-                'throughput': final_prod
+                'throughput': final_prod,
+                'gpu_data': gpu_data
             })
         return ops
     except Exception as e:
@@ -295,19 +344,34 @@ def generate_window_plot(all_blocks, start_ns, end_ns, window_idx, output_dir, n
             if label in ['AllReduce', 'AllRed']:
                 net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
                 if net_op:
-                    txt = f'AR Nº{net_op["idx"]} ({dur_str})' if (delta_t >= 1400 and rel_w >= 0.05) else f'AR Nº{net_op["idx"]}'
+                    local = net_op.get('gpu_data', {}).get(gpu, {'pkts': 0})
+                    n_loc = local['pkts']
+                    p_tag = f" ({n_loc}p)" if n_loc > 0 else " (0 pkts)"
+                    txt = f'AR Nº{net_op["idx"]}{p_tag}' if delta_t >= 1400 else f'AR Nº{net_op["idx"]}'
                 else:
                     txt = f'AR ({dur_str})' if delta_t >= 1400 else 'AR'
                 draw_clipped_text(ax, rect, x_center, gpu, txt, 
                                   ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
             elif label == 'Scatter':
                 net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
-                txt = f'Scatter Nº{net_op["idx"]}' if (net_op and delta_t >= 1400) else 'Scatter'
+                if net_op:
+                    local = net_op.get('gpu_data', {}).get(gpu, {'pkts': 0})
+                    n_loc = local['pkts']
+                    p_tag = f" ({n_loc}p)" if n_loc > 0 else " (0 pkts)"
+                    txt = f'Scatter Nº{net_op["idx"]}{p_tag}' if delta_t >= 1400 else f'Scatter Nº{net_op["idx"]}'
+                else:
+                    txt = f'Scatter ({dur_str})' if delta_t >= 1400 else 'Scatter'
                 draw_clipped_text(ax, rect, x_center, gpu, txt, 
                                   ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
             elif label == 'Gather':
                 net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
-                txt = f'Gather Nº{net_op["idx"]}' if (net_op and delta_t >= 1400) else 'Gather'
+                if net_op:
+                    local = net_op.get('gpu_data', {}).get(gpu, {'pkts': 0})
+                    n_loc = local['pkts']
+                    p_tag = f" ({n_loc}p)" if n_loc > 0 else " (0 pkts)"
+                    txt = f'Gather Nº{net_op["idx"]}{p_tag}' if delta_t >= 1400 else f'Gather Nº{net_op["idx"]}'
+                else:
+                    txt = f'Gather ({dur_str})' if delta_t >= 1400 else 'Gather'
                 draw_clipped_text(ax, rect, x_center, gpu, txt, 
                                   ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
             elif label == 'Stall':
@@ -330,10 +394,18 @@ def generate_window_plot(all_blocks, start_ns, end_ns, window_idx, output_dir, n
             elif label in ['Scatter', 'Gather', 'AllReduce', 'AllRed']:
                 net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
                 if net_op:
-                    line1 = f'Layer {layer} | {net_op["type"]} Nº{net_op["idx"]} ({net_op["total_pkts"]} pkts)'
-                    line2 = f'Lat.Media: {net_op["avg_flit_lat"]:.1f}c | Prod: {net_op["throughput"]:.2f} f/c'
+                    local = net_op.get('gpu_data', {}).get(gpu, {'pkts': 0, 'lat': 0.0, 'flits': 0})
+                    n_local = local['pkts']
+                    if n_local > 0:
+                        lat_local = local['lat']
+                        prod_local = local['flits'] / max(1.0, b['DURATION'])
+                        line1 = f'L{layer} | {net_op["type"]} Nº{net_op["idx"]} ({n_local} pkts)'
+                        line2 = f'Lat.Media: {lat_local:.1f}c | Prod: {prod_local:.2f} f/c'
+                    else:
+                        line1 = f'L{layer} | {net_op["type"]} Nº{net_op["idx"]} (0 pkts)'
+                        line2 = f'Sin tráfico local | Dur: {dur_str}'
                 else:
-                    line1 = f'Layer {layer} | {label}'
+                    line1 = f'L{layer} | {label}'
                     line2 = f'Dur: {dur_str}'
                 draw_clipped_text(ax, rect, x_center, gpu + 0.13, line1, 
                                   ha='center', va='center', color='white', fontweight='bold', fontsize=6.8)
@@ -360,9 +432,17 @@ def generate_window_plot(all_blocks, start_ns, end_ns, window_idx, output_dir, n
             elif label in ['Scatter', 'Gather', 'AllReduce', 'AllRed']:
                 net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
                 if net_op:
+                    local = net_op.get('gpu_data', {}).get(gpu, {'pkts': 0, 'lat': 0.0, 'flits': 0, 'min_pid': 0, 'max_pid': 0})
+                    n_local = local['pkts']
                     line1 = f'Layer {layer} | {net_op["type"]} Nº{net_op["idx"]}'
-                    line2 = f'PIDs {net_op["min_pid"]}-{net_op["max_pid"]} ({net_op["total_pkts"]} pkts)'
-                    line3 = f'Lat.Media: {net_op["avg_flit_lat"]:.1f}c | Prod: {net_op["throughput"]:.2f} flits/c'
+                    if n_local > 0:
+                        lat_local = local['lat']
+                        prod_local = local['flits'] / max(1.0, b['DURATION'])
+                        line2 = f'PIDs {local["min_pid"]}-{local["max_pid"]} ({n_local} pkts)'
+                        line3 = f'Lat.Media: {lat_local:.1f}c | Prod: {prod_local:.2f} flits/c'
+                    else:
+                        line2 = '(0 pkts locales)'
+                        line3 = f'Sin tráfico local | Dur: {dur_str}'
                     draw_clipped_text(ax, rect, x_center, gpu + 0.22, line1, 
                                       ha='center', va='center', color='white', fontweight='bold', fontsize=8.0)
                     draw_clipped_text(ax, rect, x_center, gpu + 0.01, line2, 

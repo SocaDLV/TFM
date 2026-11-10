@@ -41,6 +41,7 @@
    - 4.5. Auditoría Crítica de `cached_latency[layer_name]`: Escalar Global vs. Vector por GPU Destino
    - 4.6. Auditoría Forense de Causalidad Física en MoEGather/MoEScatter y Demostración de Simetría de Tráfico
    - 4.7. Integración de AllReduce en el Oráculo BookSim2: Modelado Ring-AllReduce con Causalidad Cuádruple (Vía 2)
+   - 4.8. Estudio de Desbalanceo Extremo de Carga en Expertos MoE (Skewness, Puntos Calientes de Red e In-Cast Hotspots - Vía 3)
 5. [Capítulo 5: Parches Arquitectónicos Aplicados al Simulador Base](#capítulo-5-parches-arquitectónicos-aplicados-al-simulador-base)
    - 5.1. Correcciones Críticas en `decoder.cpp`: Conexiones Residuales y Tipado de Capas
    - 5.2. Correcciones en `layer.cpp`: Cadena de Dependencias en Bloques SwiGLU
@@ -1427,6 +1428,88 @@ El dispositivo $d_0$ del subgrupo asume la orquestación en BookSim2:
 
 ---
 
+## 4.8. Estudio de Desbalanceo Extremo de Carga en Expertos MoE (Skewness, Puntos Calientes de Red e In-Cast Hotspots - Vía 3)
+
+### 4.8.1. Contexto, Motivación y Fenómeno de Popularidad de Expertos
+En arquitecturas Mixture-of-Experts (MoE) del estado del arte como Mixtral 8x7B, el mecanismo de enrutamiento asigna dinámicamente cada token a una pequeña fracción de expertos ($k=2$ de $E=8$). En condiciones ideales de evaluación sintética con factor de dispersión nulo (`skewness: 0.0`), el planificador distribuye los tokens de manera cuasi-uniforme entre los expertos ($\sim 12.5\%$ de probabilidad por dispositivo). 
+
+Sin embargo, en escenarios reales de inferencia sobre dominios especializados (código, matemáticas o lenguaje conversacional), los routers de las redes neuronales concentran la gran mayoría del tráfico sobre un conjunto reducido de expertos altamente especializados ("expertos populares"). Este desbalanceo de carga sigue matemáticamente una **distribución de ley de potencia o distribución Zipfiana**:
+$$w_i = \frac{1}{(i + 1)^s} \quad \text{con } i \in [0, E-1]$$
+donde $s \ge 0$ es el exponente de Zipf (*skewness*).
+
+La **Vía 3** implementa la parametrización completa del desbalanceo de expertos en el co-simulador, permitiendo evaluar cómo la heterogeneidad de carga impacta simultáneamente en el subsistema de cómputo local y en la red de interconexión NoC (BookSim2).
+
+---
+
+### 4.8.2. Parametrización en CLI (`run_sim.py`) e Integración en el Pipeline
+1. **Argumento CLI:** Se añadió a `LLMSimulator/run_sim.py` el parámetro `--skewness` (o `--skew`, tipo `float`, por defecto `0.0`).
+2. **Inyección Dinámica en `config.yaml`:**
+   El orquestador `run_sim.py` detecta la configuración base y añade o actualiza dinámicamente `skewness: {args.skewness}` en la sección de generación del archivo `config.yaml`.
+3. **Nomenclatura Canónica de Resultados:**
+   Cuando $s > 0$, la carpeta de salida generada en `build/results/` añade automáticamente el sufijo descriptivo `_skew{s}` (ej. `mixtral_8dev_torus_bs32_skew0.5_20261110_...` y `mixtral_8dev_torus_bs32_skew1.0_20261110_...`).
+4. **Propagación a la Suite de Análisis (`analyze_traces.py`):**
+   `analyze_traces.py` lee el parámetro `skewness` desde `config.yaml` (o lo extrae del nombre de la carpeta mediante expresiones regulares), incorporando automáticamente la etiqueta `, Skew={s}` en los centroides macroscópicos de la curva de saturación de red (`curva_saturacion_red.png`) y en las tablas comparativas de consola.
+
+---
+
+### 4.8.3. Batería Experimental de Validación (Mixtral 8x7B en Toro 1D de 8 GPUs)
+Para aislar rigurosamente el impacto del desbalanceo MoE, se ejecutó una batería experimental idéntica de 3 simulaciones bajo la misma topología de interconexión y carga de lote:
+- **Modelo:** Mixtral 8x7B (8 GPUs, 8 Expertos, Top-2, $d_{\text{model}} = 4096$, $d_{\text{ffn}} = 14336$).
+- **Topología NoC:** Toro 1D (8 nodos, 4 Canales Virtuales, dimension-order routing `dim_order`).
+- **Carga de Trabajo:** Batch Size $BS = 32$, 2 iteraciones, longitud de salida 2 tokens en modo decodificación (`decode_mode = on`).
+- **Valores de Skewness Evaluados:**
+  1. **Línea Base ($s = 0.0$ - Uniforme):** Tráfico balanceado con selector uniforme.
+  2. **Moderado ($s = 0.5$ - Zipfiano Moderado):** Concentración suave hacia los primeros expertos.
+  3. **Extremo ($s = 1.0$ - Hotspot Severo):** Concentración severa de ley de potencias.
+
+---
+
+### 4.8.4. Resultados Empíricos Comparativos y Métricas de Rendimiento
+
+A continuación se resume la descomposición macroscópica de tiempos, latencias de red ciclo a ciclo y tasas de inyección obtenidas en la batería experimental:
+
+| Métrica | Skewness 0.0 (Uniforme) | Skewness 0.5 (Moderado) | Skewness 1.0 (Extremo) | Variación Relativa ($0.0 \to 1.0$) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Tiempo Total de Decodificación** | $1,092.3\,\mu\text{s}$ | $1,101.5\,\mu\text{s}$ | $1,147.2\,\mu\text{s}$ | **$+5.0\%$** |
+| **Tiempo de Cómputo GPU (`Compute`)** | $869.6\,\mu\text{s}$ ($79.6\%$) | $869.6\,\mu\text{s}$ ($79.0\%$) | $869.6\,\mu\text{s}$ ($75.8\%$) | **$0.0\%$ (Invariante)** |
+| **Tránsito en Red Colectiva (`Transit`)** | $169.2\,\mu\text{s}$ ($15.5\%$) | $177.0\,\mu\text{s}$ ($16.1\%$) | $222.4\,\mu\text{s}$ ($19.4\%$) | **$+31.4\%$** 🔴 |
+| **Burbujas de Sincronización (`Stalls`)** | $19.3\,\mu\text{s}$ ($1.8\%$) | $17.7\,\mu\text{s}$ ($1.6\%$) | $24.4\,\mu\text{s}$ ($2.1\%$) | **$+26.4\%$** 🔴 |
+| **Latencia Media de Flit (`Avg_Flit_Latency`)** | $688.1\text{ ciclos}$ | $743.1\text{ ciclos}$ | $837.0\text{ ciclos}$ | **$+21.6\%$** |
+| **Latencia Media de Paquete (`Total_Latency`)** | $1,321.2\text{ ciclos}$ | $1,423.7\text{ ciclos}$ | $1,705.9\text{ ciclos}$ | **$+29.1\%$** 🔴 |
+| **Tasa Media de Inyección Real ($\lambda$)** | $0.2822\text{ flits/c/nodo}$ | $0.2737\text{ flits/c/nodo}$ | $0.2421\text{ flits/c/nodo}$ | **$-14.2\%$** |
+
+#### Distribución Asimétrica de Paquetes en `MoEScatter` por GPU Destino
+Al analizar los 57,000+ paquetes intercambiados durante la fase `Scatter` en la última iteración, se observa con precisión el colapso hacia el router de la GPU 0:
+
+| GPU Destino (Experto) | Paquetes $s = 0.0$ (%) | Paquetes $s = 0.5$ (%) | Paquetes $s = 1.0$ (%) | Latencia Media de Paquete ($s=1.0$) | Retardo en Cola NIC ($s=1.0$) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| **GPU 0 (Experto 0)** | 7,136 ($12.45\%$) | 12,176 ($21.27\%$) | **17,568 ($30.81\%$)** | $1,364.4\text{ ciclos}$ | $1,192.1\text{ ciclos}$ |
+| **GPU 1 (Experto 1)** | 7,056 ($12.31\%$) | 8,832 ($15.43\%$) | **11,440 ($20.06\%$)** | $2,002.8\text{ ciclos}$ | $1,928.2\text{ ciclos}$ |
+| **GPU 2 (Experto 2)** | 7,232 ($12.62\%$) | 7,856 ($13.72\%$) | 7,408 ($12.99\%$) | $2,219.0\text{ ciclos}$ | $2,152.3\text{ ciclos}$ |
+| **GPU 3 (Experto 3)** | 6,416 ($11.20\%$) | 6,832 ($11.93\%$) | 5,504 ($9.65\%$) | $2,380.3\text{ ciclos}$ | $2,307.3\text{ ciclos}$ |
+| **GPU 4 (Experto 4)** | 8,192 ($14.30\%$) | 5,936 ($10.37\%$) | 4,848 ($8.50\%$) | $2,425.9\text{ ciclos}$ | $2,364.4\text{ ciclos}$ |
+| **GPU 5 (Experto 5)** | 7,024 ($12.26\%$) | 5,472 ($9.56\%$) | 4,048 ($7.10\%$) | $2,501.1\text{ ciclos}$ | $2,451.8\text{ ciclos}$ |
+| **GPU 6 (Experto 6)** | 7,232 ($12.62\%$) | 5,200 ($9.08\%$) | 3,312 ($5.81\%$) | $2,511.7\text{ ciclos}$ | $2,461.9\text{ ciclos}$ |
+| **GPU 7 (Experto 7)** | 7,008 ($12.23\%$) | 4,944 ($8.64\%$) | **2,896 ($5.08\%$)** | $2,822.5\text{ ciclos}$ | $2,774.6\text{ ciclos}$ |
+
+---
+
+### 4.8.5. Hallazgos Científicos y Análisis Microarquitectural
+1. **La Invarianza del Tiempo de Cómputo (Régimen Memory-Bound):**
+   Un resultado contraintuitivo a primera vista es que el tiempo de cómputo GPU (`Compute`) se mantiene rigurosamente constante en $869.6\,\mu\text{s}$ para los tres valores de skewness. 
+   La explicación física deriva de la demostración matemática de la Sección 2.4: en la fase de decodificación ($BS=32$), la intensidad aritmética de cada token es minúscula ($I \ll I_{\text{ridge}} \approx 562.5\text{ FLOP/B}$). El tiempo de ejecución de `ExpertFFN` está completamente dominado por la lectura de los pesos del experto desde la memoria HBM3E ($58.72\text{ MB}$ por proyección $\to \sim 22.15\,\mu\text{s}$ por capa). Procesar 1 token o 25 tokens en un acelerador con $3.5\text{ PFLOPS}$ apenas añade $0.5\text{ ns}$ de tiempo aritmético. Por tanto, **el desbalanceo de carga en decodificación no penaliza el cómputo de la GPU congestionada, sino que transfiere íntegramente todo el cuello de botella a la red NoC**.
+
+2. **Formación del Punto Caliente (*In-Cast Hotspot*) y Árbol de Congestión en BookSim2:**
+   En $s = 1.0$, el router de la GPU 0 debe absorber más del $30.8\%$ de todo el tráfico de la red, y conjuntamente con la GPU 1 reciben más del $50.8\%$. Esto genera una saturación inmediata de los buffers de entrada de los canales virtuales (VCs) que apuntan hacia el nodo 0, provocando un árbol de congestión (*congestion tree*) que se propaga aguas arriba hacia los demás conmutadores del Toro.
+
+3. **Paradoja de la Tasa de Inyección ($\lambda$ decrece al aumentar el desbalanceo):**
+   Nótese que la tasa real de inyección inyectada $\lambda$ **disminuye** de $0.2822$ a $0.2421\text{ flits/ciclo/nodo}$ conforme $s$ aumenta de $0.0$ a $1.0$. Esto se debe a que la severa contrapresión en las colas del router del experto popular bloquea la concesión de créditos de control de flujo. Los emisores no pueden inyectar flits nuevos, incrementando el retardo en cola de la NIC (`Queueing_Delay` medio se eleva a más de $2,000$ ciclos) y dilatando la duración total de la colectiva $\Delta\text{Cycles}_{\text{collective}}$, lo que matemáticamente deprime la tasa media calculada por el cociente $\lambda = \text{Total\_Flits} / (N_{\text{GPUs}} \times \Delta\text{Cycles})$.
+
+4. **Ampliación de Burbujas de Sincronización (`NETWORK_STALL`):**
+   Las GPUs sub-utilizadas (ej. GPU 7, que recibe solo el $5\%$ de los paquetes) completan su comunicación de red y sus expertos locales mucho antes que el nodo congestionado. Sin embargo, no pueden progresar en el grafo del transformer debido a la barrera colectiva `MoEGather`, acumulando un incremento del $+26.4\%$ en tiempo muerto de espera (`NETWORK_STALL`).
+
+---
+
 # CAPÍTULO 5: Parches Arquitectónicos Aplicados al Simulador Base
 
 Durante la auditoría del simulador original `LLMSimulator-orig` (SCALE SNU), se detectaron y corrigieron varios errores de diseño arquitectural que falseaban la simulación o producían corrupción de memoria.
@@ -1835,14 +1918,39 @@ Al invocar `txt.set_clip_path(rect)`, Matplotlib impone una máscara de recorte 
 
 Asimismo, el límite superior del eje vertical se amplía (`ylim = num_gpus + 1.1`), reservando una franja libre en la parte superior derecha para alojar la leyenda global sin solaparse con la pista de ejecución de la GPU 7.
 
-### 6.6.4. Enriquecimiento de Bloques de Red Colectivos (Scatter, Gather y AllReduce)
+### 6.6.4. Enriquecimiento de Bloques de Red con Métricas Individualizadas por GPU (Desbalanceo MoE Local)
 
-Los bloques de comunicación física en BookSim2 (azules para MoE y púrpura para AllReduce) incorporan:
-- **Cabecera con Capa y Operación Ordinal:** `Layer {L} | Scatter Nº{k}`, `Layer {L} | Gather Nº{k}` o `Layer {L} | AllReduce Nº{k}`.
-- **Cruce en Memoria con `packet_tracking_debug.csv` (Última Iteración):**
-  - **Identificadores de Paquetes:** Rango exacto de identificadores y recuento total: `PIDs {min}-{max} ({count} pkts)`.
-  - **Métricas de Flits en Tiempo Real:** Latencia media por flit y productividad acumulada calculadas en BookSim2:
-    $$\text{"Lat.Media: 1631.2c | Prod: 2.05 flits/c"}$$
+En versiones tempranas del visualizador, las métricas estampadas en los bloques azules y púrpuras se calculaban promediando la totalidad de los paquetes de la colectiva a nivel global del clúster ($N_{\text{total}} = 960\text{ pkts}$). Esto enmascaraba el desbalanceo real bajo distribuciones sesgadas (`skewness > 0`), mostrando el mismo número de paquetes y la misma latencia idéntica en todas las filas de GPUs.
+
+Para reflejar fielmente la microarquitectura y la física de colas de la red, `plot_cronograma.py` implementa el **filtrado y enriquecimiento individualizado por GPU ($d \in [0, N-1]$)**:
+
+1. **Filtrado Semántico según la Topología de la Colectiva:**
+   - **En `Scatter` (Recepción de Tokens):** La GPU $d$ actúa como destino receptor (el experto anfitrión de los tokens). Se filtran los paquetes donde $\text{Dest} == d$:
+     - $N_{\text{rx}}[d] = \text{len}(\text{df}[\text{Dest} == d])$.
+     - $\text{Lat.Media}_{\text{local}} = \frac{1}{N_{\text{rx}}[d]} \sum \text{Total\_Latency} \quad [\text{ciclos}]$.
+     - $\text{Prod}_{\text{local}} = \frac{\sum \text{Num\_Flits}}{\max(1.0, \Delta t_{\text{bloque}})} \quad [\text{flits/ciclo}]$.
+   - **En `Gather` (Emisión de Activaciones):** La GPU $d$ actúa como origen emisor (el experto que completó el cálculo FFN y retorna las activaciones). Se filtran los paquetes donde $\text{Source} == d$:
+     - $N_{\text{tx}}[d] = \text{len}(\text{df}[\text{Source} == d])$.
+     - $\text{Lat.Media}_{\text{local}} = \frac{1}{N_{\text{tx}}[d]} \sum \text{Total\_Latency} \quad [\text{ciclos}]$.
+     - $\text{Prod}_{\text{local}} = \frac{\sum \text{Num\_Flits}}{\max(1.0, \Delta t_{\text{bloque}})} \quad [\text{flits/ciclo}]$.
+   - **En `AllReduce` (Tensor Parallelism):** Se aíslan los paquetes correspondientes al subgrupo donde participa la GPU $d$ ($\text{Dest} == d$ o $\text{Source} == d$).
+
+2. **Formateo Adaptativo según Nivel de Zoom:**
+   - **Tier 2 ($2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$):**
+     ```
+     L{L} | {Op} Nº{k} ({N_local} pkts)
+     Lat.Media: {lat_local:.1f}c | Prod: {prod_local:.2f} f/c
+     ```
+     *(Si la GPU no interviene en esa colectiva, muestra claramente: `L{L} | {Op} Nº{k} (0 pkts)`).*
+   - **Tier 1 ($800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$):**
+     Etiqueta compacta `{Op} Nº{k} ({N_local}p)` o `(0 pkts)`.
+   - **Tier 3 ($\Delta t \ge 6{,}000\text{ ns}$):**
+     Rango local de PIDs: `PIDs {min}-{max} ({N_local} pkts)` junto con `Lat.Media` y productividad local.
+
+3. **Validación Experimental en `skewness: 1.0`:**
+   En la ventana de inferencia decodificadora (ej. `timeline_part_006_100k_to_120k.png`), el cronograma refleja de manera patente la heterogeneidad Zipfiana:
+   - En `Gather Nº3`: la **GPU 0** (experto popular) reporta `336 pkts` con latencia media de `2315.4c` y productividad `0.69 f/c`, mientras que la **GPU 5** y la **GPU 7** reportan solo `32 pkts` (`199.1c`) y `48 pkts` (`237.1c`), evidenciando por qué estas últimas concluyen su comunicación mucho antes y entran en `NETWORK_STALL`.
+   - En `Scatter Nº4`: la **GPU 0** absorbe `304 pkts` (`1435.8c`, `0.89 f/c`), mientras que las GPUs periféricas reciben apenas `32 pkts` (`0.07 f/c`).
 
 ### 6.6.5. Coalescencia Causal Global Previa a la Ventana y Filtro Anti-Appends
 
@@ -1894,9 +2002,11 @@ Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C** 
    Implementado en `src/module/communication.cpp` garantizando $\text{rel\_finish}[d] = \max(\delta_t[d], \text{rx\_atime}[d], \text{tx\_inj}[d], \text{tx\_retire}[d])$.
 4. **[COMPLETADO - Vía 2] Integración de Ring-AllReduce en el Oráculo BookSim2 con Causalidad Cuádruple y Tensor Parallelism:**
    Implementado en `AllReduce::forward` (`src/module/communication.cpp`) con aislamiento de grupo `op_key`, transferencia de chunks $2(P-1)S_{\text{chunk}}$ sobre topologías Torus/Mesh, trazabilidad completa de PIDs y soporte CLI con `--tensor_degree` / `--tp`.
-5. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
+5. **[COMPLETADO - Vía 3] Parametrización y Estudio de Desbalanceo Extremo de Carga en Expertos MoE (Skewness Zipfiano):**
+   Implementado soporte CLI con `--skewness` / `--skew`, inyección dinámica en `config.yaml`, categorización de carpetas de salida (`_skew{s}`), y etiquetado macroscópico en `analyze_traces.py`. Validación experimental de hotspots de in-cast en NoC ($30.8\%$ de tráfico absorbido por GPU 0 con $s=1.0$), incremento de latencia de paquetes ($+29.1\%$) y saturación asíncrona de barreras (`NETWORK_STALL`).
+6. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
    Integrar una red de dos niveles en BookSim2: enlaces de ultra-alto ancho de banda ($900\text{ GB/s}$) intra-nodo y enlaces de red de área de sistema ($100\text{ GB/s}$) inter-nodo.
-6. **Modelado de Capacidad Finita de Buffers NIC:**
+7. **Modelado de Capacidad Finita de Buffers NIC:**
    Introducir un límite estricto de paquetes en las colas del host para simular caídas de rendimiento por contrapresión física hacia los hilos de la GPU.
 
 ---
@@ -2170,7 +2280,8 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py)
 - **Propósito:** Orquestador principal de experimentos. Automatiza la ejecución del binario compilado, gestiona parámetros CLI, captura salidas en consola y coordina la generación de artefactos (`dia1_exec1.txt`, `packet_tracking_debug.csv`).
 - **Mecanismos Clave:**
-  - Soporte CLI completo para Tensor Parallelism (`--tensor_degree` / `--tp`), inyectando el parámetro en `none_expert_tensor_degree`, validando restricciones topológicas y denominando los directorios de resultados correspondientes.
+  - Soporte CLI para Tensor Parallelism (`--tensor_degree` / `--tp`) y factor de desbalanceo MoE (`--skewness` / `--skew`, por defecto `0.0`), inyectando este último dinámicamente en la sección `generator` de `config.yaml`.
+  - Sufijado automático de carpetas de resultados (`_skew{s}`) para trazabilidad de experimentos desbalanceados.
   - Habilitación por defecto de la instrumentación de paquetes (`SIM_DEBUG_PIDS="1"`), interceptando las líneas `[TRACK_PID]` para generar `packet_tracking_debug.csv` (17 columnas) sin requerir parámetros manuales adicionales.
   - Soporte para bandera `--no_debug_pids` para anular la captura en barridos masivos donde se desee máxima velocidad.
 
@@ -2180,7 +2291,7 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - Resolución dual robusta del directorio base (`resolve_base_dir()`), operable tanto desde la raíz del TFM como desde `LLMSimulator/`.
   - **Filtro Anti-Appends Temporal Dual:** Detecta caídas en la serie cronológica tanto en `.trc` (`START_NS.diff() < 0`) como en `packet_tracking_debug.csv` (`Op_Start_NS.diff() < 0` o `Creation_Cycle.diff() < -1000`) para aislar con total fidelidad la última iteración canónica.
   - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red (`moe_scatter`, `moe_gather`, `all_reduce`) + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
-  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva (incluyendo AllReduce), centroides macroscópicos con metadatos de topología, canales virtuales, tamaño de lote y grado TP (`8dev Torus (VCs=4, BS=32, TP=2)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
+  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva (incluyendo AllReduce), centroides macroscópicos con metadatos de topología, canales virtuales, tamaño de lote, grado TP y factor de skewness (`8dev Torus (VCs=4, BS=32, Skew=0.5)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
 
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
 - **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Reconstruye el ciclo de vida de los paquetes, descompone latencias ($ctime \to itime \to atime$), calcula productividad acumulada y segmenta la visualización por páginas de 50 paquetes en la subcarpeta `gantt/`.
@@ -2198,7 +2309,7 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - **Sub-divisiones Físicas Internas:** Dibuja líneas discontinuas blancas (`alpha=0.6, linestyle='--'`) en las marcas exactas `END_NS` de cada micro-operación interna dentro del macro-bloque verde.
   - **Diagnóstico Cuantitativo de Cuello de Botella:** Calcula el ratio $\sum Mem\_ns / (\sum Comp\_ns + \sum Mem\_ns)$ y despliega en la tercera línea del bloque el veredicto arquitectural (`Mem-Bound XX.X%` vs. `Compute-Bound XX.X%`).
   - **Formateo Adaptativo Anti-Overflow y Recorte Seguro:** Clasifica los bloques en 3 niveles de renderizado según su duración visible $\Delta t$: omisión total bajo $800\text{ ns}$ o $\text{rel\_w} < 0.015$, formato ultracompacto de 1 línea para bloques estrechos ($800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$, ej. `AR Nº{k} (1.2us)`), formato compacto de 2 líneas para bloques medianos ($2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$), y formato completo de 3 líneas para bloques anchos ($\ge 6{,}000\text{ ns}$). Enlaza cada texto con `txt.set_clip_path(rect)` impidiendo cualquier invasión a bloques vecinos, y amplía el margen vertical para evitar superposición de la leyenda sobre la GPU 7.
-  - **Enriquecimiento de Red Colectiva:** Cruza datos con `packet_tracking_debug.csv` mostrando en los bloques de red (azules para MoE y púrpura `#8e44ad` para AllReduce) la capa, PIDs, número de paquetes, latencia media de flits (`Lat.Media:`) y productividad en flits/ciclo.
+  - **Enriquecimiento de Red Colectiva con Métricas Individualizadas por GPU:** Cruza datos con `packet_tracking_debug.csv` discriminando paquetes entrantes en Scatter ($\text{Dest} == d$), salientes en Gather ($\text{Source} == d$) y subgrupos de AllReduce, reportando en cada fila el recuento exacto local de paquetes ($N_{\text{local}}$), su latencia media local ($\text{Lat.Media: } X.Xc$) y su productividad individual ($X.XX\text{ f/c}$), resolviendo el enmascaramiento de sesgo y rotulando explícitamente `(0 pkts)` en dispositivos sin carga colectiva.
   - **Coalescencia Causal Global:** Procesa toda la traza de cada GPU de forma previa a la partición en ventanas para garantizar que las operaciones que cruzan fronteras de visualización mantengan íntegro su contexto analítico.
 
 ---

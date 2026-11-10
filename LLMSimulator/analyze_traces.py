@@ -248,9 +248,10 @@ def extract_network_stats(folder_path, folder_name, num_gpus):
         except Exception:
             pass
 
-    # Batch size y Tensor Parallelism desde config.yaml o nombre de carpeta
+    # Batch size, Tensor Parallelism y Skewness desde config.yaml o nombre de carpeta
     config_yaml = os.path.join(folder_path, "config.yaml")
     tp = 1
+    skewness = 0.0
     if os.path.exists(config_yaml):
         try:
             with open(config_yaml, 'r') as fp:
@@ -261,10 +262,16 @@ def extract_network_stats(folder_path, folder_name, num_gpus):
                         tp_str = line.split(":")[1].strip()
                         if tp_str.isdigit():
                             tp = int(tp_str)
+                    elif "skewness:" in line:
+                        skew_str = line.split(":")[1].strip()
+                        try:
+                            skewness = float(skew_str)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
-    if bs == "N/A" or topology == "desconocida" or tp == 1:
+    if bs == "N/A" or topology == "desconocida" or tp == 1 or skewness == 0.0:
         for part in folder_name.split("_"):
             if part.startswith("bs") and bs == "N/A":
                 bs = part[2:]
@@ -272,11 +279,18 @@ def extract_network_stats(folder_path, folder_name, num_gpus):
                 val = part[2:]
                 if val.isdigit():
                     tp = int(val)
+            elif part.startswith("skew") and skewness == 0.0:
+                val = part[4:]
+                try:
+                    skewness = float(val)
+                except Exception:
+                    pass
             elif part in ["torus", "mesh"] and topology == "desconocida":
                 topology = part
 
     tp_tag = f", TP={tp}" if tp > 1 else ""
-    label = f"{num_gpus}dev {topology.capitalize()} (VCs={num_vcs}, BS={bs}{tp_tag})"
+    skew_tag = f", Skew={skewness}" if skewness > 0.0 else ""
+    label = f"{num_gpus}dev {topology.capitalize()} (VCs={num_vcs}, BS={bs}{tp_tag}{skew_tag})"
 
     # Cálculo de tasa de inyección lambda y latencias por colectiva
     op_points = []
@@ -376,14 +390,14 @@ def main():
 
     # Imprimir tabla de saturación de red si hay trazas disponibles
     if net_results:
-        print("\n" + "=" * 118)
+        print("\n" + "=" * 122)
         print("                        MÉTRICAS DE SATURACIÓN DE RED (BOOKSIM2 - PACKET TRACKING)")
-        print("=" * 118)
-        print(f"{'Configuración / Etiqueta':<34} {'Topología':<10} {'VCs':<5} {'BS':<5} {'GPUs':<5} {'λ (flits/c/nodo)':<18} {'Lat. Flit (c)':<15} {'Lat. Pkt (c)':<15}")
-        print("-" * 118)
+        print("=" * 122)
+        print(f"{'Configuración / Etiqueta':<38} {'Topología':<10} {'VCs':<5} {'BS':<5} {'GPUs':<5} {'λ (flits/c/nodo)':<18} {'Lat. Flit (c)':<15} {'Lat. Pkt (c)':<15}")
+        print("-" * 122)
         for nr in net_results:
-            print(f"{nr['Etiqueta']:<34} {nr['Topología']:<10} {str(nr['VCs']):<5} {str(nr['BS']):<5} {nr['Num GPUs']:<5} {nr['Lambda Flits (flits/cyc/nodo)']:>16.4f} {nr['Avg Flit Latency (ciclos)']:>14.1f} {nr['Avg Pkt Latency (ciclos)']:>14.1f}")
-        print("=" * 118)
+            print(f"{nr['Etiqueta']:<38} {nr['Topología']:<10} {str(nr['VCs']):<5} {str(nr['BS']):<5} {nr['Num GPUs']:<5} {nr['Lambda Flits (flits/cyc/nodo)']:>16.4f} {nr['Avg Flit Latency (ciclos)']:>14.1f} {nr['Avg Pkt Latency (ciclos)']:>14.1f}")
+        print("=" * 122)
 
     df_plot = df.copy()
     df_plot.set_index('Configuración', inplace=True)
