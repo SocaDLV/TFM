@@ -136,23 +136,31 @@ python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch
 
 ## 📊 Trace Analysis & Visualization Suite
 
-### 1. Macroscopic Latency Breakdown (`analyze_traces.py`)
+### 1. Macroscopic Latency Breakdown & Network Saturation (`analyze_traces.py`)
 
-Parses cycle-accurate `.trc` files across simulation runs and isolates pure GPU compute time from physical network transit and synchronization stalls.
+Parses cycle-accurate `.trc` files and `packet_tracking_debug.csv` across simulation runs, isolating pure GPU compute time from physical network transit and synchronization stalls, and synthesizing the network saturation curve.
 
 ```bash
 cd LLMSimulator
 
-# Analyze the 3 most recent simulations
+# Analyze the 3 most recent simulations (generates latency anatomy, MoE breakdown, and saturation curve)
 python3 analyze_traces.py --recent 3
 
 # Filter specifically by the Mixtral model
 python3 analyze_traces.py --model mixtral --recent 5
+
+# Force semilogarithmic scale on the Y-axis for high-dispersion network saturation curves
+python3 analyze_traces.py --recent 3 --semilog
 ```
 
 **Generated Visualizations (saved in `build/analysis/analisis_<timestamp>/`):**
 * **`anatomia_latencia.png`:** A stacked bar chart breaking down total execution time into GPU Compute, Network Transit (`moe_scatter`/`moe_gather`), and Synchronization Stalls (`NETWORK_STALL`).
 * **`desglose_primitivas_moe.png`:** A direct comparative bar chart contrasting the network latency of `moe_scatter` versus `moe_gather`.
+* **`curva_saturacion_red.png`:** The fundamental Network-on-Chip (NoC) saturation curve (Mean Network Latency vs. Real Injected Offered Load $\lambda$ in flits/cycle/node). Features:
+  * **Real Injected Load ($\lambda$, X-Axis):** Measured in flits/cycle/node as $\lambda = \frac{\text{Total Flits}}{N_{\text{GPUs}} \times \Delta\text{Cycles}_{\text{collective}}}$.
+  * **Network Latency (Y-Axis):** Cycle-accurate `Avg_Flit_Latency` in BookSim2 cycles, with auto-detection of semilogarithmic scaling for wide latency dispersion.
+  * **Dual-Level Visualization:** Displays per-layer collective dispersion clouds (light markers) alongside prominent macro-operating points labeled with topology, Virtual Channels (VCs), and batch size (`8dev Torus (VCs=4, BS=32)`).
+  * **Robust Fallback:** Safely omits the saturation curve if historical result folders lack `packet_tracking_debug.csv` without interrupting latency breakdowns.
 
 ---
 

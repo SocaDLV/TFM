@@ -5,3 +5,4 @@ __pycache__/
 TFMresults/
 LLMSimulator-orig/
 booksim2-orig/
+.venv/

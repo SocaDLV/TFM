@@ -49,7 +49,7 @@
    - 6.1. Arquitectura del Logger C++ en `Device`, `Module` y `ModuleGraph`
    - 6.2. Propagación de Identidad Jerárquica (`module_map_name`) a Nodos POP
    - 6.3. Automatización de Ejecución y Orquestación (`run_sim.py`)
-   - 6.4. Análisis Macroscópico de Latencias (`analyze_traces.py`)
+   - 6.4. Análisis Macroscópico de Latencias y Saturación de Red (`analyze_traces.py`) - Cierre del Bloque B
    - 6.5. Visualizador de Congestión en Red y Paginación de Paquetes (`plot_packet_tracking.py`)
    - 6.6. Cronograma Micro-Arquitectural Causal GPU Cycle-to-Cycle (`plot_cronograma.py`)
 7. [Capítulo 7: Amenazas a la Validez, Limitaciones Actuales y Hoja de Ruta de Mejoras](#capítulo-7-amenazas-a-la-validez-limitaciones-actuales-y-hoja-de-ruta-de-mejoras)
@@ -1525,9 +1525,9 @@ Ubicado en [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSi
 
 ---
 
-## 6.4. Análisis Macroscópico de Latencias (`analyze_traces.py`)
+## 6.4. Análisis Macroscópico de Latencias y Saturación de Red (`analyze_traces.py`) - Cierre del Bloque B
 
-Ubicado en [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py), realiza el posprocesamiento macroscópico de los archivos `.trc` generados por el clúster.
+Ubicado en [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py), realiza el posprocesamiento macroscópico de los archivos `.trc` generados por el clúster y sintetiza la curva de saturación de red a partir de `packet_tracking_debug.csv`.
 
 ### 6.4.1. Auditoría de Discrepancias y Conservación del Wall-Clock Time
 Durante las primeras campañas de simulación, se detectó una aparente discrepancia: las gráficas de latencia mostraban barras agregadas cercanas a $\sim 10\text{ M}$ ns, mientras que el reloj real de simulación (`END_NS` máximo en los archivos `TFM_device_X.trc`) culminaba en torno a $\sim 1{,}18\text{ M}$ ns. Se realizó una auditoría rigurosa sobre tres hipótesis causales:
@@ -1573,6 +1573,36 @@ Los resultados empíricos validados sobre trazas reales demuestran una concordan
 El script exporta de forma automatizada a `build/analysis/analisis_<timestamp>/`:
 1. `anatomia_latencia.png`: Gráfico de barras apiladas con estética científica, donde cada barra representa una configuración de red, descomponiendo visualmente el tiempo de inferencia total en sus tres factores ortogonales (Cómputo, Tránsito, Stalls), con anotaciones numéricas en microsegundos/milisegundos y porcentajes relativos.
 2. `desglose_primitivas_moe.png`: Gráfico de barras agrupadas que contrasta la latencia de red inducida por `moe_scatter` frente a `moe_gather`, permitiendo estudiar asimetrías de congestión y contención de búferes.
+3. `curva_saturacion_red.png`: Curva canónica de saturación de red (Latencia Media de Red vs. Tasa de Inyección Ofrecida $\lambda$). Muestra la relación entre la carga de tráfico inyectada por GPU y la degradación de latencia inducida por contención física en conmutadores y canales de BookSim2.
+
+### 6.4.4. Síntesis y Renderizado de la Curva de Saturación de Red (Cierre del Bloque B)
+
+El **Bloque B del TFM** queda formalmente cerrado con la incorporación directa de la curva de saturación de red dentro de `analyze_traces.py`. Esta integración combina las trazas macroscópicas de cómputo GPU (`.trc`) con las trazas de paquetes flit a flit (`packet_tracking_debug.csv`), extrayendo el régimen operativo real del tejido de interconexión.
+
+#### 1. Formulación Matemática de las Métricas de Red
+Para cada simulación analizada, tras aplicar el filtro anti-appends para aislar la última iteración canónica:
+- **Tasa Media de Inyección Real ($\lambda$, Eje X):**
+  Se evalúa de forma desagregada para cada operación colectiva $op$ (Scatter y Gather en cada capa del Transformer) y se calcula la media global representativa:
+  $$\lambda^{(op)} = \frac{\sum_{p \in op} \text{Num\_Flits}_p}{N_{\text{GPUs}} \times \Delta\text{Cycles}_{op}} \quad [\text{flits / ciclo / nodo}]$$
+  $$\Delta\text{Cycles}_{op} = \max_{p \in op}(\text{Receive\_Cycle}_p) - \min_{p \in op}(\text{Creation\_Cycle}_p)$$
+  $$\overline{\lambda} = \frac{1}{M_{\text{ops}}} \sum_{op=1}^{M_{\text{ops}}} \lambda^{(op)} \quad [\text{flits / ciclo / nodo}]$$
+  Equivalentemente, la tasa expresada en paquetes inyectados por ciclo y nodo cumple $\lambda_{\text{pkts}} = \frac{\lambda}{9}$ (dado que cada paquete consta exactamente de $9$ flits y $288$ Bytes en Mixtral 8x7B).
+
+- **Latencia Media de Red ($L_{\text{net}}$, Eje Y):**
+  Calculada como el promedio global de la columna `Avg_Flit_Latency` acumulada por BookSim2 para todos los flits retirados en la iteración, expresada en ciclos de reloj de red:
+  $$\overline{L}_{\text{flit}} = \frac{1}{P} \sum_{p=1}^{P} \text{Avg\_Flit\_Latency}_p \quad [\text{ciclos de BookSim2}]$$
+  Complementariamente, se registra la latencia total media por paquete $\overline{L}_{\text{pkt}} = \frac{1}{P} \sum_{p=1}^P \text{Total\_Latency}_p$.
+
+#### 2. Visualización Multi-Nivel y Calidad de Publicación
+La gráfica `curva_saturacion_red.png` implementa una representación visual en dos capas complementarias:
+1. **Nube de Micro-Operaciones Colectivas:** Muestra puntos translúcidos suaves (`alpha=0.22`, $s=36$) correspondientes a cada operación individual Scatter y Gather a lo largo de las 32 capas decodificadoras. Esto visibiliza la variabilidad intrínseca del enrutamiento dinámico y el desbalance de tokens entre capas.
+2. **Centroides Macroscópicos de Arquitectura:** Destaca con marcadores geométricos de gran tamaño ($s=230$, borde negro prominente y color de serie distintivo) el punto de operación medio $(\overline{\lambda}, \overline{L})$ de cada simulación comparada.
+3. **Badges Anotados y Metadatos Dinámicos:** Cada centroide incorpora un cuadro de llamada (*callout annotation*) con fondo blanco translúcido y flecha conectora, rotulado con los parámetros de red:
+   $$\text{Label} = \text{Num\_GPUs}\,\text{dev} \; \text{Topología} \; (\text{VCs}=V, \; \text{BS}=B)$$
+4. **Escala Adaptativa y Tendencia:** Si la dispersión de latencias entre el régimen no saturado y el saturado supera un factor de $4\times$ (o ante el flag manual `--semilog`), el eje Y se ajusta automáticamente a escala semilogarítmica ($\log_{10}$). Además, cuando se comparan 2 o más simulaciones, traza una línea discontinua de tendencia global que evidencia la pendiente asintótica del codo de saturación.
+
+#### 3. Compatibilidad Histórica y Tolerancia a Fallos
+Si en carpetas históricas no existiese `packet_tracking_debug.csv` (por ejemplo, ejecuciones previas a la instrumentación completa de BookSim2), el analizador emite una advertencia informativa por consola (`⚠️ Aviso: No se encontró 'packet_tracking_debug.csv'...`) y omite de forma totalmente segura la tercera gráfica sin interrumpir ni alterar la generación de `anatomia_latencia.png` ni `desglose_primitivas_moe.png`.
 
 ---
 
@@ -2031,11 +2061,12 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - Soporte para bandera `--no_debug_pids` para anular la captura en barridos masivos donde se desee máxima velocidad.
 
 ### [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py)
-- **Propósito:** Analizador macroscópico de trazas. Parsea los registros `.trc` de cada GPU, calcula promedios de latencia por tipo de capa y genera tablas resumen de tiempos de cómputo vs. comunicación.
+- **Propósito:** Analizador macroscópico de trazas y sintetizador de la curva de saturación de red (Cierre del Bloque B). Parsea los registros `.trc` de cada GPU y el archivo `packet_tracking_debug.csv`, calculando el balance temporal de cómputo vs. comunicación y correlacionando la carga inyectada con la latencia física de red.
 - **Mecanismos Clave:**
   - Resolución dual robusta del directorio base (`resolve_base_dir()`), operable tanto desde la raíz del TFM como desde `LLMSimulator/`.
-  - **Filtro Anti-Appends Temporal:** Detecta caídas en la serie cronológica (`START_NS.diff() < 0`) para aislar la última iteración en simulaciones multi-iteración (`iter > 1`), eliminando inflaciones artificiales de tiempo acumulado.
+  - **Filtro Anti-Appends Temporal Dual:** Detecta caídas en la serie cronológica tanto en `.trc` (`START_NS.diff() < 0`) como en `packet_tracking_debug.csv` (`Op_Start_NS.diff() < 0` o `Creation_Cycle.diff() < -1000`) para aislar con total fidelidad la última iteración canónica.
   - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
+  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva, centroides macroscópicos con metadatos de topología, canales virtuales y tamaño de lote (`8dev Torus (VCs=4, BS=32)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
 
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
 - **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Reconstruye el ciclo de vida de los paquetes, descompone latencias ($ctime \to itime \to atime$), calcula productividad acumulada y segmenta la visualización por páginas de 50 paquetes en la subcarpeta `gantt/`.
