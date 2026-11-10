@@ -40,6 +40,7 @@
    - 4.4. Secuencia Causal de Barreras en la Capa MoE: De Attention a MoEGather
    - 4.5. Auditoría Crítica de `cached_latency[layer_name]`: Escalar Global vs. Vector por GPU Destino
    - 4.6. Auditoría Forense de Causalidad Física en MoEGather/MoEScatter y Demostración de Simetría de Tráfico
+   - 4.7. Integración de AllReduce en el Oráculo BookSim2: Modelado Ring-AllReduce con Causalidad Cuádruple (Vía 2)
 5. [Capítulo 5: Parches Arquitectónicos Aplicados al Simulador Base](#capítulo-5-parches-arquitectónicos-aplicados-al-simulador-base)
    - 5.1. Correcciones Críticas en `decoder.cpp`: Conexiones Residuales y Tipado de Capas
    - 5.2. Correcciones en `layer.cpp`: Cadena de Dependencias en Bloques SwiGLU
@@ -1346,6 +1347,86 @@ Al aplicar este modelo:
 
 ---
 
+## 4.7. Integración de AllReduce en el Oráculo BookSim2: Modelado Ring-AllReduce con Causalidad Cuádruple (Vía 2)
+
+### 4.7.1. Contexto, Motivación y Limitación del Simulador Original
+En el simulador original `LLMSimulator-orig` (SCALE SNU), la primitiva colectiva `AllReduce::forward` ([`src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp)) operaba bajo un modelo analítico puramente sintético basado en saltos ideales:
+$$t_{\text{red}} = t_{\text{latency}} + \frac{\text{size}}{\text{bandwidth}} + \text{one\_hop} \times \text{hop}$$
+Este enfoque presentaba severas deficiencias para la fidelidad científica del modelado de red:
+1. **Invisibilidad de la Contención:** Ignoraba por completo la contención física de canales virtuales (VCs), colisiones en conmutadores y saturación de enlaces en topologías NoC reales (Toro, Malla).
+2. **Desconexión con BookSim2:** Mientras las colectivas MoE (`MoEScatter` y `MoEGather`) se evaluaban flit a flit en BookSim2, las capas de paralelismo de tensores (TP) en la Atención y proyecciones lineales utilizaban saltos temporales ideales desprovistos de paquetes.
+3. **Aplanamiento Artificial de Relojes:** El módulo se instanciaba con `equalize_time = true`, destruyendo cualquier desfase temporal previo entre GPUs y falseando la causalidad física.
+
+Para solventar esta limitación y cerrar el 100% de las colectivas de red del co-simulador con precisión ciclo a ciclo (BookSim2), se implementó la **Vía 2: Integración de Ring-AllReduce en el Oráculo BookSim2**.
+
+---
+
+### 4.7.2. Grados de Paralelismo Tensorial en LLMSimulator
+El paralelismo tensorial (TP) en LLMSimulator se gobierna a través de dos parámetros configurables:
+- **`none_expert_tensor_degree` (`ne_tp_dg`):** Factor de división tensorial en capas densas no-MoE (Atención multifuente/GQA y proyecciones lineales asociadas). Este parámetro se expone en la CLI de `run_sim.py` mediante `--tensor_degree` o `--tp` (por defecto `1`).
+- **`expert_tensor_degree` (`e_tp_dg`):** Factor de división en los bloques densos de los expertos MoE (por defecto `1` al utilizar paralelismo de expertos puro).
+
+Cuando $N_{\text{GPUs}}$ dispositivos participan en la simulación y se establece $\text{ne\_tp\_dg} = P > 1$, el clúster se particiona en $N_{\text{GPUs}} / P$ subgrupos independientes de tamaño $P$. Cada subgrupo ejecuta colectivas `AllReduce` acotadas exclusivamente a su lista local de dispositivos `device_list = {d_0, d_1, \dots, d_{P-1}}`.
+
+---
+
+### 4.7.3. Desacoplamiento de Barrera y Caching Aislado por Subgrupo
+1. **Desacoplamiento (`equalize_time = false`):**
+   En el constructor `AllReduce::AllReduce`, se fijó `this->equalize_time = false;`, asegurando que cada GPU $d$ acceda al módulo en su instante temporal exacto $t_{\text{src}}[d]$ sin barreras sincrónicas artificiales previas.
+2. **Espacio de Claves Aislado por Subgrupo (`op_key`):**
+   Dado que múltiples subgrupos de TP (ej. GPUs $\{0,1\}$, $\{2,3\}$, $\{4,5\}$ y $\{6,7\}$ en un clúster de 8 GPUs con $P=2$) ejecutan colectivas `all_reduce` en paralelo, la caché estática de latencias no puede indexarse únicamente por `module_map_name`. Se implementó un particionamiento unívoco:
+   ```cpp
+   std::string op_key = this->module_map_name + "_grp_" + std::to_string(this->device_list[0]);
+   ```
+   Esto garantiza que el primer dispositivo de cada subgrupo actúa como su propio Oráculo local, sin colisiones de caché entre subgrupos concurrentes.
+
+---
+
+### 4.7.4. Algoritmo Ring-AllReduce a Nivel de Flit en BookSim2
+Para un subgrupo de $P$ GPUs ($P = |\text{device\_list}|$):
+- Si $P \le 1$, no existe comunicación entre dispositivos y la operación retorna inmediatamente con latencia nula.
+- Si $P > 1$, se modela la topología de anillo lógico sobre la topología física subyacente de BookSim2:
+  1. **Segmentación en Chunks:**
+     El tensor de entrada (de tamaño total `size` bytes) se divide en $P$ fragmentos equitativos:
+     $$S_{\text{chunk}} = \left\lceil \frac{\text{size}}{P} \right\rceil \quad [\text{Bytes}]$$
+  2. **Fases del Anillo (Reduce-Scatter y All-Gather):**
+     El algoritmo Ring-AllReduce ejecuta:
+     - $P - 1$ pasos de **Reduce-Scatter**, donde en cada paso la GPU $d_i$ envía un chunk al nodo vecino en el anillo $d_{(i+1) \pmod P}$ y recibe del nodo $d_{(i-1+P) \pmod P}$.
+     - $P - 1$ pasos de **All-Gather**, donde los chunks completamente reducidos se propagan a lo largo del anillo lógico de manera idéntica.
+  3. **Volumen Total y Paquetización:**
+     Cada GPU transmite en total $2(P - 1)$ chunks de tamaño $S_{\text{chunk}}$:
+     $$V_{\text{GPU}} = 2(P - 1) \cdot S_{\text{chunk}} = 2(P - 1) \cdot \left\lceil \frac{\text{size}}{P} \right\rceil \quad [\text{Bytes}]$$
+     Aplicando las especificaciones físicas de la red ($\text{MTU} = 256\text{ B}$, $\text{Header} = 24\text{ B}$, $\text{Flit} = 32\text{ B}$, resultando en paquetes de 9 flits y 288 Bytes sobre el canal físico), el número total de paquetes transmitidos por GPU hacia su vecino en el anillo es:
+     $$N_{\text{pkts/GPU}} = \left\lceil \frac{V_{\text{GPU}}}{\text{MTU}} \right\rceil$$
+
+---
+
+### 4.7.5. Inyección Asíncrona Escalonada y Causalidad Cuádruple en el Oráculo
+El dispositivo $d_0$ del subgrupo asume la orquestación en BookSim2:
+1. **Cálculo de Desfases de Inyección ($\Delta t$):**
+   $$t_{\min} = \min_{d \in \text{device\_list}} (t_{\text{src}}[d])$$
+   $$\Delta t[d] = \text{round}(t_{\text{src}}[d] - t_{\min}) \quad [\text{ciclos}]$$
+2. **Generación Temporalmente Indexada:**
+   Cada paquete emitido por la GPU $d$ hacia su destino en el anillo tiene su ciclo de creación fijado en $c_{\text{creation}} = \Delta t[d]$. BookSim2 inyecta los flits en la cola de entrada del router físico correspondiente a la GPU $d$ conforme el reloj de la red alcanza dicho ciclo.
+3. **Notificación de Operación Colectiva:**
+   ```cpp
+   BookSim_StartOperation("AllReduce", allreduce_op_counter++, t_min);
+   ```
+4. **Avance Ciclo a Ciclo y Registro:**
+   Se ejecuta `BookSim_AdvanceCycle()` hasta que todos los paquetes generados son retirados de la red (`total_received == total_injected`).
+5. **Regla de Causalidad Cuádruple Bidireccional:**
+   $$\text{rel\_finish}[d] = \max\Big(\Delta t[d],\; \text{Max\_RX\_Atime}[d],\; \text{Max\_TX\_Inj}[d],\; \text{Max\_TX\_Retire}[d]\Big)$$
+   $$t_{\text{end}}[d] = t_{\min} + \text{rel\_finish}[d]$$
+   $$\text{network\_latency}[d] = \max(0.0,\; t_{\text{end}}[d] - t_{\text{src}}[d])$$
+6. **Sellado de Operación:**
+   ```cpp
+   BookSim_FinishOperation(t_max_finish);
+   ```
+7. **Consumo por GPUs del Subgrupo:**
+   La GPU líder almacena las latencias en `cached_latency_per_gpu[op_key][d]`. Las demás GPUs leen directamente su latencia calculada y avanzan su reloj local: `device->status.device_time += network_latency_ns`.
+
+---
+
 # CAPÍTULO 5: Parches Arquitectónicos Aplicados al Simulador Base
 
 Durante la auditoría del simulador original `LLMSimulator-orig` (SCALE SNU), se detectaron y corrigieron varios errores de diseño arquitectural que falseaban la simulación o producían corrupción de memoria.
@@ -1520,6 +1601,7 @@ Esto genera en los archivos `.trc` entradas con trazabilidad absoluta:
 Ubicado en [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py), actúa como orquestador integral:
 - Genera dinámicamente las configuraciones acopladas `config.yaml` (LLMSimulator) y `test.cfg` (BookSim2).
 - Impone **guardarraíles de arquitectura**: verifica que topologías Torus tengan al menos 2 VCs para evitar deadlocks y que las dimensiones sean simétricas.
+- **Soporte CLI para Tensor Parallelism (`--tensor_degree` / `--tp`):** Permite configurar el grado de paralelismo tensorial en capas densas (`none_expert_tensor_degree`), verificando automáticamente que el número total de GPUs sea divisible entre el grado de tensor elegido e incorporando la etiqueta `_tp{N}` en la denominación de los resultados.
 - **Trazabilidad de Paquetes Activa por Defecto:** Activa de forma predeterminada `SIM_DEBUG_PIDS="1"`, interceptando mediante pipes de subproceso las líneas `[TRACK_PID]` emitidas por BookSim2 y volcándolas de forma estructurada a `packet_tracking_debug.csv`. Incorpora el flag `--no_debug_pids` para deshabilitar esta exportación en barridos masivos de baja sobrecarga de I/O.
 - Sella y organiza los archivos generados en subdirectorios únicos por marca temporal en `build/results/<experimento>/`.
 
@@ -1559,7 +1641,7 @@ $$\text{Wall-Clock Time} = \max_{g \in [0, N-1]} (\text{END\_NS}^{(g)}) \approx 
 
 Donde:
 - **Cómputo GPU Puro ($\overline{T}_{\text{compute}}$):** Suma media de todas las operaciones de tensores (`Linear`, `Attention`, `Residual`, `LayerNorm`, `RoPE`).
-- **Tránsito Físico de Red ($\overline{T}_{\text{transit}}$):** Retardo de propagación y enrutamiento en BookSim2 derivado de primitivas All-to-All (`moe_scatter` y `moe_gather`).
+- **Tránsito Físico de Red ($\overline{T}_{\text{transit}}$):** Retardo de propagación y enrutamiento en BookSim2 derivado de primitivas All-to-All (`moe_scatter` y `moe_gather`) y primitivas de Tensor Parallelism (`all_reduce` y `moe_all_reduce_for_gather`).
 - **Bloqueos de Sincronización ($\overline{T}_{\text{stall}}$):** Tiempo ocioso de espera en barreras globales de sincronización (`NETWORK_STALL`).
 
 Los resultados empíricos validados sobre trazas reales demuestran una concordancia exacta (discrepancia inferior al $0{,}0002\%$ atribuible a redondeo infinitesimal):
@@ -1597,8 +1679,9 @@ Para cada simulación analizada, tras aplicar el filtro anti-appends para aislar
 La gráfica `curva_saturacion_red.png` implementa una representación visual en dos capas complementarias:
 1. **Nube de Micro-Operaciones Colectivas:** Muestra puntos translúcidos suaves (`alpha=0.22`, $s=36$) correspondientes a cada operación individual Scatter y Gather a lo largo de las 32 capas decodificadoras. Esto visibiliza la variabilidad intrínseca del enrutamiento dinámico y el desbalance de tokens entre capas.
 2. **Centroides Macroscópicos de Arquitectura:** Destaca con marcadores geométricos de gran tamaño ($s=230$, borde negro prominente y color de serie distintivo) el punto de operación medio $(\overline{\lambda}, \overline{L})$ de cada simulación comparada.
-3. **Badges Anotados y Metadatos Dinámicos:** Cada centroide incorpora un cuadro de llamada (*callout annotation*) con fondo blanco translúcido y flecha conectora, rotulado con los parámetros de red:
-   $$\text{Label} = \text{Num\_GPUs}\,\text{dev} \; \text{Topología} \; (\text{VCs}=V, \; \text{BS}=B)$$
+3. **Badges Anotados y Metadatos Dinámicos:** Cada centroide incorpora un cuadro de llamada (*callout annotation*) con fondo blanco translúcido y flecha conectora, rotulado con los parámetros de red y paralelismo tensorial:
+   $$\text{Label} = \text{Num\_GPUs}\,\text{dev} \; \text{Topología} \; (\text{VCs}=V, \; \text{BS}=B \ [, \text{TP}=P])$$
+   *(Ejemplo: `8dev Torus (VCs=4, BS=32, TP=2)`).*
 4. **Escala Adaptativa y Tendencia:** Si la dispersión de latencias entre el régimen no saturado y el saturado supera un factor de $4\times$ (o ante el flag manual `--semilog`), el eje Y se ajusta automáticamente a escala semilogarítmica ($\log_{10}$). Además, cuando se comparan 2 o más simulaciones, traza una línea discontinua de tendencia global que evidencia la pendiente asintótica del codo de saturación.
 
 #### 3. Compatibilidad Histórica y Tolerancia a Fallos
@@ -1623,15 +1706,15 @@ Ubicado en [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escrito
   - 🟦 **Vuelo en Red (NoC Flight Time):** Desde $itime$ hasta $atime$ (contención y arbitraje de conmutadores).
 - **Etiquetas Micro-Arquitecturales Enriquecidas por Paquete:**
   - Al lado derecho de cada barra se muestra la tupla de ruta, tamaño físico, latencia media de flits acumulada, productividad acumulada y la ventana global de nanosegundos:
-    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`
+    `S{src}→D{dst} (9 flits / 288B) | Lat.Media: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`
   - **Formulación Matemática de las Métricas Acumuladas:**
     $$\text{Avg\_Flit\_Latency}(atime) = \frac{\sum_{k \in \text{flits recibidos en la op hasta } atime} (t_{\text{retire}, k} - ctime)}{\text{Total global de flits recibidos en la op hasta } atime} \quad [\text{ciclos}]$$
     $$\text{Throughput}(atime) = \frac{\text{Total global de flits recibidos en la op hasta } atime}{\max(1, atime - t_{\text{start\_op}})} \quad [\text{flits/ciclo}]$$
 - **Sombreado Semántico por Operación de Red (`ax.axhspan`):**
-  - Identifica transiciones entre operaciones colectivas sucesivas (`Scatter NºX` vs. `Gather NºX`).
-  - Aplica franjas horizontales de fondo suaves alternas (azul claro para Scatter, violeta/verde claro para Gather).
+  - Identifica transiciones entre operaciones colectivas sucesivas (`Scatter NºX`, `Gather NºX` y `AllReduce NºX`).
+  - Aplica franjas horizontales de fondo suaves alternas (azul claro para Scatter `#e3f2fd`, violeta/verde claro para Gather `#f3e5f5` y lavanda suave para AllReduce `#ede7f6`).
   - Dibuja líneas horizontales discontinuas (`linestyle='--'`) en la frontera exacta de cambio de operación.
-  - Inserta tarjetas o badges destacados en el extremo derecho del gráfico con la leyenda de operación y su intervalo en nanosegundos: `Scatter Nº1 \n NS 6362 - 10547`.
+  - Inserta tarjetas o badges destacados en el extremo derecho del gráfico con la leyenda de operación y su intervalo en nanosegundos: `Scatter Nº1 \n NS 6362 - 10547` o `AllReduce Nº1 \n NS 3730 - 4895`.
 - **Hitos Globales de Congestión:**
   - Preserva en la raíz del experimento los tres cortes representativos:
     - `gantt_1_fase_libre.png`: Fase inicial con red vacía (mínima latencia).
@@ -1679,6 +1762,7 @@ Las micro-operaciones del archivo `.trc` se clasifican semánticamente en catego
 - **`Scatter` (🟦 Azul `#1565c0`):** Comunicación de dispersión All-to-All gestionada por BookSim2 (`moe_scatter`).
 - **`ExpertFFN` (🟩 Verde `#2e7d32`):** Cómputo local de los expertos asignados a la GPU, agrupando `gate_proj`, activación no lineal (`silu`), `up_proj` y `down_proj`.
 - **`Gather` (🟦 Azul `#1565c0`):** Comunicación de reunión All-to-All gestionada por BookSim2 (`moe_gather`).
+- **`AllReduce` (🟪 Púrpura/Magenta `#8e44ad`):** Comunicación colectiva Ring-AllReduce de Tensor Parallelism en capas de atención o proyecciones lineales, simulada ciclo a ciclo por BookSim2 (`all_reduce` y `moe_all_reduce_for_gather`).
 - **`NETWORK_STALL` (🟥 Rojo `#c62828`):** Burbuja ociosa de sincronización en barrera colectiva provocada por desbalance de cómputo o colas en la red.
 - **`Residual` (⬜ Gris `#616161`):** Normalización final y residuo del bloque decodificador (`post_attn_layer_norm` y `residual_2`).
 
@@ -1721,20 +1805,44 @@ Dentro de cada bloque verde de cómputo, el visualizador formatea un texto infor
      $$\text{Mem\_Pct} = \frac{\sum \text{Mem\_ns}}{\sum \text{Comp\_ns} + \sum \text{Mem\_ns}} \times 100$$
    - Si $\text{Mem\_Pct} \ge 50.0\%$, se reporta como `Mem-Bound {Mem_Pct:.1f}%` (el caso habitual en inferencia decodificadora con Batch Size 32, típicamente entre el $95\%$ y el $99.8\%$). Si fuese inferior, se reporta como `Compute-Bound {100 - Mem_Pct:.1f}%`.
 
-#### Umbrales Adaptativos de Renderizado
-Para prevenir cualquier solapamiento tipográfico o desbordamiento fuera de las cajas de tiempo:
-- **`dibujo_dur >= 2500 ns`:** Renderizado completo de 3 líneas (tamaño de fuente entre $6.5\text{ pt}$ y $7.5\text{ pt}$).
-- **`1500 ns <= dibujo_dur < 2500 ns`:** Renderizado balanceado de 2 líneas (Cabecera + Secuencia de operaciones).
-- **`dibujo_dur < 1500 ns`:** Renderizado ultracompacto de 1 línea (`L{L} | {MacroOp}` a $6.0\text{ pt}$).
+#### Umbrales Adaptativos de Renderizado y Protección Anti-Overflow
 
-### 6.6.4. Enriquecimiento de Bloques de Red Colectivos (Scatter y Gather)
+Para erradicar cualquier desbordamiento de texto (*Text Overflow*) o colisión tipográfica entre bloques vecinos en ventanas de alta resolución (típicamente $10\,\mu\text{s}$ a $20\,\mu\text{s}$), `plot_cronograma.py` implementa una arquitectura de renderizado adaptativo en 3 niveles gobernada por el ancho temporal visible $\Delta t = \text{dibujo\_dur}$:
 
-Los bloques azules de comunicación física en BookSim2 incorporan:
-- **Cabecera con Capa y Operación Ordinal:** `Layer {L} | Scatter Nº{k}` o `Layer {L} | Gather Nº{k}`.
+1. **Omisión en Micro-Bloques ($\Delta t < 800\text{ ns}$ o $\text{rel\_w} < 0.015$):**
+   Las transiciones de residuos breves (12–29 ns), micro-stalls o cortes de ventana marginales no renderizan texto interno para no saturar visualmente el lienzo.
+2. **Tier 1: Bloques Muy Estrechos ($800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$):**
+   - Renders ultracompactos de **1 sola línea centrada** (`fontsize=6.5`, `fontweight='bold'`).
+   - Para colectivas de Tensor Parallelism (`AllReduce`), muestra únicamente `AR Nº{k} (1.2us)` o `AR Nº{k}`, evitando colisiones con los bloques de Atención adyacentes.
+   - Para `Stall`, muestra de forma concisa `Stall` o `Stall ({dur})`.
+   - Para `Calc`, proyecta `L{L} | {Op}` o simplemente `{Op}`.
+3. **Tier 2: Bloques Medianos ($2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$):**
+   - Formato compacto de **máximo 2 líneas** con tipografía reducida (`fontsize=6.8` para cabecera, `fontsize=6.2` para métricas).
+   - En comunicaciones de red, plasma la cabecera de la operación junto con las métricas acumuladas: `Lat.Media: {lat}c | Prod: {prod} f/c`.
+4. **Tier 3: Bloques Anchos ($\Delta t \ge 6{,}000\text{ ns}$):**
+   - Formato completo de **3 líneas** con cabecera de capa, secuencia ordenada de micro-operaciones elementales desplegadas en negrita y diagnóstico microarquitectural de cuello de botella (`Mem-Bound XX.X%`).
+
+#### Recorte Seguro por Geometría del Rectángulo (`draw_clipped_text`)
+Todas las cadenas de texto se dibujan mediante la función auxiliar `draw_clipped_text(ax, rect, x, y, text, ...)`:
+```python
+def draw_clipped_text(ax, rect, x, y, text, **kwargs):
+    kwargs.setdefault('clip_on', True)
+    txt = ax.text(x, y, text, **kwargs)
+    txt.set_clip_path(rect)
+    return txt
+```
+Al invocar `txt.set_clip_path(rect)`, Matplotlib impone una máscara de recorte estricta ligada a las coordenadas geométricas del parche `patches.Rectangle`. Cualquier glifo que intente rebasar el ancho del bloque resulta truncado a nivel de píxel en la frontera del rectángulo, garantizando matemáticamente la imposibilidad de invasión sobre bloques vecinos.
+
+Asimismo, el límite superior del eje vertical se amplía (`ylim = num_gpus + 1.1`), reservando una franja libre en la parte superior derecha para alojar la leyenda global sin solaparse con la pista de ejecución de la GPU 7.
+
+### 6.6.4. Enriquecimiento de Bloques de Red Colectivos (Scatter, Gather y AllReduce)
+
+Los bloques de comunicación física en BookSim2 (azules para MoE y púrpura para AllReduce) incorporan:
+- **Cabecera con Capa y Operación Ordinal:** `Layer {L} | Scatter Nº{k}`, `Layer {L} | Gather Nº{k}` o `Layer {L} | AllReduce Nº{k}`.
 - **Cruce en Memoria con `packet_tracking_debug.csv` (Última Iteración):**
   - **Identificadores de Paquetes:** Rango exacto de identificadores y recuento total: `PIDs {min}-{max} ({count} pkts)`.
   - **Métricas de Flits en Tiempo Real:** Latencia media por flit y productividad acumulada calculadas en BookSim2:
-    $$\text{"Lat.Mitja: 1631.2c | Prod: 2.05 flits/c"}$$
+    $$\text{"Lat.Media: 1631.2c | Prod: 2.05 flits/c"}$$
 
 ### 6.6.5. Coalescencia Causal Global Previa a la Ventana y Filtro Anti-Appends
 
@@ -1758,8 +1866,9 @@ Para mantener el máximo rigor científico en esta investigación de Máster, se
 3. **Desacoplamiento de Cómputo Local en `ExpertFFN` (Resuelto en Bloque C - ✅):**
    *Estado Previo:* La barrera `sync_for_moe_scatter` contenía `device_list`, obligando a todo el clúster a sincronizarse antes de que cualquier GPU pudiera iniciar su cómputo.
    *Resolución Implementada:* `sync_for_moe_scatter` se acota a `{device_total_rank}`, permitiendo a las GPUs que reciben menos tokens (o más cercanas) comenzar su cómputo `ExpertFFN` inmediatamente. La barrera previa a Gather (`sync_3`) opera con `equalize_time = false` para verificar la dependencia de datos sin aplanar los relojes de fin de cómputo, y la barrera colectiva `sync_for_moe_gather` (`equalize_time = true`) absorbe con precisión milimétrica el desbalance acumulado generando el bloque rojo **`NETWORK_STALL`**.
-4. **Comunicaciones Colectivas No-MoE Analíticas (Línea Base Preservada):**
-   Operaciones como el `AllReduce` de la atención se modelan mediante la formulación analítica de ancho de banda NVLink ($T = \text{Data} / \text{BW}$), delegando a BookSim2 el modelado de alta resolución para la dispersión y reunión MoE (`moe_scatter` y `moe_gather`).
+4. **Comunicaciones Colectivas No-MoE en BookSim2 (Resuelto en Vía 2 - ✅):**
+   *Estado Previo:* Operaciones como el `AllReduce` de la atención se modelaban mediante la formulación analítica de ancho de banda sintético ($T = \text{Data} / \text{BW} + \text{hop} \times \text{lat}$), limitando BookSim2 a la dispersión y reunión MoE (`moe_scatter` y `moe_gather`).
+   *Resolución Implementada:* Implementación completa del algoritmo Ring-AllReduce a nivel de flit en BookSim2 Oráculo con particionamiento en chunks $S_{\text{chunk}} = \lceil \text{size} / P \rceil$, inyección causal escalonada según $\Delta t_{\text{src}}$, causalidad cuádruple en subgrupos aislados (`_grp_X`) y exportación a `packet_tracking_debug.csv` y trazas `.trc`.
 5. **Ausencia de Backpressure sobre la GPU:**
    El simulador asume colas de software de red sin desbordamiento. Los flits son retenidos en BookSim2 en las colas de inyección sin aplicar contrapresión física bloqueante hacia los registros de ejecución de la GPU.
 
@@ -1767,8 +1876,8 @@ Para mantener el máximo rigor científico en esta investigación de Máster, se
 
 ## 7.2. Evaluación de Impacto en la Precisión Científica
 
-Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C**:
-- Se reproduce con total fidelidad la asincronía natural de los clústeres heterogéneos y la dispersión All-to-All desbalanceada.
+Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C** y la **Vía 2**:
+- Se reproduce con total fidelidad la asincronía natural de los clústeres heterogéneos, la dispersión All-to-All desbalanceada y la contención en colectivas Ring-AllReduce de Tensor Parallelism.
 - Se cuantifica empíricamente el beneficio de solapamiento de cómputo en GPUs ligeras que reciben menos tokens.
 - Se capturan las burbujas reales de sincronización (`NETWORK_STALL`) en las barreras colectivas, permitiendo evaluar el coste exacto de la heterogeneidad de cómputo y de tráfico en la red de interconexión.
 - Se mantiene una congruencia temporal perfecta: la suma de Cómputo + Tránsito de Red + Bloqueos Stalls coincide hasta el último decimal de nanosegundo con el Wall-Clock Time de la simulación.
@@ -1783,9 +1892,11 @@ Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C**:
    Implementado en `packets_by_cycle` dentro de `MoEScatter::forward()` y `MoEGather::forward()`.
 3. **[COMPLETADO - Auditoría Forense] Causalidad Física Bidireccional Cuádruple en Oráculo de Red:**
    Implementado en `src/module/communication.cpp` garantizando $\text{rel\_finish}[d] = \max(\delta_t[d], \text{rx\_atime}[d], \text{tx\_inj}[d], \text{tx\_retire}[d])$.
-4. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
+4. **[COMPLETADO - Vía 2] Integración de Ring-AllReduce en el Oráculo BookSim2 con Causalidad Cuádruple y Tensor Parallelism:**
+   Implementado en `AllReduce::forward` (`src/module/communication.cpp`) con aislamiento de grupo `op_key`, transferencia de chunks $2(P-1)S_{\text{chunk}}$ sobre topologías Torus/Mesh, trazabilidad completa de PIDs y soporte CLI con `--tensor_degree` / `--tp`.
+5. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
    Integrar una red de dos niveles en BookSim2: enlaces de ultra-alto ancho de banda ($900\text{ GB/s}$) intra-nodo y enlaces de red de área de sistema ($100\text{ GB/s}$) inter-nodo.
-5. **Modelado de Capacidad Finita de Buffers NIC:**
+6. **Modelado de Capacidad Finita de Buffers NIC:**
    Introducir un límite estricto de paquetes en las colas del host para simular caídas de rendimiento por contrapresión física hacia los hilos de la GPU.
 
 ---
@@ -2028,7 +2139,9 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 
 ### [`src/module/communication.h`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.h) & [`communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp)
 - **Propósito:** Módulos de comunicación de red entre GPUs (`AllReduce`, `MoEScatter`, `MoEGather`, `Sync`).
-- **Punto Crítico de Integración (Bloque C):** Aloja el singleton `BookSimCoSimManager`. En `forward()` de `MoEScatter` y `MoEGather`, GPU 0 calcula los instantes reales de llegada $t_{\text{src}}[s]$ y el desfase de inyección $\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$. Organiza los paquetes en `packets_by_cycle` para inyectarlos en BookSim2 exactamente cuando `cycles == delta_t[src]`. Registra el ciclo de llegada individual del último paquete para cada GPU en `cached_latency_per_gpu[layer_name][dst]`. Cada GPU suma únicamente su latencia neta individual a su reloj local `device_time`. Incorpora guarda de `perform_execution` en `AllReduce::forward()`.
+- **Punto Crítico de Integración (Bloque C y Vía 2):** Aloja el singleton `BookSimCoSimManager`.
+  - En `MoEScatter` y `MoEGather`: GPU 0 calcula los instantes reales de llegada $t_{\text{src}}[s]$ y el desfase de inyección $\Delta t_{\text{src}}[s] = \text{round}(t_{\text{src}}[s] - t_{\min})$. Organiza los paquetes en `packets_by_cycle` para inyectarlos en BookSim2 exactamente cuando `cycles == delta_t[src]`. Aplica la regla de causalidad cuádruple registrando la latencia individual en `cached_latency_per_gpu[layer_name][dst]`.
+  - En `AllReduce`: implementa el algoritmo **Ring-AllReduce cycle-accurate en BookSim2** (`equalize_time = false`), dividiendo el tensor en chunks $S_{\text{chunk}} = \lceil \text{size} / P \rceil$ transmitidos en anillo lógico, gobernado por desfases causales $\Delta t$, causalidad cuádruple y aislamiento de subgrupos `op_key = module_map_name + "_grp_" + device_list[0]`. Gestiona el contador correlativo `allreduce_op_counter` exportado a `packet_tracking_debug.csv` y sella la operación con `BookSim_FinishOperation`. Incorpora guarda de `perform_execution`.
 
 ### [`src/module/test.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/test.cpp)
 - **Propósito:** Pruebas unitarias sobre instanciación de módulos y operaciones del grafo.
@@ -2057,6 +2170,7 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py)
 - **Propósito:** Orquestador principal de experimentos. Automatiza la ejecución del binario compilado, gestiona parámetros CLI, captura salidas en consola y coordina la generación de artefactos (`dia1_exec1.txt`, `packet_tracking_debug.csv`).
 - **Mecanismos Clave:**
+  - Soporte CLI completo para Tensor Parallelism (`--tensor_degree` / `--tp`), inyectando el parámetro en `none_expert_tensor_degree`, validando restricciones topológicas y denominando los directorios de resultados correspondientes.
   - Habilitación por defecto de la instrumentación de paquetes (`SIM_DEBUG_PIDS="1"`), interceptando las líneas `[TRACK_PID]` para generar `packet_tracking_debug.csv` (17 columnas) sin requerir parámetros manuales adicionales.
   - Soporte para bandera `--no_debug_pids` para anular la captura en barridos masivos donde se desee máxima velocidad.
 
@@ -2065,16 +2179,16 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 - **Mecanismos Clave:**
   - Resolución dual robusta del directorio base (`resolve_base_dir()`), operable tanto desde la raíz del TFM como desde `LLMSimulator/`.
   - **Filtro Anti-Appends Temporal Dual:** Detecta caídas en la serie cronológica tanto en `.trc` (`START_NS.diff() < 0`) como en `packet_tracking_debug.csv` (`Op_Start_NS.diff() < 0` o `Creation_Cycle.diff() < -1000`) para aislar con total fidelidad la última iteración canónica.
-  - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
-  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva, centroides macroscópicos con metadatos de topología, canales virtuales y tamaño de lote (`8dev Torus (VCs=4, BS=32)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
+  - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red (`moe_scatter`, `moe_gather`, `all_reduce`) + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
+  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva (incluyendo AllReduce), centroides macroscópicos con metadatos de topología, canales virtuales, tamaño de lote y grado TP (`8dev Torus (VCs=4, BS=32, TP=2)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
 
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
 - **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Reconstruye el ciclo de vida de los paquetes, descompone latencias ($ctime \to itime \to atime$), calcula productividad acumulada y segmenta la visualización por páginas de 50 paquetes en la subcarpeta `gantt/`.
 - **Mecanismos Clave:**
   - **Doble Eje X de Congruencia Temporal:** Muestra ciclos de BookSim2 en el eje inferior y nanosegundos globales del LLM en el eje superior ($Global\_NS = Op\_Start\_NS + (Cycle - Op\_Start\_Cycle)$).
   - Filtro automático de última iteración mediante detección de retroceso temporal en `Op_Start_NS` (anulable con `--all_iters`).
-  - Paginación dinámica en subcarpeta `gantt/` (`--samples 50`, `--max_pages 30`), con sombreado de franjas por operación (`Scatter` vs. `Gather`), líneas divisorias y badges laterales con marcas de tiempo en nanosegundos.
-  - Renderizado de etiquetas enriquecidas por paquete: `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`.
+  - Paginación dinámica en subcarpeta `gantt/` (`--samples 50`, `--max_pages 30`), con sombreado de franjas por operación (`Scatter`, `Gather` y `AllReduce`), líneas divisorias y badges laterales con marcas de tiempo en nanosegundos.
+  - Renderizado de etiquetas enriquecidas por paquete: `S{src}→D{dst} (9 flits / 288B) | Lat.Media: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start:.0f}-{g_end:.0f}`.
 
 ### [`LLMSimulator/plot_cronograma.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_cronograma.py)
 - **Propósito:** Generador de cronogramas causales de alta resolución (Diagramas de Gantt cycle-to-cycle). Reconstruye la ejecución concurrente de todas las GPUs con granularidad de ciclo y nanosegundo, exportando secuencias de imágenes de alta fidelidad en `cycle-to-cycle/timeline_part_*.png`.
@@ -2083,7 +2197,8 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - **Identificación de Operaciones Elementales y Multi-Experto:** Reconstruye la secuencia ordenada de pasos elementales (`(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)`) y desglosa los expertos locales asignados a la GPU, identificando ejecuciones multi-experto secuenciales (`(Exp#0,1: 2x[Gate+SiLU+Up+Down])`) cuando $N_{\text{GPUs}} < E$.
   - **Sub-divisiones Físicas Internas:** Dibuja líneas discontinuas blancas (`alpha=0.6, linestyle='--'`) en las marcas exactas `END_NS` de cada micro-operación interna dentro del macro-bloque verde.
   - **Diagnóstico Cuantitativo de Cuello de Botella:** Calcula el ratio $\sum Mem\_ns / (\sum Comp\_ns + \sum Mem\_ns)$ y despliega en la tercera línea del bloque el veredicto arquitectural (`Mem-Bound XX.X%` vs. `Compute-Bound XX.X%`).
-  - **Enriquecimiento de Red:** Cruza datos con `packet_tracking_debug.csv` mostrando en los bloques azules la capa, PIDs, número de paquetes, latencia media de flits y productividad en flits/ciclo.
+  - **Formateo Adaptativo Anti-Overflow y Recorte Seguro:** Clasifica los bloques en 3 niveles de renderizado según su duración visible $\Delta t$: omisión total bajo $800\text{ ns}$ o $\text{rel\_w} < 0.015$, formato ultracompacto de 1 línea para bloques estrechos ($800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$, ej. `AR Nº{k} (1.2us)`), formato compacto de 2 líneas para bloques medianos ($2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$), y formato completo de 3 líneas para bloques anchos ($\ge 6{,}000\text{ ns}$). Enlaza cada texto con `txt.set_clip_path(rect)` impidiendo cualquier invasión a bloques vecinos, y amplía el margen vertical para evitar superposición de la leyenda sobre la GPU 7.
+  - **Enriquecimiento de Red Colectiva:** Cruza datos con `packet_tracking_debug.csv` mostrando en los bloques de red (azules para MoE y púrpura `#8e44ad` para AllReduce) la capa, PIDs, número de paquetes, latencia media de flits (`Lat.Media:`) y productividad en flits/ciclo.
   - **Coalescencia Causal Global:** Procesa toda la traza de cada GPU de forma previa a la partición en ventanas para garantizar que las operaciones que cruzan fronteras de visualización mantengan íntegro su contexto analítico.
 
 ---

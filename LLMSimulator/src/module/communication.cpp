@@ -28,6 +28,7 @@ public:
     static bool initialized;
     static int scatter_op_counter;
     static int gather_op_counter;
+    static int allreduce_op_counter;
     static double last_device_time;
 
     static void Init() {
@@ -38,6 +39,7 @@ public:
             total_received = 0;
             scatter_op_counter = 0;
             gather_op_counter = 0;
+            allreduce_op_counter = 0;
             last_device_time = -1.0;
         }
     }
@@ -51,6 +53,7 @@ int BookSimCoSimManager::total_received = 0;
 bool BookSimCoSimManager::initialized = false;
 int BookSimCoSimManager::scatter_op_counter = 0;
 int BookSimCoSimManager::gather_op_counter = 0;
+int BookSimCoSimManager::allreduce_op_counter = 0;
 double BookSimCoSimManager::last_device_time = -1.0;
 // --- FIN CÓDIGO TFM ---
 
@@ -59,6 +62,7 @@ namespace llm_system {
 AllReduce::AllReduce(std::string& prefix, std::string& name,
                      std::vector<int> device_list, Device::Ptr device)
     : Module(prefix, name, device, device_list, true, true) { 
+  equalize_time = false;
   std::vector<int> shape = {1, 1};
   Tensor::Ptr output = Tensor::Create("allreduce_output", shape, "act", device, device->model_config.precision_byte);
   add_tensor(output);
@@ -76,34 +80,188 @@ Tensor::Ptr AllReduce::forward(const Tensor::Ptr input,
     return output;
   }
 
-  int hop = (device_list.size() - 1) * 2;
-  size /= device_list.size();
+  int P = device_list.size();
+  if (P <= 1) {
+    return output;
+  }
 
-  time_ns one_hop =
-      device->config.device_ict_latency +
-      size / device->config.device_ict_bandwidth * 1000 * 1000 * 1000;
+  BookSimCoSimManager::Init();
 
-  time_ns total_time = one_hop * hop;
+  int total_num_device = device->config.num_device * device->config.num_node;
+  std::string op_key = this->module_map_name + "_grp_" + std::to_string(device_list[0]);
+  double network_latency_ns = 0.0;
 
-  time_ns start_time = device->status.device_time;
+  // --- INICIO CÓDIGO TFM: ORÁCULO RING-ALLREDUCE ---
+  if (BookSimCoSimManager::calls_per_module[op_key] == 0) {
+    // 1. Recolectar tiempos reales t_src de las GPUs participantes en el anillo
+    std::map<int, double> t_src;
+    double t_min = -1.0;
+    for (int d : device_list) {
+      double t_d = device->cluster->get_device(d)->get_time();
+      t_src[d] = t_d;
+      if (t_min < 0.0 || t_d < t_min) {
+        t_min = t_d;
+      }
+    }
+    if (t_min < 0.0) t_min = 0.0;
 
-  if (input->parallel_execution && !device->config.communication_hiding) {
-    if (input->isPerformHigh()) {
-      device->status.high_time += total_time;
-    } else {
-      device->status.low_time += total_time;
+    if (BookSimCoSimManager::last_device_time >= 0 && t_min < BookSimCoSimManager::last_device_time) {
+      BookSimCoSimManager::scatter_op_counter = 0;
+      BookSimCoSimManager::gather_op_counter = 0;
+      BookSimCoSimManager::allreduce_op_counter = 0;
+    }
+    BookSimCoSimManager::last_device_time = t_min;
+    BookSimCoSimManager::allreduce_op_counter++;
+
+    // 2. Calcular desfases de inyección delta_t[d] en ciclos NoC (1 ciclo = 1 ns)
+    std::map<int, int> delta_t;
+    for (int d : device_list) {
+      int dt = (int)std::round(t_src[d] - t_min);
+      if (dt < 0) dt = 0;
+      delta_t[d] = dt;
+    }
+
+    BookSim_StartOperation("AllReduce", BookSimCoSimManager::allreduce_op_counter, t_min);
+
+    int MTU = 256;          // bytes
+    int HEADER_SIZE = 24;   // bytes
+    int FLIT_SIZE = 32;     // bytes (paquetes de 9 flits)
+
+    std::map<int, std::vector<PendingPacket>> packets_by_cycle;
+    int total_packets_to_inject = 0;
+
+    // Cada GPU divide el tensor en P chunks de tamaño ceil(size / P) bytes
+    long chunk_bytes = (size + P - 1) / P;
+    // Ring-AllReduce: (P - 1) fases Reduce-Scatter + (P - 1) fases All-Gather = 2*(P - 1) transferencias
+    long total_bytes_per_gpu = (long)(2 * (P - 1)) * chunk_bytes;
+    int num_packets_per_gpu = (total_bytes_per_gpu + MTU - 1) / MTU;
+
+    for (int i = 0; i < P; i++) {
+      int src = device_list[i];
+      int dst = device_list[(i + 1) % P];
+
+      for (int p = 0; p < num_packets_per_gpu; p++) {
+        long payload = (p == num_packets_per_gpu - 1) ? (total_bytes_per_gpu % MTU) : MTU;
+        if (payload == 0) payload = MTU;
+        int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
+
+        packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
+        total_packets_to_inject++;
+      }
+    }
+
+    if (BookSimCoSimManager::allreduce_op_counter <= 5) {
+      std::cout << "[COSIM_ORACLE] AllReduce #" << BookSimCoSimManager::allreduce_op_counter
+                << " (" << op_key << ") t_min=" << t_min << " ns, Ring-P=" << P
+                << ", Bytes=" << total_bytes_per_gpu << ", Pkts=" << total_packets_to_inject
+                << ", t_src=[";
+      for (size_t s = 0; s < device_list.size(); s++) {
+        int d = device_list[s];
+        std::cout << "G" << d << ":" << t_src[d] << (s == device_list.size() - 1 ? "" : ", ");
+      }
+      std::cout << "]" << std::endl;
+    }
+
+    // 3. Simulación de red ciclo a ciclo en BookSim2
+    int cycles = 0;
+    int total_injected = 0;
+    int total_received = 0;
+    std::map<int, int> max_relative_rx_atime;
+    std::map<int, int> max_relative_tx_inj;
+    std::map<int, int> max_relative_tx_retire;
+
+    for (int d : device_list) {
+      max_relative_rx_atime[d] = delta_t[d];
+      max_relative_tx_inj[d] = delta_t[d];
+      max_relative_tx_retire[d] = delta_t[d];
+    }
+
+    BookSimPacketInfo pkt_info;
+    while (total_received < total_packets_to_inject || total_injected < total_packets_to_inject) {
+      auto it = packets_by_cycle.find(cycles);
+      if (it != packets_by_cycle.end()) {
+        for (const auto& pkt : it->second) {
+          BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
+          total_injected++;
+          if (cycles > max_relative_tx_inj[pkt.src]) {
+            max_relative_tx_inj[pkt.src] = cycles;
+          }
+        }
+      }
+
+      BookSim_AdvanceCycle();
+      cycles++;
+
+      while (BookSim_CheckReceived(pkt_info)) {
+        total_received++;
+        int rel_atime = cycles;
+        if (rel_atime > max_relative_rx_atime[pkt_info.dst]) {
+          max_relative_rx_atime[pkt_info.dst] = rel_atime;
+        }
+        if (rel_atime > max_relative_tx_retire[pkt_info.src]) {
+          max_relative_tx_retire[pkt_info.src] = rel_atime;
+        }
+      }
+
+      if (cycles > 10000000) {
+        std::cerr << "[WARNING] BookSim2 AllReduce exceeded 10M cycles. Breaking." << std::endl;
+        break;
+      }
+    }
+
+    double op_latency_ns = cycles * 1.0;
+    BookSimCoSimManager::cached_latency[op_key] = op_latency_ns;
+
+    double op_end_ns = t_min + op_latency_ns;
+    BookSim_FinishOperation(op_end_ns);
+
+    // 4. Regla de Causalidad Cuádruple TX/RX por GPU:
+    for (int d : device_list) {
+      int rel_finish = delta_t[d];
+      if (max_relative_rx_atime[d] > rel_finish) rel_finish = max_relative_rx_atime[d];
+      if (max_relative_tx_inj[d] > rel_finish) rel_finish = max_relative_tx_inj[d];
+      if (max_relative_tx_retire[d] > rel_finish) rel_finish = max_relative_tx_retire[d];
+
+      double t_end_d = t_min + (double)rel_finish;
+      double lat = t_end_d - t_src[d];
+      if (lat < 0.0) lat = 0.0;
+      BookSimCoSimManager::cached_latency_per_gpu[op_key][d] = lat;
     }
   }
-  device->status.device_time += total_time;
+
+  // 5. Cada GPU lee su latencia individualizada asignada
+  int my_rank = device->device_total_rank;
+  network_latency_ns = BookSimCoSimManager::cached_latency_per_gpu[op_key][my_rank];
+
+  // Aplicar latencia al reloj y registrar evento de red en el logger .trc
+  if (input->parallel_execution && !device->config.communication_hiding) {
+    if (input->isPerformHigh()) {
+      device->status.high_time += network_latency_ns;
+    } else {
+      device->status.low_time += network_latency_ns;
+    }
+  }
+  time_ns start_time = device->status.device_time;
+  device->status.device_time += network_latency_ns;
   time_ns end_time = device->status.device_time;
 
-  if (total_time > 0) {
-    std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(total_time);
+  if (network_latency_ns > 0) {
+    std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
     device->log_tfm_event(start_time, end_time, this->name, details);
   }
 
-  return output;
+  // 6. Gestionar el ciclo de vida del Oráculo para este grupo
+  BookSimCoSimManager::calls_per_module[op_key]++;
+  if (BookSimCoSimManager::calls_per_module[op_key] == (int)device_list.size()) {
+    BookSimCoSimManager::calls_per_module[op_key] = 0;
+    BookSimCoSimManager::cached_latency.erase(op_key);
+    BookSimCoSimManager::cached_latency_per_gpu.erase(op_key);
+    BookSimCoSimManager::total_injected = 0;
+    BookSimCoSimManager::total_received = 0;
+  }
+  // --- FIN CÓDIGO TFM ---
 
+  return output;
 }
 
 AllGather::AllGather(std::string& prefix, std::string& name,
@@ -178,6 +336,7 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       if (BookSimCoSimManager::last_device_time >= 0 && t_min < BookSimCoSimManager::last_device_time) {
           BookSimCoSimManager::scatter_op_counter = 0;
           BookSimCoSimManager::gather_op_counter = 0;
+          BookSimCoSimManager::allreduce_op_counter = 0;
       }
       BookSimCoSimManager::last_device_time = t_min;
       BookSimCoSimManager::scatter_op_counter++;
@@ -383,6 +542,7 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       if (BookSimCoSimManager::last_device_time >= 0 && t_min < BookSimCoSimManager::last_device_time) {
           BookSimCoSimManager::scatter_op_counter = 0;
           BookSimCoSimManager::gather_op_counter = 0;
+          BookSimCoSimManager::allreduce_op_counter = 0;
       }
       BookSimCoSimManager::last_device_time = t_min;
       BookSimCoSimManager::gather_op_counter++;

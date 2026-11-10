@@ -120,12 +120,12 @@ def parse_trc_file(file):
         d = row['DETAILS'].lower()
         op = t + " " + d
 
-        if "scatter" in op:
+        if "all_reduce" in op or "allreduce" in op:
+            return "#8e44ad", "AllReduce", "AllReduce", "AllReduce", None
+        elif "scatter" in op:
             return "#1f77b4", "Scatter", "Scatter", "Scatter", None
         elif "gather" in op:
             return "#1f77b4", "Gather", "Gather", "Gather", None
-        elif "all_reduce" in op:
-            return "#17becf", "AllRed", "AllRed", "AllRed", None
         elif "stall" in op:
             return "#d62728", "Stall", "Stall", "Stall", None
 
@@ -238,6 +238,16 @@ def parse_trc_file(file):
 
     return blocks
 
+def draw_clipped_text(ax, rect, x, y, text, **kwargs):
+    """
+    Dibuja texto con recorte estricto dentro del bounding box del rectángulo (rect),
+    evitando totalmente cualquier desbordamiento o invasión de bloques vecinos.
+    """
+    kwargs.setdefault('clip_on', True)
+    txt = ax.text(x, y, text, **kwargs)
+    txt.set_clip_path(rect)
+    return txt
+
 def generate_window_plot(all_blocks, start_ns, end_ns, window_idx, output_dir, network_ops=None):
     # Filtrar macro-bloques que se solapan con la ventana temporal actual
     blocks_window = [b for b in all_blocks if b['START_NS'] < end_ns and b['END_NS'] > start_ns]
@@ -272,57 +282,110 @@ def generate_window_plot(all_blocks, start_ns, end_ns, window_idx, output_dir, n
                 ax.vlines(x=div_x, ymin=gpu - 0.38, ymax=gpu + 0.38, 
                           color='white', linestyle='--', linewidth=0.75, alpha=0.6)
 
-        # 3. Renderizado de texto adaptativo multilínea
-        if rel_w > 0.025:
-            x_center = dibujo_start + (dibujo_dur / 2.0)
-            if label == 'Calc':
-                if dibujo_dur >= 2500 and rel_w > 0.12:
-                    ax.text(x_center, gpu + 0.22, f'Layer {layer} | Calc: {macro_op}', 
-                            ha='center', va='center', color='white', fontsize=8.2)
-                    ax.text(x_center, gpu + 0.01, b['SEQ_STR'], 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.6)
-                    ax.text(x_center, gpu - 0.20, b['LINE3'], 
-                            ha='center', va='center', color='#ffd180', fontsize=7.2)
-                elif dibujo_dur >= 1500 and rel_w > 0.05:
-                    ax.text(x_center, gpu + 0.13, f'Layer {layer} | Calc: {macro_op}', 
-                            ha='center', va='center', color='white', fontsize=7.8)
-                    ax.text(x_center, gpu - 0.14, b['LINE3'], 
-                            ha='center', va='center', color='#ffd180', fontsize=7.2)
-                elif rel_w > 0.03:
-                    ax.text(x_center, gpu, f'L{layer} | {macro_op}', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.5)
-            elif label in ['Scatter', 'Gather']:
+        # 3. Renderizado de texto adaptativo multilínea y seguro (Anti-Overflow)
+        delta_t = dibujo_dur  # Ancho temporal visible dentro de la ventana actual
+        if delta_t < 800 or rel_w < 0.015:
+            continue
+
+        x_center = dibujo_start + (dibujo_dur / 2.0)
+        dur_str = f"{b['DURATION']/1000.0:.1f}us" if b['DURATION'] >= 1000.0 else f"{b['DURATION']:.0f}ns"
+
+        # a) Tier 1: Bloques muy estrechos (800 ns <= delta_t < 2000 ns) -> 1 sola línea centrada
+        if delta_t < 2000:
+            if label in ['AllReduce', 'AllRed']:
                 net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
-                if net_op and dibujo_dur >= 2000 and rel_w > 0.08:
-                    ax.text(x_center, gpu + 0.22, f'Layer {layer} | {net_op["type"]} Nº{net_op["idx"]}', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=8.2)
-                    ax.text(x_center, gpu + 0.01, f'PIDs {net_op["min_pid"]}-{net_op["max_pid"]} ({net_op["total_pkts"]} pkts)', 
-                            ha='center', va='center', color='#e0f3ff', fontsize=7.2)
-                    ax.text(x_center, gpu - 0.20, f'Lat.Mitja: {net_op["avg_flit_lat"]:.1f}c | Prod: {net_op["throughput"]:.2f} flits/c', 
-                            ha='center', va='center', color='#ffd180', fontsize=7.2)
-                elif net_op and dibujo_dur >= 1500 and rel_w > 0.05:
-                    ax.text(x_center, gpu + 0.13, f'Layer {layer} | {net_op["type"]} Nº{net_op["idx"]} ({net_op["total_pkts"]} pkts)', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.8)
-                    ax.text(x_center, gpu - 0.14, f'Lat: {net_op["avg_flit_lat"]:.1f}c | Prod: {net_op["throughput"]:.2f} f/c', 
-                            ha='center', va='center', color='#ffd180', fontsize=7.0)
-                elif net_op and dibujo_dur >= 800 and rel_w > 0.03:
-                    ax.text(x_center, gpu, f'L{layer} | {net_op["type"]}', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.5)
-                elif dibujo_dur >= 800 and rel_w > 0.03:
-                    ax.text(x_center, gpu, f'L{layer} | {label}', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.5)
-            elif label == 'Stall':
-                if rel_w > 0.06:
-                    ax.text(x_center, gpu + 0.12, f'Layer {layer} | Stall', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.8)
-                    ax.text(x_center, gpu - 0.14, f'Dur: {b["DURATION"]:.0f}ns', 
-                            ha='center', va='center', color='#ffcdd2', fontsize=7.0)
+                if net_op:
+                    txt = f'AR Nº{net_op["idx"]} ({dur_str})' if (delta_t >= 1400 and rel_w >= 0.05) else f'AR Nº{net_op["idx"]}'
                 else:
-                    ax.text(x_center, gpu, 'Stall', 
-                            ha='center', va='center', color='white', fontweight='bold', fontsize=7.5)
+                    txt = f'AR ({dur_str})' if delta_t >= 1400 else 'AR'
+                draw_clipped_text(ax, rect, x_center, gpu, txt, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
+            elif label == 'Scatter':
+                net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
+                txt = f'Scatter Nº{net_op["idx"]}' if (net_op and delta_t >= 1400) else 'Scatter'
+                draw_clipped_text(ax, rect, x_center, gpu, txt, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
+            elif label == 'Gather':
+                net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
+                txt = f'Gather Nº{net_op["idx"]}' if (net_op and delta_t >= 1400) else 'Gather'
+                draw_clipped_text(ax, rect, x_center, gpu, txt, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
+            elif label == 'Stall':
+                txt = f'Stall ({dur_str})' if delta_t >= 1400 else 'Stall'
+                draw_clipped_text(ax, rect, x_center, gpu, txt, 
+                                  ha='center', va='center', color='#ffcdd2', fontweight='bold', fontsize=6.5)
+            elif label == 'Calc':
+                txt = f'L{layer} | {macro_op}' if delta_t >= 1400 else f'{macro_op}'
+                draw_clipped_text(ax, rect, x_center, gpu, txt, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=6.5)
+
+        # b) Tier 2: Bloques medianos (2000 ns <= delta_t < 6000 ns) -> Máximo 2 líneas (fontsize reducido)
+        elif delta_t < 6000:
+            if label == 'Calc':
+                line1 = f'Layer {layer} | Calc: {macro_op}'
+                draw_clipped_text(ax, rect, x_center, gpu + 0.13, line1, 
+                                  ha='center', va='center', color='white', fontsize=6.8)
+                draw_clipped_text(ax, rect, x_center, gpu - 0.14, b['LINE3'], 
+                                  ha='center', va='center', color='#ffd180', fontsize=6.2)
+            elif label in ['Scatter', 'Gather', 'AllReduce', 'AllRed']:
+                net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
+                if net_op:
+                    line1 = f'Layer {layer} | {net_op["type"]} Nº{net_op["idx"]} ({net_op["total_pkts"]} pkts)'
+                    line2 = f'Lat.Media: {net_op["avg_flit_lat"]:.1f}c | Prod: {net_op["throughput"]:.2f} f/c'
+                else:
+                    line1 = f'Layer {layer} | {label}'
+                    line2 = f'Dur: {dur_str}'
+                draw_clipped_text(ax, rect, x_center, gpu + 0.13, line1, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=6.8)
+                draw_clipped_text(ax, rect, x_center, gpu - 0.14, line2, 
+                                  ha='center', va='center', color='#ffd180', fontsize=6.2)
+            elif label == 'Stall':
+                line1 = f'Layer {layer} | Stall'
+                line2 = f'Dur: {dur_str}'
+                draw_clipped_text(ax, rect, x_center, gpu + 0.13, line1, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=6.8)
+                draw_clipped_text(ax, rect, x_center, gpu - 0.14, line2, 
+                                  ha='center', va='center', color='#ffcdd2', fontsize=6.2)
+
+        # c) Tier 3: Bloques anchos (delta_t >= 6000 ns) -> Formato completo de 3 líneas
+        else:
+            if label == 'Calc':
+                line1 = f'Layer {layer} | Calc: {macro_op}'
+                draw_clipped_text(ax, rect, x_center, gpu + 0.22, line1, 
+                                  ha='center', va='center', color='white', fontsize=8.0)
+                draw_clipped_text(ax, rect, x_center, gpu + 0.01, b['SEQ_STR'], 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=7.2)
+                draw_clipped_text(ax, rect, x_center, gpu - 0.20, b['LINE3'], 
+                                  ha='center', va='center', color='#ffd180', fontsize=6.8)
+            elif label in ['Scatter', 'Gather', 'AllReduce', 'AllRed']:
+                net_op = match_network_op(label, b['START_NS'], b['END_NS'], network_ops)
+                if net_op:
+                    line1 = f'Layer {layer} | {net_op["type"]} Nº{net_op["idx"]}'
+                    line2 = f'PIDs {net_op["min_pid"]}-{net_op["max_pid"]} ({net_op["total_pkts"]} pkts)'
+                    line3 = f'Lat.Media: {net_op["avg_flit_lat"]:.1f}c | Prod: {net_op["throughput"]:.2f} flits/c'
+                    draw_clipped_text(ax, rect, x_center, gpu + 0.22, line1, 
+                                      ha='center', va='center', color='white', fontweight='bold', fontsize=8.0)
+                    draw_clipped_text(ax, rect, x_center, gpu + 0.01, line2, 
+                                      ha='center', va='center', color='#e0f3ff', fontsize=7.0)
+                    draw_clipped_text(ax, rect, x_center, gpu - 0.20, line3, 
+                                      ha='center', va='center', color='#ffd180', fontsize=6.8)
+                else:
+                    line1 = f'Layer {layer} | {label}'
+                    line2 = f'Dur: {dur_str}'
+                    draw_clipped_text(ax, rect, x_center, gpu + 0.13, line1, 
+                                      ha='center', va='center', color='white', fontweight='bold', fontsize=7.8)
+                    draw_clipped_text(ax, rect, x_center, gpu - 0.14, line2, 
+                                      ha='center', va='center', color='#ffd180', fontsize=7.0)
+            elif label == 'Stall':
+                line1 = f'Layer {layer} | Stall'
+                line2 = f'Dur: {dur_str}'
+                draw_clipped_text(ax, rect, x_center, gpu + 0.13, line1, 
+                                  ha='center', va='center', color='white', fontweight='bold', fontsize=7.8)
+                draw_clipped_text(ax, rect, x_center, gpu - 0.14, line2, 
+                                  ha='center', va='center', color='#ffcdd2', fontsize=7.0)
 
     ax.set_xlim(start_ns, end_ns)
-    ax.set_ylim(-1, num_gpus)
+    ax.set_ylim(-0.7, num_gpus + 1.1)
     ax.set_yticks(range(num_gpus))
     ax.set_yticklabels([f'GPU {i}' for i in range(num_gpus)], fontweight='bold')
     ax.set_xlabel('Tiempo Global (Nanosegundos)', fontsize=12, fontweight='bold')
@@ -330,7 +393,8 @@ def generate_window_plot(all_blocks, start_ns, end_ns, window_idx, output_dir, n
     
     legend_elements = [
         Line2D([0], [0], color='#2ca02c', lw=6, label='Cómputo (Calc: Layer {L} | Attention, ExpertFFN...)'),
-        Line2D([0], [0], color='#1f77b4', lw=6, label='Red (Layer {L} | Scatter/Gather con PIDs y Flit Metrics)'),
+        Line2D([0], [0], color='#1f77b4', lw=6, label='Red Colectiva MoE (Scatter / Gather)'),
+        Line2D([0], [0], color='#8e44ad', lw=6, label='Red Tensor Parallelism (AllReduce)'),
         Line2D([0], [0], color='#d62728', lw=6, label='Bloqueo (Layer {L} | NETWORK_STALL)')
     ]
     ax.legend(handles=legend_elements, loc='upper right', framealpha=0.9)

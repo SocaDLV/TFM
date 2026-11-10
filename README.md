@@ -29,6 +29,10 @@ BookSim2 models:
 
 * **Compute Engine (LLMSimulator):** Accurately models modern transformer building blocks, Grouped Query Attention (GQA), SwiGLU activations, and MoE routing on state-of-the-art accelerators (e.g., Nvidia B100).
 * **Network Engine (BookSim2):** Simulates flit-level packet traversal through routers, crossbars, and physical links.
+* **Cycle-Accurate Tensor Parallelism (AllReduce) in BookSim2 (Vía 2):**
+  * Models Ring-AllReduce collective communication at flit-level granularity when `tensor_degree > 1` (`none_expert_tensor_degree`).
+  * Decomposes input activation tensors ($S_{\text{chunk}} = \lceil \text{size} / P \rceil$) across $P$ GPUs, transferring $2(P-1)S_{\text{chunk}}$ bytes per device through $P-1$ Reduce-Scatter and $P-1$ All-Gather logical ring hops.
+  * Governed by asynchronous quadruple causality ($\Delta t$, RX arrival, TX injection, TX retirement) and sub-group isolated latency caching without artificial pre-network clock flattening (`equalize_time = false`).
 * **Flit-Level Packet Lifecycle & Network Throughput Tracking (Default Enabled):**
   * High-precision temporal tracking of every retired packet (active by default, bypass with `--no_debug_pids`):
     * **`Creation_Cycle` ($ctime$):** Cycle at which the MoE communication layer generates the packet burst.
@@ -120,6 +124,7 @@ python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch
 | :--- | :--- | :--- | :--- |
 | `--model` | `str` | `mixtral` | Target LLM architecture (`mixtral`, `llama`). |
 | `--batch_size` | `int` | `32` | Maximum concurrent batch size for continuous batching. |
+| `--tensor_degree` / `--tp` | `int` | `1` | Tensor Parallelism degree for non-expert layers (Attention/linear projections). When $> 1$, Ring-AllReduce is simulated cycle-accurately in BookSim2. |
 | `--input_len` | `int` | `1024` | Prompt length (prefill tokens). |
 | `--output_len` | `int` | `10` | Tokens to generate per iteration (drives sustained MoE traffic). |
 | `--iter` | `int` | `5` | Number of statistical iterations. |
@@ -154,12 +159,12 @@ python3 analyze_traces.py --recent 3 --semilog
 ```
 
 **Generated Visualizations (saved in `build/analysis/analisis_<timestamp>/`):**
-* **`anatomia_latencia.png`:** A stacked bar chart breaking down total execution time into GPU Compute, Network Transit (`moe_scatter`/`moe_gather`), and Synchronization Stalls (`NETWORK_STALL`).
+* **`anatomia_latencia.png`:** A stacked bar chart breaking down total execution time into GPU Compute, Network Transit (`moe_scatter`/`moe_gather`/`all_reduce`), and Synchronization Stalls (`NETWORK_STALL`).
 * **`desglose_primitivas_moe.png`:** A direct comparative bar chart contrasting the network latency of `moe_scatter` versus `moe_gather`.
 * **`curva_saturacion_red.png`:** The fundamental Network-on-Chip (NoC) saturation curve (Mean Network Latency vs. Real Injected Offered Load $\lambda$ in flits/cycle/node). Features:
   * **Real Injected Load ($\lambda$, X-Axis):** Measured in flits/cycle/node as $\lambda = \frac{\text{Total Flits}}{N_{\text{GPUs}} \times \Delta\text{Cycles}_{\text{collective}}}$.
   * **Network Latency (Y-Axis):** Cycle-accurate `Avg_Flit_Latency` in BookSim2 cycles, with auto-detection of semilogarithmic scaling for wide latency dispersion.
-  * **Dual-Level Visualization:** Displays per-layer collective dispersion clouds (light markers) alongside prominent macro-operating points labeled with topology, Virtual Channels (VCs), and batch size (`8dev Torus (VCs=4, BS=32)`).
+  * **Dual-Level Visualization:** Displays per-layer collective dispersion clouds (light markers) alongside prominent macro-operating points labeled with topology, Virtual Channels (VCs), batch size, and Tensor Parallelism degree (e.g. `8dev Torus (VCs=4, BS=32, TP=2)`).
   * **Robust Fallback:** Safely omits the saturation curve if historical result folders lack `packet_tracking_debug.csv` without interrupting latency breakdowns.
 
 ---
@@ -194,11 +199,11 @@ python3 plot_packet_tracking.py build/results/<simulation_folder>/ --all_iters
   * 🟦 **NoC Flight Time:** Time spent actively traversing network routers and channels ($atime - itime$). Reflects physical link contention and buffer arbitrations.
 * **Enriched Flit-Level Metric Labels:**
   * Every bar displays routing, wire size, average flit latency, cumulative network productivity, and global LLM nanosecond timestamps:
-    `S{src}→D{dst} (9 flits / 288B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start}-{g_end}`
+    `S{src}→D{dst} (9 flits / 288B) | Lat.Media: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start}-{g_end}`
 * **Network Operation Shading & Badges:**
-  * Alternating soft background bands (`ax.axhspan`) differentiate consecutive operations (light blue for `Scatter`, light purple for `Gather`).
+  * Alternating soft background bands (`ax.axhspan`) differentiate consecutive operations (light blue for `Scatter`, light purple for `Gather`, soft lavender `#ede7f6` for `AllReduce`).
   * Dashed dividing lines separate distinct operations cleanly.
-  * Operation badges positioned on the right-hand margin identify the collective operation and absolute GPU timeline window: e.g. `Scatter Nº1 \n NS 6362 - 10547`.
+  * Operation badges positioned on the right-hand margin identify the collective operation and absolute GPU timeline window: e.g. `Scatter Nº1 \n NS 6362 - 10547` or `AllReduce Nº1 \n NS 3730 - 4895`.
 * **Three Congestion Landmarks:**
   * **`gantt_1_fase_libre.png` (Free Phase):** Initial packets traversing an uncongested network (zero queueing, minimal flight latency).
   * **`gantt_2_congestion_media.png` (Moderate Congestion):** Window centered around the first packets exceeding 1,500 clock cycles, showing the characteristic staircase pattern of queue buildup.
@@ -233,10 +238,19 @@ python3 plot_cronograma.py build/results/<simulation_folder>/ --window 100000
 * **Enriched Network Blocks with Layer & Flit Metrics:**
   * Blue network blocks (`Scatter` and `Gather`) display `Layer {L} | Scatter Nº{k}` and automatically correlate with `packet_tracking_debug.csv` (isolating the final iteration), detailing:
     * PID range and total packets transferred (e.g. `PIDs 0-895 (896 pkts)`).
-    * Cumulative operation network metrics: `Lat.Mitja: 1631.2c | Prod: 2.05 flits/c`.
+    * Cumulative operation network metrics: `Lat.Media: 1631.2c | Prod: 2.05 flits/c`.
+* **Adaptive Block Duration Formatting & Anti-Overflow Protection:**
+  * Automatically calculates the visible temporal width $\Delta t = \text{end\_ns} - \text{start\_ns}$ for each block:
+    * **$\Delta t < 800\text{ ns}$:** Text is omitted entirely to prevent visual clutter in narrow residual transitions or micro-stalls.
+    * **$800\text{ ns} \le \Delta t < 2{,}000\text{ ns}$ (Ultra-Compact 1-Line):** Displays a concise centered label (e.g., `AR Nº{k} (1.2us)` or `AR`, `Stall`, `L{L} | {Op}`) at `fontsize=6.5`.
+    * **$2{,}000\text{ ns} \le \Delta t < 6{,}000\text{ ns}$ (Compact 2-Line):** Renders up to two compact lines (`fontsize=6.8/6.2`) balancing operation metadata without crowding.
+    * **$\Delta t \ge 6{,}000\text{ ns}$ (Full 3-Line):** Displays complete header, ordered sequence, and micro-architectural diagnostics.
+  * **Strict Bounding-Box Clipping (`set_clip_path(rect)`):** Every text label is hard-clipped to its parent rectangle patch (`clip_on=True`), mathematically guaranteeing zero text spill into adjacent blocks.
+  * **Top-Margin Legend Padding:** Dynamically expands the upper axis limit to keep the global legend completely above GPU 7 without obscuring execution blocks.
 * **Semantic Color Coding:**
   * 🟩 **Green (Calc / Operation):** Productive GPU compute (`POP_OPERATION`).
-  * 🟦 **Blue (Scatter / Gather):** Network communication serviced by BookSim2.
+  * 🟦 **Blue (Scatter / Gather):** MoE Collective network communication serviced by BookSim2.
+  * 🟪 **Purple (AllReduce, `#8e44ad`):** Tensor Parallelism Ring-AllReduce network communication serviced by BookSim2.
   * 🟥 **Red (Stall):** Idle GPU time waiting at a global synchronization barrier due to imbalance (`NETWORK_STALL`).
 * **Anti-Appends Filter & Global Coalescing:**
   * Trace coalescing is executed globally per GPU prior to windowing, ensuring seamless continuity across 10,000 ns window cuts. Automatically purges stale trace entries if `.trc` files contain concatenated runs.

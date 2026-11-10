@@ -10,7 +10,7 @@ def render_gantt_page(df_page, title, output_png, is_summary=False):
     Renderiza un diagrama de Gantt de alta resolución para un lote de paquetes (típicamente 50).
     Incluye:
       - Desglose dual: Cola NIC (naranja) y Tránsito en Red (azul).
-      - Etiqueta enriquecida: S{src}→D{dst} (flits/B) | Lat.Mitja: {avg_lat}c | Prod: {prod} flits/c.
+      - Etiqueta enriquecida: S{src}→D{dst} (flits/B) | Lat.Media: {avg_lat}c | Prod: {prod} flits/c.
       - Bandas de fondo coloreadas (axhspan) por Operación de Red (Scatter / Gather).
       - Línea divisoria entre operaciones consecutivas.
       - Badge destacado a la derecha con el nombre de la operación y rango de nanosegundos.
@@ -61,9 +61,20 @@ def render_gantt_page(df_page, title, output_png, is_summary=False):
         op_end_ns = float(sub.iloc[0]['Op_End_NS']) if 'Op_End_NS' in sub.columns else 0.0
 
         is_scatter = "scatter" in op_type.lower()
-        bg_color = scatter_color if is_scatter else gather_color
-        badge_bg = '#bbdefb' if is_scatter else '#e1bee7'
-        badge_edge = '#1976d2' if is_scatter else '#8e24aa'
+        is_allreduce = "allreduce" in op_type.lower() or "all_reduce" in op_type.lower()
+
+        if is_scatter:
+            bg_color = scatter_color
+            badge_bg = '#bbdefb'
+            badge_edge = '#1976d2'
+        elif is_allreduce:
+            bg_color = '#ede7f6'  # Magenta/Púrpura suave
+            badge_bg = '#d1c4e9'
+            badge_edge = '#6a1b9a'
+        else:
+            bg_color = gather_color
+            badge_bg = '#e1bee7'
+            badge_edge = '#8e24aa'
 
         # Sombrear fondo de la zona
         ax.axhspan(y_bottom, y_top, facecolor=bg_color, alpha=0.45, zorder=0)
@@ -107,7 +118,7 @@ def render_gantt_page(df_page, title, output_png, is_summary=False):
         g_start_ns = op_start_ns + (row['Inject_Cycle'] - c_cycle)
         g_end_ns = op_start_ns + (row['Receive_Cycle'] - c_cycle)
 
-        label_txt = f"S{src}→D{dst} ({flits} flits / {bytes_val}B) | Lat.Mitja: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start_ns:.0f}-{g_end_ns:.0f}"
+        label_txt = f"S{src}→D{dst} ({flits} flits / {bytes_val}B) | Lat.Media: {avg_flit_lat:.1f}c | Prod: {prod:.3f} flits/c | NS: {g_start_ns:.0f}-{g_end_ns:.0f}"
         ax.text(x_val, y_val, label_txt, va='center', ha='left', fontsize=7.8, color='#111111', zorder=4)
 
     # Configuración de Ejes y Estética

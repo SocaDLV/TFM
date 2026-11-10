@@ -248,26 +248,35 @@ def extract_network_stats(folder_path, folder_name, num_gpus):
         except Exception:
             pass
 
-    # Batch size desde config.yaml o nombre de carpeta
+    # Batch size y Tensor Parallelism desde config.yaml o nombre de carpeta
     config_yaml = os.path.join(folder_path, "config.yaml")
+    tp = 1
     if os.path.exists(config_yaml):
         try:
             with open(config_yaml, 'r') as fp:
                 for line in fp:
                     if "max_batch_size:" in line:
                         bs = line.split(":")[1].strip()
-                        break
+                    elif "none_expert_tensor_degree:" in line:
+                        tp_str = line.split(":")[1].strip()
+                        if tp_str.isdigit():
+                            tp = int(tp_str)
         except Exception:
             pass
 
-    if bs == "N/A" or topology == "desconocida":
+    if bs == "N/A" or topology == "desconocida" or tp == 1:
         for part in folder_name.split("_"):
             if part.startswith("bs") and bs == "N/A":
                 bs = part[2:]
+            elif part.startswith("tp") and tp == 1:
+                val = part[2:]
+                if val.isdigit():
+                    tp = int(val)
             elif part in ["torus", "mesh"] and topology == "desconocida":
                 topology = part
 
-    label = f"{num_gpus}dev {topology.capitalize()} (VCs={num_vcs}, BS={bs})"
+    tp_tag = f", TP={tp}" if tp > 1 else ""
+    label = f"{num_gpus}dev {topology.capitalize()} (VCs={num_vcs}, BS={bs}{tp_tag})"
 
     # Cálculo de tasa de inyección lambda y latencias por colectiva
     op_points = []

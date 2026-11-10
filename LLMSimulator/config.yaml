@@ -10,7 +10,7 @@ system:
   processor_type: GPU
   distribution:
     expert_tensor_degree: 1
-    none_expert_tensor_degree: 1
+    none_expert_tensor_degree: 2
   optimization:
     parallel_execution: off
     hetero_subbatch: off
@@ -33,7 +33,7 @@ serving:
 simulation:
   data: synthesis
   input_len: 1024
-  output_len: 10
+  output_len: 2
   precision_byte: 1
   skewness: 0.0
   iter: 2
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_bs32_20261028_175152/
-  gantt_directory: build/results/mixtral_8dev_torus_bs32_20261028_175152/gantt/
+  output_directory: build/results/mixtral_8dev_torus_tp2_bs32_20261110_123629/
+  gantt_directory: build/results/mixtral_8dev_torus_tp2_bs32_20261110_123629/gantt/

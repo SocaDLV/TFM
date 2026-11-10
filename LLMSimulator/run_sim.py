@@ -22,6 +22,7 @@ def parse_args():
     parser.add_argument("--output_len", type=int, default=10, help="Number of tokens to generate per iteration (Decoding steps)")
     parser.add_argument("--iter", type=int, default=5, help="Number of statistical iterations to run")
     parser.add_argument("--batch_size", type=int, default=32, help="Max batch size for continuous batching")
+    parser.add_argument("--tensor_degree", "--tp", type=int, default=1, help="Grado de paralelismo de tensores no-experto (Atención TP, por defecto: 1)")
     
     # Opciones de Simulación
     parser.add_argument("--parallel", action="store_true", help="Enable parallel_execution (xPU + PIM overlapping)")
@@ -65,7 +66,7 @@ system:
   processor_type: GPU
   distribution:
     expert_tensor_degree: 1
-    none_expert_tensor_degree: 1
+    none_expert_tensor_degree: {args.tensor_degree}
   optimization:
     parallel_execution: {parallel_str}
     hetero_subbatch: off
@@ -131,6 +132,11 @@ def main():
         print("   Todas las dimensiones deben ser iguales (ej. 4 4, no 4 2).")
         sys.exit(1)
         
+    if total_devices % args.tensor_degree != 0:
+        print("🛑 ERROR CRÍTICO DE ARQUITECTURA:")
+        print(f"   El número total de dispositivos ({total_devices}) debe ser múltiplo de tensor_degree ({args.tensor_degree}).")
+        sys.exit(1)
+
     if total_devices > 256:
         print("⚠️ ADVERTENCIA DE LÍMITE FÍSICO:")
         print(f"   Estás intentando simular {total_devices} GPUs. BookSim2 escalará cuadráticamente.")
@@ -154,8 +160,9 @@ def main():
 
     dims_str = "x".join(map(str, args.net_dims))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Nuevo naming basado en Batch Size
-    folder_name = f"{args.model}_{dims_str}dev_{args.topology}_bs{args.batch_size}_{timestamp}"
+    # Naming incorporando grado de Tensor Parallelism
+    tp_suffix = f"_tp{args.tensor_degree}" if args.tensor_degree > 1 else ""
+    folder_name = f"{args.model}_{dims_str}dev_{args.topology}{tp_suffix}_bs{args.batch_size}_{timestamp}"
     output_dir = os.path.join("build", "results", folder_name)
     os.makedirs(os.path.join(output_dir, "gantt"), exist_ok=True)
     
@@ -170,6 +177,7 @@ def main():
     
     print(f"\n🚀 Iniciando Co-Simulación...")
     print(f"🖥️ Red: {dims_str} {args.topology.upper()} | VCs: {args.vcs} | Enrutamiento: {args.routing}")
+    print(f"🧩 Paralelismo: Tensor Parallelism (TP) = {args.tensor_degree} | Expert TP = 1")
     print(f"🧠 Concurrencia: Batch Size {args.batch_size} (Max. secuencias simultáneas)")
     print(f"🔄 Estadística: {args.iter} Iteraciones (Trazas pre-cargadas de 10 tokens)")
     print(f"📁 Resultados irán a: {output_dir}")
