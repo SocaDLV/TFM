@@ -6,3 +6,6 @@ TFMresults/
 LLMSimulator-orig/
 booksim2-orig/
 .venv/
+
+# Ignorar el contenido de las subcarpetas dentro de results
+LLMSimulator/build/results/*/*
