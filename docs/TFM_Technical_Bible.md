@@ -42,6 +42,16 @@
    - 4.6. Auditoría Forense de Causalidad Física en MoEGather/MoEScatter y Demostración de Simetría de Tráfico
    - 4.7. Integración de AllReduce en el Oráculo BookSim2: Modelado Ring-AllReduce con Causalidad Cuádruple (Vía 2)
    - 4.8. Estudio de Desbalanceo Extremo de Carga en Expertos MoE (Skewness, Puntos Calientes de Red e In-Cast Hotspots - Vía 3)
+   - 4.9. Estudio Comparativo Arquitectónico: Mixtral 8x7B vs. DeepSeek-V3 (Fine-Grained MoE & MLA - Vía 4)
+     - 4.9.1. Contexto y Fundamentación Arquitectónica: Grano Grueso vs. Grano Fino
+     - 4.9.2. Mecanismo de Compresión de Atención Multi-Head Latent Attention (MLA)
+     - 4.9.3. Desglose Microarquitectural de DeepSeek-V3: Capas Densas Iniciales y Expertos Compartidos
+     - 4.9.4. Batería Experimental Paritaria (8x B100, Toro 1D, BS=32)
+     - 4.9.5. Análisis Macroscópico Comparativo de Tiempos y Tráfico NoC
+     - 4.9.6. Auditoría de Tráfico de Paquetes (`packet_tracking_debug.csv`) y Dinámica de Colas
+     - 4.9.7. Hallazgos Científicos y Conclusiones Arquitectónicas de la Vía 4
+     - 4.9.8. Sensibilidad Topológica: Toro 1D vs. Malla 2D (4x2 nodos) y Alivio de Contención Bidimensional
+     - 4.9.9. Justificación Metodológica: Ejecución BSP vs. Esquemas de Pipelining (DualPipe)
 5. [Capítulo 5: Parches Arquitectónicos Aplicados al Simulador Base](#capítulo-5-parches-arquitectónicos-aplicados-al-simulador-base)
    - 5.1. Correcciones Críticas en `decoder.cpp`: Conexiones Residuales y Tipado de Capas
    - 5.2. Correcciones en `layer.cpp`: Cadena de Dependencias en Bloques SwiGLU
@@ -58,6 +68,8 @@
    - 7.1. Simplificaciones Asumidas en el Co-Simulador Actual
    - 7.2. Evaluación de Impacto en la Precisión Científica
    - 7.3. Hoja de Ruta y Roadmap de Extensiones Futuras
+   - 7.4. Hardware Multicast e In-Network Reduction en Arquitecturas MoE de Grano Fino
+   - 7.5. Propuesta de Vía 5: Co-Simulación Dual-Stream & Pipelining de Micro-Batches (DualPipe)
 8. [Capítulo 8: Referencia Exhaustiva Archivo por Archivo (File-by-File Codebase Reference)](#capítulo-8-referencia-exhaustiva-archivo-por-archivo-file-by-file-codebase-reference)
    - 8.1. Punto de Entrada y Evaluación (`eval/`)
    - 8.2. Infraestructura Común (`src/common/`)
@@ -1510,6 +1522,117 @@ Al analizar los 57,000+ paquetes intercambiados durante la fase `Scatter` en la 
 
 ---
 
+## 4.9. Estudio Comparativo Arquitectónico: Mixtral 8x7B vs. DeepSeek-V3 (Fine-Grained MoE & MLA - Vía 4)
+
+### 4.9.1. Contexto y Fundamentación Arquitectónica: Grano Grueso vs. Grano Fino
+La evolución de los modelos de lenguaje basados en Mezcla de Expertos (*Mixture of Experts*, MoE) ha transitado desde particiones de **grano grueso** (*coarse-grained*, representadas canónicamente por **Mixtral 8x7B**) hacia arquitecturas modernas de **grano fino** (*fine-grained micro-experts*, lideradas por **DeepSeek-V3**).
+
+| Dimensión Arquitectural | Mixtral 8x7B | DeepSeek-V3 | Impacto en Interconexión NoC / BookSim2 |
+| :--- | :--- | :--- | :--- |
+| **Número Total de Capas** | 32 (100% MoE) | 60 (3 densas iniciales + 57 MoE) | Mayor profundidad del grafo; 3 capas iniciales sin tráfico de dispersión MoE. |
+| **Dimensión Oculta ($d_{\text{model}}$)** | $4.096$ | $7.168$ | Multiplica el volumen de datos por token transferido a través de la red. |
+| **Dimensión Intermedia FFN ($d_{\text{ffn}}$)** | $14.336$ | $2.048$ (micro-experto) / $2.048$ (compartido) | Grano fino: cada micro-experto es $\sim 7\times$ más estrecho que un experto de Mixtral. |
+| **Número de Expertos ($E$)** | 8 | $256$ enrutados + 1 compartido | En un clúster de 8 GPUs: 1 experto/GPU (Mixtral) vs. **32 micro-expertos/GPU** (DeepSeek). |
+| **Factor de Activación Top-$k$** | Top-2 ($k=2$) | Top-8 ($k=8$) | Dispersión radical: cada token contacta hasta 8 GPUs distintas (fan-out global). |
+| **Mecanismo de Atención** | GQA ($32$ Q heads, $8$ KV heads) | MLA (*Multi-Head Latent Attention*) | Compresión latente de KV cache y absorción de matrices en inferencia. |
+| **Precisión Numérica de Cómputo** | BF16 (16 bits) | FP8 (8 bits en GEMM) / BF16 en Gather | Disminución del footprint en Scatter pero duplicación asimétrica en Gather. |
+
+### 4.9.2. Mecanismo de Compresión de Atención Multi-Head Latent Attention (MLA)
+En arquitecturas estándar con Multi-Query Attention (MQA) o Grouped-Query Attention (GQA), la memoria requerida por la caché KV escala linealmente con la longitud de secuencia $S$, el número de capas $L$ y el número de cabezas KV $N_{kv}$:
+$$\text{Memoria}_{\text{GQA}} = 2 \cdot L \cdot S \cdot N_{kv} \cdot d_h$$
+
+DeepSeek-V3 introduce **Multi-Head Latent Attention (MLA)** para comprimir drásticamente la huella de memoria durante la fase de decodificación mediante proyecciones de bajo rango (*Low-Rank Projections*) desacopladas:
+
+1. **Compresión Latente de Claves y Valores (KV):**
+   El vector de activación de entrada $h_t \in \mathbb{R}^{d}$ se proyecta a un espacio latente comprimido de dimensión $d_c = 512$:
+   $$c_t^{KV} = W_{DKV} h_t, \quad W_{DKV} \in \mathbb{R}^{d_c \times d}$$
+   A partir de este vector latente $c_t^{KV}$, se reconstruyen las claves de contenido y valores:
+   $$k_t^C = W_{UK} c_t^{KV}, \quad v_t^C = W_{UV} c_t^{KV}, \quad W_{UK}, W_{UV} \in \mathbb{R}^{(N_h d_h) \times d_c}$$
+
+2. **Desacoplamiento de Posición Rotatoria (Decoupled RoPE):**
+   Dado que RoPE no es invariante a transformaciones lineales de bajo rango, MLA desacopla las componentes posicionales:
+   $$k_t^R = \text{RoPE}(W_{KR} h_t), \quad W_{KR} \in \mathbb{R}^{d_R \times d}$$
+   La clave final concatenada es:
+   $$k_t = [k_{t, 1}^C \mathbin{\Vert} k_t^R, \dots, k_{t, N_h}^C \mathbin{\Vert} k_t^R]$$
+
+3. **Absorción de Matrices en Generación Autoregresiva:**
+   Durante la generación de tokens, el producto escalar entre las consultas proyectadas $q_t^C$ y las claves $k_s^C$ permite absorber la matriz de descompresión $W_{UK}$ directamente en la matriz de consulta:
+   $$q_t^{C \top} k_s^C = (W_{UQ} c_t^Q)^\top (W_{UK} c_s^{KV}) = c_t^{Q \top} (W_{UQ}^\top W_{UK}) c_s^{KV}$$
+   Esto permite que en la memoria caché KV solo sea necesario persistir el vector latente $c_t^{KV}$ ($512\text{ elementos}$) y la clave rotatoria $k_t^R$ ($64\text{ elementos}$), reduciendo la huella de memoria en más de un **$93\%$** respecto a MHA y permitiendo batches masivos sin saturar la HBM3E.
+
+### 4.9.3. Desglose Microarquitectural de DeepSeek-V3: Capas Densas Iniciales y Expertos Compartidos
+El flujo de ejecución en cada una de las 60 capas decodificadoras de DeepSeek-V3 se bifurca en dos fases temporales:
+1. **Capas Densas Iniciales (Capas 0, 1 y 2):**
+   Las primeras 3 capas del transformer no son MoE; implementan un `DenseFFN` tradicional con dimensión intermedia $d_{\text{ffn}} = 18.432$. Al no enrutar tokens, generan exactamente **cero tráfico de red colectivo** (`moe_scatter` ni `moe_gather`). Cada una de estas capas requiere $\sim 81.6\,\mu\text{s}$ de cómputo local puramente memory-bound en la GPU (sumando $\sim 245\,\mu\text{s}$ en total).
+2. **Capas MoE Híbridas (Capas 3 a 59):**
+   A partir de la capa 3, cada bloque integra:
+   - **32 Micro-Expertos Enrutados por GPU ($E=256$ en 8 GPUs):** Tokens dispersados mediante `MoEScatter` con Top-8 ($k=8$), procesados secuencialmente según la carga local, y recolectados mediante `MoEGather`.
+   - **1 Experto Compartido (*Shared Expert*):** Se ejecuta localmente en el 100% de los aceleradores sin requerir comunicación de red, asegurando la captura de conocimiento transversal y estabilizando la especialización de los micro-expertos.
+
+### 4.9.4. Batería Experimental Paritaria (8x B100, Toro 1D y Malla 2D, BS=32)
+Para aislar de manera rigurosa el impacto del grano de los expertos, la compresión MLA y la sensibilidad topológica, se ejecutó una batería paritaria bajo idénticas condiciones físicas de hardware y decodificación:
+- **Aceleradores:** 8 GPUs Nvidia B100 ($3.5\text{ PFLOPS}$, $8.0\text{ TB/s}$ HBM3E).
+- **Topologías de Interconexión:**
+  1. Toro 1D de 8 nodos (`net_dims: [8]`).
+  2. Malla 2D de 4x2 nodos (`net_dims: [4, 2]`, mapeada a BookSim2 AnyNet).
+- **Canales Virtuales y Enrutamiento:** 4 VCs por puerto físico con enrutamiento determinista por orden de dimensión (`dim_order` / `min`).
+- **Carga de Trabajo:** Continuous Batching con Batch Size $BS=32$, $s=0.0$ (distribución balanceada), 2 iteraciones estadísticas de decodificación autoregresiva (2 tokens generados).
+
+### 4.9.5. Análisis Macroscópico Comparativo de Tiempos y Tráfico NoC
+Los resultados macroscópicos extraídos por `analyze_traces.py --recent 3` revelan la profunda disparidad física entre arquitecturas y el impacto de la conectividad bidimensional:
+
+| Métrica Macroscópica | Mixtral 8x7B (Toro 1D) | DeepSeek-V3 (Toro 1D) | DeepSeek-V3 (Malla 2D 4x2) | Impacto Topológico (Malla vs. Toro) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Tiempo de Cómputo GPU (`Compute`)** | $911.5\,\mu\text{s}$ ($82.9\%$) | $8,340.6\,\mu\text{s}$ ($69.1\%$) | $8,340.6\,\mu\text{s}$ ($70.4\%$) | Idéntico (independiente de red) |
+| **Tiempo de Tránsito de Red (`Transit`)** | $169.3\,\mu\text{s}$ ($15.4\%$) | $3,344.5\,\mu\text{s}$ ($27.7\%$) | $\mathbf{3,137.9\,\mu\text{s}}$ ($26.5\%$) | **$-206.6\,\mu\text{s}$ ($-6.18\%$)** 🟢 |
+| **Burbujas de Sincronización (`Stalls`)** | $19.3\,\mu\text{s}$ ($1.8\%$) | $387.8\,\mu\text{s}$ ($3.2\%$) | $\mathbf{365.0\,\mu\text{s}}$ ($3.1\%$) | **$-22.8\,\mu\text{s}$ ($-5.88\%$)** 🟢 |
+| **Tiempo Total de Muro (`Wall-Clock`)** | $\mathbf{1,100.0\,\mu\text{s}}$ | $\mathbf{12,072.9\,\mu\text{s}}$ | $\mathbf{11,843.5\,\mu\text{s}}$ | **$-229.4\,\mu\text{s}$ ($-1.90\%$)** 🟢 |
+| **Latencia Media de Flit (`Avg_Flit_Latency`)** | $688.1\text{ ciclos}$ | $6,534.4\text{ ciclos}$ | $\mathbf{6,255.3\text{ ciclos}}$ | **$-279.1\text{ ciclos}$ ($-4.27\%$)** 🟢 |
+| **Latencia Media de Paquete (`Total_Latency`)** | $1,321.2\text{ ciclos}$ | $11,282.1\text{ ciclos}$ | $\mathbf{10,269.6\text{ ciclos}}$ | **$-1,012.5\text{ ciclos}$ ($-8.97\%$)** 🟢 |
+| **Tasa Media de Inyección Real ($\lambda$)** | $0.2822\text{ flits/c/nodo}$ | $0.2552\text{ flits/c/nodo}$ | $\mathbf{0.2751\text{ flits/c/nodo}}$ | **$+7.80\%$ throughput** 🟢 |
+
+### 4.9.6. Auditoría de Tráfico de Paquetes (`packet_tracking_debug.csv`) y Dinámica de Colas
+La inspección flit a flit del archivo `packet_tracking_debug.csv` arroja la clave microarquitectural de la congestión y su descompresión:
+
+| Métrica de Paquetes y Flits | Mixtral 8x7B (Toro 1D) | DeepSeek-V3 (Toro 1D) | DeepSeek-V3 (Malla 2D 4x2) | Comparativa Malla vs. Toro |
+| :--- | :--- | :--- | :--- | :--- |
+| **Total de Paquetes Transmitidos** | $114,592$ | $2,142,168$ | $2,142,168$ | Idéntico ($18.69\times$ vs. Mixtral) |
+| **Total de Flits Físicos en Red** | $1,031,328$ | $19,279,512$ | $19,279,512$ | Idéntico ($18.69\times$ vs. Mixtral) |
+| **Paquetes en `MoEScatter`** | $57,296$ ($50.0\%$) | $714,056$ ($33.3\%$) | $714,056$ ($33.3\%$) | Idéntico (FP8, $7168\text{ B/token}$) |
+| **Paquetes en `MoEGather`** | $57,296$ ($50.0\%$) | $1,428,112$ ($66.7\%$) | $1,428,112$ ($66.7\%$) | Idéntico (BF16, $14336\text{ B/token}$) |
+| **Retardo Medio en Colas NIC (`Queueing_Delay`)** | $1,252.1\text{ ciclos}$ | $11,192.6\text{ ciclos}$ | $\mathbf{10,180.4\text{ ciclos}}$ | **$-1,012.2\text{ ciclos}$ ($-9.04\%$)** 🟢 |
+| **Retardo Máximo en Colas NIC** | $4,313\text{ ciclos}$ | $52,680\text{ ciclos}$ | $\mathbf{42,573\text{ ciclos}}$ | **$-10,107\text{ ciclos}$ ($-19.19\%$ cola pico)** 🟢 |
+| **Tiempo Medio de Vuelo en Red (`Network_Latency`)**| $77.1\text{ ciclos}$ | $68.7\text{ ciclos}$ | $84.2\text{ ciclos}$ | $+15.5\text{ ciclos}$ (distancia sin wrap-around) |
+
+### 4.9.7. Hallazgos Científicos y Conclusiones Arquitectónicas de la Vía 4
+1. **La Paradoja del Grano Fino y la Explosión All-to-All:**
+   En Mixtral ($k=2, E=8$), cada token es enviado a solo 2 expertos, lo que genera un patrón de tráfico disperso donde un porcentaje significativo de transferencias puede resolverse localmente o mediante saltos mínimos. En cambio, en DeepSeek-V3 ($k=8, E=256$), cada token se descompone en 8 micro-expertos repartidos probabilísticamente entre los 8 nodos. Esto transforma cada capa MoE en una comunicación de **difusión total (*All-to-All Broadcast*)**, donde el $100\%$ de los nodos inyectan ráfagas hacia el $100\%$ del resto del clúster simultáneamente.
+
+2. **Asimetría Estructural de Tráfico por Precisión Mixta (FP8 vs. BF16):**
+   A diferencia de Mixtral, donde Scatter y Gather son exactamente simétricos ($57,296$ paquetes cada uno), en DeepSeek-V3 la fase de Gather transfiere el doble de datos que Scatter ($1,428,112$ paquetes vs. $714,056$). El motivo es que la inferencia computa en FP8 ($1\text{ B/elem}$ en la activación enviada en Scatter), pero la agregación ponderada de activaciones en Gather devuelve tensores en BF16 ($2\text{ B/elem}$) para mitigar la degradación numérica. Esta asimetría duplica la contención de red precisamente en la fase previa a la barrera de sincronización, disparando los tiempos de tránsito.
+
+3. **Invarianza del Tiempo de Vuelo vs. Hipertrofia de Colas NIC:**
+   El tiempo puro de travesía en la red (`Network_Latency`) se mantiene virtualmente invariable entre ambos modelos ($\sim 77$ ciclos en Mixtral vs. $\sim 69$ ciclos en DeepSeek), ya que la distancia física entre nodos en el Toro 1D no varía. Sin embargo, el **retardo de cola en la NIC (`Queueing_Delay`)** se multiplica por **$8.94\times$**, superando los $11,000$ ciclos y alcanzando picos de $52,680$ ciclos. Esto demuestra empíricamente que **en arquitecturas de grano fino con Top-$k$ elevado, el cuello de botella de la interconexión no radica en el ancho de banda del conmutador físico, sino en la capacidad de los buffers de inyección y el arbitraje de créditos de control de flujo**.
+
+### 4.9.8. Sensibilidad Topológica: Toro 1D vs. Malla 2D (4x2 nodos) y Alivio de Contención Bidimensional
+El análisis comparativo entre el Toro 1D y la Malla 2D (4x2 nodos) bajo idéntico volumen de carga revela aspectos cruciales de la topología física:
+1. **Multiplicación del Ancho de Banda de Bisección:** En el Toro 1D, toda comunicación inter-nodo compite por un único par de canales unidireccionales (este-oeste). En la Malla 2D (4x2), la existencia de enlaces ortogonales en las dimensiones $X$ e $Y$ duplica las rutas disponibles en el corte de bisección.
+2. **Descompresión de Colas NIC:** Aunque la distancia Manhattan sin enlaces wrap-around incrementa ligeramente el tiempo de vuelo medio ($+15.5\text{ ciclos}$ de latencia de red base), la descongestión en los conmutadores reduce el tiempo medio de espera en cola en más de $1.012\text{ ciclos}$ ($-9.04\%$) y aplana el pico máximo de contención de $52.680$ a $42.573$ ciclos (**$-19.19\%$ de caída en cola extrema**).
+3. **Ganancia Neta en Throughput y Wall-Clock:** Esta reducción amortigua la duración de `moe_scatter` y `moe_gather` en $-206.6\,\mu\text{s}$ y mitiga los stalls en $-22.8\,\mu\text{s}$, recortando el tiempo global de inferencia en $-229.4\,\mu\text{s}$ con un incremento del $+7.80\%$ en la tasa efectiva de inyección $\lambda$.
+
+### 4.9.9. Justificación Metodológica: Ejecución BSP vs. Esquemas de Pipelining (DualPipe)
+Una premisa fundamental del co-simulador en esta tesis es el modelado estricto bajo el paradigma **Bulk Synchronous Parallel (BSP)**, donde las fases de cómputo local y comunicación colectiva se suceden de forma secuencial y sincronizada mediante barreras explícitas:
+1. **Aislamiento del Coste Físico Puro:** Modelar la barrera BSP garantiza que el tiempo medido de tránsito de red no esté contaminado ni enmascarado por artificios de planificación de software. Permite cuantificar el impacto microarquitectural directo de la contención, la topología NoC y el número de canales virtuales sobre la física de los enlaces.
+2. **Demostración de Margen Aritmético para Overlapping (DualPipe):**
+   Los resultados experimentales obtenidos aportan una demostración cuantitativa de que DeepSeek-V3 es óptimo para esquemas de solapamiento comunicación-cómputo como **DualPipe**:
+   $$T_{\text{compute}} = 8.340,6\,\mu\text{s} \quad \text{vs.} \quad T_{\text{transit}} = 3.137,9 - 3.344,5\,\mu\text{s}$$
+   $$\text{Ratio } \frac{T_{\text{compute}}}{T_{\text{transit}}} \approx \mathbf{2.50 - 2.66\times}$$
+   Dado que el silicio consume más de $2.5\times$ más tiempo en computar las capas de atención MLA y los micro-expertos FFN que en transferir los tensores por la red, un motor de ejecución con pipelining de micro-batches (donde las activaciones del micro-batch $i+1$ se transfieren mientras la GPU procesa los micro-expertos del micro-batch $i$) tiene **margen temporal de sobra para ocultar el 100% de la latencia de red de la interconexión**, eliminando virtualmente los $3.34\text{ ms}$ de penalización de muro.
+
+---
+
+---
+
 # CAPÍTULO 5: Parches Arquitectónicos Aplicados al Simulador Base
 
 Durante la auditoría del simulador original `LLMSimulator-orig` (SCALE SNU), se detectaron y corrigieron varios errores de diseño arquitectural que falseaban la simulación o producían corrupción de memoria.
@@ -2004,10 +2127,52 @@ Gracias a las innovaciones de fidelidad física introducidas en el **Bloque C** 
    Implementado en `AllReduce::forward` (`src/module/communication.cpp`) con aislamiento de grupo `op_key`, transferencia de chunks $2(P-1)S_{\text{chunk}}$ sobre topologías Torus/Mesh, trazabilidad completa de PIDs y soporte CLI con `--tensor_degree` / `--tp`.
 5. **[COMPLETADO - Vía 3] Parametrización y Estudio de Desbalanceo Extremo de Carga en Expertos MoE (Skewness Zipfiano):**
    Implementado soporte CLI con `--skewness` / `--skew`, inyección dinámica en `config.yaml`, categorización de carpetas de salida (`_skew{s}`), y etiquetado macroscópico en `analyze_traces.py`. Validación experimental de hotspots de in-cast en NoC ($30.8\%$ de tráfico absorbido por GPU 0 con $s=1.0$), incremento de latencia de paquetes ($+29.1\%$) y saturación asíncrona de barreras (`NETWORK_STALL`).
-6. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
+6. **[COMPLETADO - Vía 4] Estudio Comparativo Arquitectónico: Mixtral 8x7B vs. DeepSeek-V3 (Fine-Grained MoE & MLA):**
+   Integración completa de DeepSeek-V3 en el co-simulador (60 capas, 3 densas iniciales, $E=256$ micro-expertos, Top-8 routing, expertos compartidos y compresión de atención MLA). Cuantificación rigurosa de la explosión de tráfico All-to-All ($18.7\times$ más paquetes y flits) e hipertrofia de retardo en cola de NIC ($8.94\times$ mayor, picos de $52,680$ ciclos). Adaptación de `plot_cronograma.py` y `analyze_traces.py` para micro-expertos y capas híbridas.
+7. **Soporte Jerárquico Multi-Nodo (NVLink + InfiniBand):**
    Integrar una red de dos niveles en BookSim2: enlaces de ultra-alto ancho de banda ($900\text{ GB/s}$) intra-nodo y enlaces de red de área de sistema ($100\text{ GB/s}$) inter-nodo.
-7. **Modelado de Capacidad Finita de Buffers NIC:**
+8. **Modelado de Capacidad Finita de Buffers NIC:**
    Introducir un límite estricto de paquetes en las colas del host para simular caídas de rendimiento por contrapresión física hacia los hilos de la GPU.
+
+---
+
+## 7.4. Hardware Multicast e In-Network Reduction en Arquitecturas MoE de Grano Fino
+
+Los hallazgos empíricos de la Vía 4 (Sección 4.9) demuestran que en DeepSeek-V3 la hipertrofia de retardo en las colas de inyección NIC (`Queueing_Delay` medio superior a $10.000$ ciclos, picos de más de $42.000 - 52.000$ ciclos) es el cuello de botella primario de la interconexión NoC. Este fenómeno abre dos líneas de investigación arquitectónica de vanguardia en aceleración hardware:
+
+### 7.4.1. Oportunidad de Hardware Multicast en `MoEScatter`
+En DeepSeek-V3, cada token activa $k=8$ micro-expertos de entre $E=256$. En un clúster de $N=8$ GPUs con 32 micro-expertos por dispositivo, la probabilidad de que un token deba enviarse a una GPU física determinada $g$ es:
+$$P(\text{GPU } g \text{ seleccionada}) = 1 - \left(1 - \frac{32}{256}\right)^8 = 1 - (0.875)^8 \approx 1 - 0.3436 \approx 65.64\%$$
+El número esperado de GPUs físicas de destino para cada token individual es:
+$$\mathbb{E}[N_{\text{GPUs\_destino}}] = 8 \times 0.6564 \approx \mathbf{5.25 \text{ GPUs}}$$
+
+Bajo la implementación actual basada en **tráfico unicast punto a punto**, la GPU emisora debe serializar e inyectar el mismo vector de activación ($7.168\text{ B}$ en FP8) $5.25$ veces en su interfaz de red (NIC), generando una duplicación redundante masiva de flits idénticos:
+- En una iteración de 60 capas con $BS=32$, `MoEScatter` inyecta $714.056$ paquetes ($33.3\%$ del total del clúster).
+- Si los conmutadores del NoC implementan **árboles de Hardware Multicast** (duplicación de paquetes en los puertos de salida del crossbar del router más cercano a los destinos), la NIC de la GPU origen solo necesitaría inyectar **un único paquete original**:
+  $$\text{Reducción de Inyecciones en NIC} \approx \frac{5.25 - 1}{5.25} \approx \mathbf{80.95\%}$$
+- Esta optimización eliminaría hasta un $\sim 81\%$ del tráfico de inyección en `MoEScatter`, despresurizando por completo los buffers de la NIC y mitigando casi en su totalidad el `Queueing_Delay` durante la fase de dispersión.
+
+### 7.4.2. In-Network Reduction como Requisito Exclusivo para `MoEGather`
+A diferencia de `MoEScatter`, la fase de `MoEGather` (que representa el $66.7\%$ de los paquetes del clúster, $1.428.112$ paquetes, debido a la representación en BF16) **no puede resolverse mediante Hardware Multicast**:
+- En `MoEGather`, el patrón de tráfico es **Muchos-a-Uno (In-Cast)**: múltiples GPUs devuelven las activaciones computadas por sus micro-expertos hacia la GPU origen del token.
+- Cada micro-experto $e$ produce un vector de activación $h_e = \text{FFN}_e(x)$ matemáticamente **distinto y único**.
+- Por tanto, no existen paquetes redundantes que puedan clonarse o fusionarse trivialmente en la red.
+- La solución física óptima para mitigar la congestión en `MoEGather` consiste en implementar **In-Network Reduction** (reducción en red inspirada en NVIDIA SHARP o switches PIM aritméticos): los conmutadores intermedios del NoC incorporan unidades funcionales de coma flotante que multiplican las activaciones recibidas por sus respectivos pesos de enrutamiento $g_e$ y las acumulan progresivamente ($y = \sum_e g_e h_e$) conforme los flits convergen hacia el router del nodo destino. De este modo, la GPU origen solo recibe el tensor final ya reducido, contrayendo el volumen de paquetes entrantes hasta en un factor de $8\times$.
+
+---
+
+## 7.5. Propuesta de Vía 5: Co-Simulación Dual-Stream & Pipelining de Micro-Batches (DualPipe)
+
+Los datos empíricos de la Sección 4.9.9 confirman que DeepSeek-V3 exhibe un ratio $T_{\text{compute}} / T_{\text{transit}} \approx 2.50 - 2.66\times$, demostrando que existe holgura aritmética para solapar el $100\%$ de la comunicación de red.
+
+Para modelar este fenómeno en el co-simulador sin romper la precisión de BookSim2, se propone la arquitectura de **Vía 5 (Dual-Stream & Micro-Batch Pipelining)**:
+1. **Desacoplamiento de Relojes por Dispositivo:** Dividir el reloj de cada acelerador en dos sub-pistas temporales independientes:
+   - `sm_compute_clock`: Avanza durante la ejecución de Attention, DenseFFN y ExpertFFN en los Tensor Cores.
+   - `noc_dma_clock`: Avanza durante la inyección y tránsito de flits en BookSim2.
+2. **Segmentación en Micro-Batches:** Particionar el batch global $BS=32$ en $M=4$ micro-batches de $B_{\text{micro}} = 8$ secuencias.
+3. **Planificación Estilo DualPipe / 1F1B MoE:**
+   - Mientras `sm_compute_clock` ejecuta los 32 micro-expertos del micro-batch $M_i$, el motor DMA activa `noc_dma_clock` para inyectar concurrentemente los flits de `MoEScatter` del micro-batch $M_{i+1}$ y los de `MoEGather` del micro-batch $M_{i-1}$.
+   - BookSim2 modelará la contención bidireccional continua en los enlaces NoC mientras los núcleos aritméticos de la GPU permanecen saturados al $100\%$, capturando las burbujas residuales de sincronización en los extremos del pipeline y los incrementos en la huella de memoria intermedia en HBM3E.
 
 ---
 
@@ -2280,18 +2445,19 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`LLMSimulator/run_sim.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_sim.py)
 - **Propósito:** Orquestador principal de experimentos. Automatiza la ejecución del binario compilado, gestiona parámetros CLI, captura salidas en consola y coordina la generación de artefactos (`dia1_exec1.txt`, `packet_tracking_debug.csv`).
 - **Mecanismos Clave:**
+  - Soporte CLI para selección de modelo (`--model mixtral` o `--model deepseekV3`), normalizando automáticamente alias frecuentes (`deepseek`, `deepseek-v3`, `deepseek_v3`).
   - Soporte CLI para Tensor Parallelism (`--tensor_degree` / `--tp`) y factor de desbalanceo MoE (`--skewness` / `--skew`, por defecto `0.0`), inyectando este último dinámicamente en la sección `generator` de `config.yaml`.
-  - Sufijado automático de carpetas de resultados (`_skew{s}`) para trazabilidad de experimentos desbalanceados.
+  - Sufijado automático de carpetas de resultados (`_skew{s}`) para trazabilidad de experimentos desbalanceados y prefijado por modelo (`deepseekV3_*`).
   - Habilitación por defecto de la instrumentación de paquetes (`SIM_DEBUG_PIDS="1"`), interceptando las líneas `[TRACK_PID]` para generar `packet_tracking_debug.csv` (17 columnas) sin requerir parámetros manuales adicionales.
   - Soporte para bandera `--no_debug_pids` para anular la captura en barridos masivos donde se desee máxima velocidad.
 
 ### [`LLMSimulator/analyze_traces.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/analyze_traces.py)
-- **Propósito:** Analizador macroscópico de trazas y sintetizador de la curva de saturación de red (Cierre del Bloque B). Parsea los registros `.trc` de cada GPU y el archivo `packet_tracking_debug.csv`, calculando el balance temporal de cómputo vs. comunicación y correlacionando la carga inyectada con la latencia física de red.
+- **Propósito:** Analizador macroscópico de trazas y sintetizador de la curva de saturación de red (Cierre del Bloque B y Vía 4). Parsea los registros `.trc` de cada GPU y el archivo `packet_tracking_debug.csv`, calculando el balance temporal de cómputo vs. comunicación y correlacionando la carga inyectada con la latencia física de red.
 - **Mecanismos Clave:**
   - Resolución dual robusta del directorio base (`resolve_base_dir()`), operable tanto desde la raíz del TFM como desde `LLMSimulator/`.
   - **Filtro Anti-Appends Temporal Dual:** Detecta caídas en la serie cronológica tanto en `.trc` (`START_NS.diff() < 0`) como en `packet_tracking_debug.csv` (`Op_Start_NS.diff() < 0` o `Creation_Cycle.diff() < -1000`) para aislar con total fidelidad la última iteración canónica.
   - Normalización exacta de Wall-Clock Time por dispositivo, balanceo estricto Cómputo + Red (`moe_scatter`, `moe_gather`, `all_reduce`) + Stalls y exportación gráfica de alta definición (`anatomia_latencia.png`, `desglose_primitivas_moe.png`).
-  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva (incluyendo AllReduce), centroides macroscópicos con metadatos de topología, canales virtuales, tamaño de lote, grado TP y factor de skewness (`8dev Torus (VCs=4, BS=32, Skew=0.5)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
+  - **Generación de la Curva de Saturación NoC (`curva_saturacion_red.png`):** Extrae la tasa media de inyección $\lambda$ (flits/ciclo/nodo) y latencia media de flit (`Avg_Flit_Latency`), trazando nubes por operación colectiva (incluyendo AllReduce), centroides macroscópicos con metadatos de modelo, topología, canales virtuales, tamaño de lote, grado TP y factor de skewness (`deepseekV3 8dev Torus (VCs=4, BS=32)` vs. `mixtral 8dev Torus (VCs=4, BS=32)`), con escala semilogarítmica adaptativa y tolerancia a ausencia de CSV en trazas históricas.
 
 ### [`LLMSimulator/plot_packet_tracking.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/plot_packet_tracking.py)
 - **Propósito:** Visualizador gráfico del tráfico en la red BookSim2. Reconstruye el ciclo de vida de los paquetes, descompone latencias ($ctime \to itime \to atime$), calcula productividad acumulada y segmenta la visualización por páginas de 50 paquetes en la subcarpeta `gantt/`.
@@ -2305,6 +2471,11 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 - **Propósito:** Generador de cronogramas causales de alta resolución (Diagramas de Gantt cycle-to-cycle). Reconstruye la ejecución concurrente de todas las GPUs con granularidad de ciclo y nanosegundo, exportando secuencias de imágenes de alta fidelidad en `cycle-to-cycle/timeline_part_*.png`.
 - **Mecanismos Clave:**
   - **Aislamiento Estricto por Capa:** Extrae el identificador de capa (`MoE_decoder_X` / `decoder_X`) y prohíbe taxativamente la fusión entre operaciones de capas decodificadoras distintas.
+  - **Soporte Arquitectónico Híbrido y Grano Fino (DeepSeek-V3):**
+    - Discrimina capas iniciales densas (`DenseFFN: Gate_Proj + SiLU + Up_Proj + Down_Proj`) de capas MoE.
+    - Reconoce y rotula el cómputo del experto compartido (`(SharedExp#0: Gate_Proj + SiLU + Up_Proj + Down_Proj)`).
+    - Despliega la cadena de atención MLA comprimida: `(LN + MLA_Compress + RoPE + Absorb_Gen + Up_Proj + O_Proj + Res)`.
+    - Compacta rangos de micro-expertos para evitar desbordamientos visuales cuando el número de expertos locales es elevado (ej. `(Exp#0..#31: 32x[Gate+SiLU+Up+Down])`).
   - **Identificación de Operaciones Elementales y Multi-Experto:** Reconstruye la secuencia ordenada de pasos elementales (`(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)`) y desglosa los expertos locales asignados a la GPU, identificando ejecuciones multi-experto secuenciales (`(Exp#0,1: 2x[Gate+SiLU+Up+Down])`) cuando $N_{\text{GPUs}} < E$.
   - **Sub-divisiones Físicas Internas:** Dibuja líneas discontinuas blancas (`alpha=0.6, linestyle='--'`) en las marcas exactas `END_NS` de cada micro-operación interna dentro del macro-bloque verde.
   - **Diagnóstico Cuantitativo de Cuello de Botella:** Calcula el ratio $\sum Mem\_ns / (\sum Comp\_ns + \sum Mem\_ns)$ y despliega en la tercera línea del bloque el veredicto arquitectural (`Mem-Bound XX.X%` vs. `Compute-Bound XX.X%`).

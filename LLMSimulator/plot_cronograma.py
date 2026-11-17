@@ -178,13 +178,29 @@ def parse_trc_file(file):
         elif "stall" in op:
             return "#d62728", "Stall", "Stall", "Stall", None
 
-        # Expert FFN
+        # Shared Expert FFN (DeepSeek-V3)
+        if "shared_expert" in op:
+            shared_m = re.search(r'shared_expert_ffn_(\d+)', op)
+            shared_id = int(shared_m.group(1)) if shared_m else 0
+            if "gate_proj" in op:
+                micro = "Gate_Proj"
+            elif "activation" in op or "act" in op or "silu" in op:
+                micro = "SiLU"
+            elif "up_proj" in op:
+                micro = "Up_Proj"
+            elif "down_proj" in op:
+                micro = "Down_Proj"
+            else:
+                micro = "FFN"
+            return "#2ca02c", "Calc", "SharedExpert", micro, shared_id
+
+        # Expert FFN (routed micro-experts)
         exp_m = re.search(r'expert_ffn_(\d+)', op)
         if "expert_ffn" in op or exp_m:
             exp_id = int(exp_m.group(1)) if exp_m else None
             if "gate_proj" in op:
                 micro = "Gate_Proj"
-            elif "activation" in op or "act" in op:
+            elif "activation" in op or "act" in op or "silu" in op:
                 micro = "SiLU"
             elif "up_proj" in op:
                 micro = "Up_Proj"
@@ -194,12 +210,26 @@ def parse_trc_file(file):
                 micro = "FFN"
             return "#2ca02c", "Calc", "ExpertFFN", micro, exp_id
 
-        # Attention block (Pre-LN, QKV, AttnGen, O_Proj, Res, Post-LN, Gate)
+        # Dense FeedForward (capas densas iniciales DeepSeek-V3)
+        if "feedforward" in op:
+            if "gate_proj" in op:
+                micro = "Gate_Proj"
+            elif "activation" in op or "act" in op or "silu" in op:
+                micro = "SiLU"
+            elif "up_proj" in op:
+                micro = "Up_Proj"
+            elif "down_proj" in op:
+                micro = "Down_Proj"
+            else:
+                micro = "FFN"
+            return "#2ca02c", "Calc", "DenseFFN", micro, None
+
+        # Attention block (MHA, GQA, MLA)
         if "attn_qkv" in op:
             return "#2ca02c", "Calc", "Attention", "QKV_Proj", None
         elif "attentiongen" in op or "self_attention" in op:
             return "#2ca02c", "Calc", "Attention", "AttnGen", None
-        elif "attn_o_proj" in op:
+        elif "attn_o_proj" in op or "attn_o_up_proj" in op:
             return "#2ca02c", "Calc", "Attention", "O_Proj", None
         elif "input_layer_norm" in op:
             return "#2ca02c", "Calc", "Attention", "LN", None
@@ -211,6 +241,15 @@ def parse_trc_file(file):
             return "#2ca02c", "Calc", "Attention", "Gate", None
         elif "residual_2" in op:
             return "#2ca02c", "Calc", "Residual", "Res", None
+        elif "attn" in op or "attention" in op or "rope" in op or "latent" in op:
+            micro = "MLA_Proj"
+            if "mla" in op:
+                micro = "MLA_Gen"
+            elif "rope" in op:
+                micro = "RoPE"
+            elif "proj" in op:
+                micro = "Proj"
+            return "#2ca02c", "Calc", "Attention", micro, None
         else:
             sub = "Linear" if "pop_operation" in op else row['TYPE'][:10]
             return "#2ca02c", "Calc", sub, sub, None
@@ -243,14 +282,24 @@ def parse_trc_file(file):
 
         # Secuencia textual de operaciones
         if macro_op == "Attention":
-            seq_str = "(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)"
+            if any("mla" in str(u).lower() or "rope" in str(u).lower() for u in grp['MICRO_OP']):
+                seq_str = "(LN + MLA_Compress + RoPE + Absorb_Gen + Up_Proj + O_Proj + Res)"
+            else:
+                seq_str = "(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)"
+        elif macro_op == "DenseFFN":
+            seq_str = "(DenseFFN: Gate_Proj + SiLU + Up_Proj + Down_Proj)"
+        elif macro_op == "SharedExpert":
+            seq_str = "(SharedExp#0: Gate_Proj + SiLU + Up_Proj + Down_Proj)"
         elif macro_op == "ExpertFFN":
             exp_ids = sorted(list(set(int(e) for e in grp['EXP_ID'].dropna().unique())))
             if len(exp_ids) == 1:
                 seq_str = f"(Exp#{exp_ids[0]}: Gate_Proj + SiLU + Up_Proj + Down_Proj)"
             elif len(exp_ids) > 1:
-                ids_str = ",".join(str(e) for e in exp_ids)
-                seq_str = f"(Exp#{ids_str}: {len(exp_ids)}x[Gate+SiLU+Up+Down])"
+                if len(exp_ids) <= 3:
+                    ids_str = ",".join(str(e) for e in exp_ids)
+                    seq_str = f"(Exp#{ids_str}: {len(exp_ids)}x[Gate+SiLU+Up+Down])"
+                else:
+                    seq_str = f"(Exp#{exp_ids[0]}..#{exp_ids[-1]}: {len(exp_ids)}x[Gate+SiLU+Up+Down])"
             else:
                 seq_str = "(ExpertFFN: Gate + SiLU + Up + Down)"
         else:

@@ -28,6 +28,14 @@ BookSim2 models:
 ## 🏗️ Architecture & Core Contributions
 
 * **Compute Engine (LLMSimulator):** Accurately models modern transformer building blocks, Grouped Query Attention (GQA), SwiGLU activations, and MoE routing on state-of-the-art accelerators (e.g., Nvidia B100).
+* **Architectural Comparison: Mixtral 8x7B vs. DeepSeek-V3 (Fine-Grained MoE & MLA - Vía 4):**
+  * Models next-generation fine-grained Mixture of Experts (DeepSeek-V3) alongside classical coarse-grained MoE (Mixtral 8x7B).
+  * **Fine-Grained MoE Topology:** Simulates $E = 256$ routed micro-experts (32 experts per GPU on 8 GPUs) with Top-8 dynamic routing ($k = 8$) and 1 shared expert executed unconditionally on all devices, preceded by 3 initial dense layers.
+  * **Multi-Head Latent Attention (MLA):** Captures low-rank KV compression ($d_c = 512$) and query compression ($d_c' = 1536$) with decoupled Rotary Position Embeddings (RoPE), modeling matrix absorption during autoregressive generation.
+  * **Dual-Precision Execution:** Models FP8 tensor cores for linear GEMM operations and activation transfer in Scatter ($7168\text{ B/token}$), coupled with BF16 activation gradient accumulation in Gather ($14336\text{ B/token}$), yielding an exact $2\times$ packet volume asymmetry between Scatter and Gather.
+  * **Massive Burst Network Contention:** Rigorously quantifies the network explosion of fine-grained MoE, capturing an $18.7\times$ surge in packet volume ($2.14\text{M}$ packets vs. $114\text{K}$ in Mixtral) and an $8.9\times$ escalation in NIC queueing delays ($11,192\text{ cycles}$ vs. $1,252\text{ cycles}$).
+  * **Topological Sensitivity & Bisection Bandwidth (2D Mesh vs. 1D Torus):** Evaluates DeepSeek-V3 across physical interconnects (1D Torus vs. 2D Mesh 4x2 mapped via BookSim2 AnyNet), demonstrating that orthogonal 2D bisection bandwidth alleviates buffer contention, trimming average NIC queue delays by $-9.04\%$ ($-1,012\text{ cycles}$) and dropping peak queue delays by $-19.19\%$ (from $52,680$ down to $42,573$ cycles).
+  * **Arithmetic Headroom for DualPipe Overlap:** Empirically establishes $T_{\text{compute}} / T_{\text{transit}} \approx 2.50 - 2.66\times$ ($8.34\text{ ms}$ compute vs. $3.14 - 3.34\text{ ms}$ network transit), confirming that accelerator silicon has sufficient arithmetic headroom to completely mask collective communication under micro-batch pipelining.
 * **Network Engine (BookSim2):** Simulates flit-level packet traversal through routers, crossbars, and physical links.
 * **Cycle-Accurate Tensor Parallelism (AllReduce) in BookSim2 (Vía 2):**
   * Models Ring-AllReduce collective communication at flit-level granularity when `tensor_degree > 1` (`none_expert_tensor_degree`).
@@ -122,7 +130,7 @@ python3 run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 2 --batch
 #### Workload & Model Options (LLMSimulator)
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `--model` | `str` | `mixtral` | Target LLM architecture (`mixtral`, `llama`). |
+| `--model` | `str` | `mixtral` | Target LLM architecture (`mixtral`, `deepseekV3` / `deepseek`, `llama`). |
 | `--batch_size` | `int` | `32` | Maximum concurrent batch size for continuous batching. |
 | `--skewness` / `--skew` | `float` | `0.0` | MoE token routing distribution factor (Zipfian exponent $s$). $0.0$ generates uniform routing; $> 0$ concentrates tokens on low-indexed experts, inducing severe network in-cast congestion and barrier stragglers. |
 | `--tensor_degree` / `--tp` | `int` | `1` | Tensor Parallelism degree for non-expert layers (Attention/linear projections). When $> 1$, Ring-AllReduce is simulated cycle-accurately in BookSim2. |
@@ -222,8 +230,11 @@ cd LLMSimulator
 # High-resolution 10,000 ns windows (ideal for inspecting individual micro-operations)
 python3 plot_cronograma.py build/results/<simulation_folder>/ --window 10000
 
-# Overview 100,000 ns windows (ideal for full transformer layers)
+# Overview 100,000 ns windows (ideal for full transformer layers in coarse-grained models like Mixtral)
 python3 plot_cronograma.py build/results/<simulation_folder>/ --window 100000
+
+# Macroscopic 250,000 ns windows (ideal for full hybrid MoE layers with 32 micro-experts like DeepSeek-V3)
+python3 plot_cronograma.py build/results/<simulation_folder>/ --window 250000
 ```
 
 **Key Features & Visual Output:**
@@ -265,6 +276,8 @@ python3 plot_cronograma.py build/results/<simulation_folder>/ --window 100000
 
 ## 🔬 Theoretical Foundation: Packet Sizing & Flit Allocation
 
+### Mixtral 8x7B (BF16, Coarse-Grained MoE)
+
 In Mixtral 8x7B simulations, all packets uniformly report **9 flits** and **288 Bytes**:
 
 $$\begin{aligned}
@@ -278,6 +291,24 @@ Because $4096$ is an exact multiple of the $256\text{ B}$ MTU, no fractional pac
 2. **Total Packet Size:** $256\text{ B (payload)} + 24\text{ B (header)} = 280\text{ Bytes}$.
 3. **Flits Required:** $\lceil 280 / 32\text{ B/flit} \rceil = \mathbf{9\text{ flits}}$ (8 full flits $+ 1$ tail flit holding the remaining 24 B of payload and 8 B of physical padding).
 4. **Physical Wire Footprint:** $9 \times 32\text{ B/flit} = \mathbf{288\text{ Bytes}}$.
+
+### DeepSeek-V3 (FP8/BF16, Fine-Grained MoE)
+
+DeepSeek-V3 features $d_{\text{model}} = 7168$ under FP8 computation with BF16 activation gradient/residual accumulation in Gather:
+
+1. **`MoEScatter` (FP8 Activation Transfer):**
+   $$\begin{aligned}
+   \text{Scatter Payload } (d_{\text{model}} \times 1\text{ B}) &= 7168 \text{ Bytes/token} \\
+   \frac{7168\text{ B}}{256\text{ B}} &= \mathbf{28 \text{ exact packets/token}}
+   \end{aligned}$$
+   Each packet requires $\lceil (256 + 24) / 32 \rceil = \mathbf{9\text{ flits}}$ ($288\text{ B}$ on the wire).
+
+2. **`MoEGather` (BF16 Activation Accumulation):**
+   $$\begin{aligned}
+   \text{Gather Payload } (d_{\text{model}} \times 2\text{ B}) &= 14336 \text{ Bytes/token} \\
+   \frac{14336\text{ B}}{256\text{ B}} &= \mathbf{56 \text{ exact packets/token}}
+   \end{aligned}$$
+   Because activations are aggregated in BF16 precision, Gather emits exactly **twice as many packets as Scatter** ($1,428,112$ pkts in Gather vs. $714,056$ pkts in Scatter across 57 MoE layers), intensifying in-cast network congestion towards token origins.
 
 ---
 

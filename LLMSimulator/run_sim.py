@@ -39,17 +39,47 @@ def parse_args():
 def generate_configs(args, output_dir, total_devices):
     n_dims = len(args.net_dims)
     
-    # BookSim2 solo acepta redes simétricas (k entero). Tomamos el primer valor.
-    k_str = str(args.net_dims[0])
-    
     booksim_cfg_path = os.path.join(output_dir, "test.cfg")
-    with open(booksim_cfg_path, "w") as f:
-        f.write(f"topology = {args.topology};\n")
-        f.write(f"k = {k_str};\n")
-        f.write(f"n = {n_dims};\n")
-        f.write(f"routing_function = {args.routing};\n")
-        f.write(f"num_vcs = {args.vcs};\n")
-        f.write(f"injection_rate = 0.0;\n")
+    
+    # Soporte nativo para mallas 2D asimétricas mediante AnyNet
+    if args.topology == "mesh" and n_dims == 2 and args.net_dims[0] != args.net_dims[1]:
+        d0, d1 = args.net_dims[0], args.net_dims[1]
+        anynet_file_path = os.path.abspath(os.path.join(output_dir, f"mesh_{d0}x{d1}.txt"))
+        with open(anynet_file_path, "w") as af:
+            for r in range(d0):
+                for c in range(d1):
+                    node_id = r * d1 + c
+                    neighbors = []
+                    if r > 0:
+                        neighbors.append(f"router {(r - 1) * d1 + c}")
+                    if r < d0 - 1:
+                        neighbors.append(f"router {(r + 1) * d1 + c}")
+                    if c > 0:
+                        neighbors.append(f"router {r * d1 + (c - 1)}")
+                    if c < d1 - 1:
+                        neighbors.append(f"router {r * d1 + (c + 1)}")
+                    af.write(f"router {node_id} node {node_id} " + " ".join(neighbors) + "\n")
+        
+        # Copiar también en la raíz local para máxima compatibilidad
+        shutil.copy(anynet_file_path, f"mesh_{d0}x{d1}.txt")
+        
+        with open(booksim_cfg_path, "w") as f:
+            f.write(f"// Topologia Malla 2D Asimetrica ({d0}x{d1} = {total_devices} nodos)\n")
+            f.write(f"topology = anynet;\n")
+            f.write(f"network_file = {anynet_file_path};\n")
+            f.write(f"routing_function = min;\n")
+            f.write(f"num_vcs = {args.vcs};\n")
+            f.write(f"injection_rate = 0.0;\n")
+    else:
+        # BookSim2 KNCube simétrico
+        k_str = str(args.net_dims[0])
+        with open(booksim_cfg_path, "w") as f:
+            f.write(f"topology = {args.topology};\n")
+            f.write(f"k = {k_str};\n")
+            f.write(f"n = {n_dims};\n")
+            f.write(f"routing_function = {args.routing};\n")
+            f.write(f"num_vcs = {args.vcs};\n")
+            f.write(f"injection_rate = 0.0;\n")
 
     parallel_str = "on" if args.parallel else "off"
     gantt_str = "on" if args.gantt else "off"
@@ -117,6 +147,13 @@ def main():
         sys.exit(1)
 
     args = parse_args()
+    
+    # Normalización de alias de modelos (ej. deepseek, deepseek-v3 -> deepseekV3)
+    if args.model.lower() in ["deepseek", "deepseekv3", "deepseek-v3", "deepseek_v3"]:
+        args.model = "deepseekV3"
+    elif args.model.lower() in ["mixtral", "mixtral8x7b", "mixtral_8x7b"]:
+        args.model = "mixtral"
+
     total_devices = math.prod(args.net_dims)
     
     # ==========================================
@@ -128,10 +165,13 @@ def main():
         sys.exit(1)
         
     if not all(dim == args.net_dims[0] for dim in args.net_dims):
-        print("🛑 ERROR DE ARQUITECTURA (BookSim2 Limit):")
-        print("   BookSim2 solo soporta mallas/toros SIMÉTRICOS usando k y n.")
-        print("   Todas las dimensiones deben ser iguales (ej. 4 4, no 4 2).")
-        sys.exit(1)
+        if args.topology == "mesh" and len(args.net_dims) == 2:
+            pass  # Permitido: Malla 2D asimétrica gestionada mediante AnyNet
+        else:
+            print("🛑 ERROR DE ARQUITECTURA (BookSim2 Limit):")
+            print("   BookSim2 solo soporta mallas/toros SIMÉTRICOS usando k y n (o mallas 2D asimétricas mediante AnyNet).")
+            print("   Todas las dimensiones deben ser iguales (ej. 4 4, o 4 2 con topology=mesh).")
+            sys.exit(1)
         
     if total_devices % args.tensor_degree != 0:
         print("🛑 ERROR CRÍTICO DE ARQUITECTURA:")

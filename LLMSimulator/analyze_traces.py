@@ -271,7 +271,7 @@ def extract_network_stats(folder_path, folder_name, num_gpus):
         except Exception:
             pass
 
-    if bs == "N/A" or topology == "desconocida" or tp == 1 or skewness == 0.0:
+    if bs == "N/A" or topology in ["desconocida", "anynet"] or tp == 1 or skewness == 0.0:
         for part in folder_name.split("_"):
             if part.startswith("bs") and bs == "N/A":
                 bs = part[2:]
@@ -285,12 +285,24 @@ def extract_network_stats(folder_path, folder_name, num_gpus):
                     skewness = float(val)
                 except Exception:
                     pass
-            elif part in ["torus", "mesh"] and topology == "desconocida":
+            elif part in ["torus", "mesh"] and topology in ["desconocida", "anynet"]:
                 topology = part
+
+    model_name = "mixtral"
+    if os.path.exists(config_yaml):
+        try:
+            with open(config_yaml, 'r') as fp:
+                for line in fp:
+                    if "model_name:" in line:
+                        model_name = line.split(":")[1].strip()
+        except Exception:
+            pass
+    if model_name == "mixtral" and folder_name.split("_")[0] != "mixtral":
+        model_name = folder_name.split("_")[0]
 
     tp_tag = f", TP={tp}" if tp > 1 else ""
     skew_tag = f", Skew={skewness}" if skewness > 0.0 else ""
-    label = f"{num_gpus}dev {topology.capitalize()} (VCs={num_vcs}, BS={bs}{tp_tag}{skew_tag})"
+    label = f"{model_name} {num_gpus}dev {topology.capitalize()} (VCs={num_vcs}, BS={bs}{tp_tag}{skew_tag})"
 
     # Cálculo de tasa de inyección lambda y latencias por colectiva
     op_points = []

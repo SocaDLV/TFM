@@ -1,5 +1,5 @@
 model:
-  model_name: mixtral
+  model_name: deepseekV3
 
 system:
   gpu_gen: B100
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/mixtral_8dev_torus_bs32_skew1.0_20261110_171236/
-  gantt_directory: build/results/mixtral_8dev_torus_bs32_skew1.0_20261110_171236/gantt/
+  output_directory: build/results/deepseekV3_4x2dev_mesh_bs32_20261117_195104/
+  gantt_directory: build/results/deepseekV3_4x2dev_mesh_bs32_20261117_195104/gantt/
