@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM-NoC Co-Simulation Workbench</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Header Superior -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="20" height="20" rx="4" />
+          <circle cx="7" cy="7" r="2" />
+          <circle cx="17" cy="7" r="2" />
+          <circle cx="7" cy="17" r="2" />
+          <circle cx="17" cy="17" r="2" />
+          <line x1="7" y1="9" x2="7" y2="15" />
+          <line x1="17" y1="9" x2="17" y2="15" />
+          <line x1="9" y1="7" x2="15" y2="7" />
+          <line x1="9" y1="17" x2="15" y2="17" />
+        </svg>
+      </div>
+      <div class="header-titles">
+        <h1>LLM-NoC Co-Simulation Workbench</h1>
+        <p class="subtitle">LLMSimulator + BookSim2 Cycle-Accurate Framework</p>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <div id="live-status-pill" class="status-pill status-idle">
+        <span class="status-dot"></span>
+        <span id="live-status-text">Listo</span>
+      </div>
+      <button id="btn-open-help" class="btn-help">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        Ayuda y Créditos
+      </button>
+    </div>
+  </header>
+
+  <!-- Barra de Navegación por Pestañas -->
+  <nav class="tabs-nav">
+    <button class="tab-btn active" data-tab="tab-config">
+      <span class="tab-num">1</span>
+      <span>Nueva Simulación</span>
+      <span class="tab-tag">Configurador</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-results">
+      <span class="tab-num">2</span>
+      <span>Resultados y Líneas de Tiempo</span>
+      <span id="tab2-badge" class="tab-badge-staging hidden">Staging</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-history">
+      <span class="tab-num">3</span>
+      <span>Historial y Comparativa</span>
+      <span class="tab-tag">Fase 3</span>
+    </button>
+    <button class="tab-btn" data-tab="tab-topology">
+      <span class="tab-num">4</span>
+      <span>Topología NoC y Arquitectura</span>
+      <span class="tab-tag">Fase 4</span>
+    </button>
+  </nav>
+
+  <!-- Contenedor Principal de Pestañas -->
+  <main class="main-content">
+    
+    <!-- PESTAÑA 1: NUEVA SIMULACIÓN (CONFIGURADOR) -->
+    <section id="tab-config" class="tab-pane active">
+      <div class="config-grid">
+        
+        <!-- Tarjeta A: Modelo LLM y Carga de Trabajo -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">🧠</div>
+            <div>
+              <h2>Modelo LLM y Carga de Trabajo</h2>
+              <p class="card-subtitle">Hiperparámetros de modelo, GPU y decodificación autorregresiva</p>
+            </div>
+          </div>
+
+          <div class="card-body form-grid">
+            <!-- Modelo LLM -->
+            <div class="form-group full-width">
+              <label for="cfg-model">Modelo de Lenguaje (LLM):</label>
+              <select id="cfg-model" class="form-control">
+                <option value="mixtral" selected>Mixtral 8x7B (Sparse MoE)</option>
+                <option value="deepseekV3">DeepSeek-V3 (Fine-Grained MoE + MLA)</option>
+                <option value="llama">LLaMA Dense (Baseline)</option>
+              </select>
+              <div id="model-desc-box" class="model-desc-box">
+                <!-- Se actualiza dinámicamente vía app.js -->
+              </div>
+            </div>
+
+            <!-- Generación de GPU y Modo de Datos -->
+            <div class="form-group">
+              <label for="cfg-gpu">Acelerador GPU:</label>
+              <select id="cfg-gpu" class="form-control">
+                <option value="B100" selected>NVIDIA B100 (Blackwell 8 TB/s HBM3E)</option>
+                <option value="H100">NVIDIA H100 (Hopper 3.35 TB/s HBM3)</option>
+                <option value="B200">NVIDIA B200 (Blackwell 8 TB/s HBM3E)</option>
+                <option value="A100">NVIDIA A100 (Ampere 2 TB/s HBM2e)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-data-mode">Modo de Tráfico/Datos:</label>
+              <select id="cfg-data-mode" class="form-control">
+                <option value="synthesis" selected>Síntesis (Uniform/Synthetic Tokens)</option>
+                <option value="analytical">Analítico (Determinista)</option>
+              </select>
+            </div>
+
+            <!-- Parámetros de Lote e Inferencia -->
+            <div class="form-group">
+              <label for="cfg-batch-size">Batch Size (BS):</label>
+              <input type="number" id="cfg-batch-size" class="form-control" value="32" min="1" max="256">
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-input-len">Input Length (Prefill Tokens):</label>
+              <input type="number" id="cfg-input-len" class="form-control" value="1024" min="1" max="8192">
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-output-len">Output Length (Pasos Decode):</label>
+              <input type="number" id="cfg-output-len" class="form-control" value="2" min="1" max="100">
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-iter">Iteraciones Estadísticas:</label>
+              <input type="number" id="cfg-iter" class="form-control" value="2" min="1" max="20">
+            </div>
+
+            <!-- Tensor Parallelism y Skewness -->
+            <div class="form-group">
+              <label for="cfg-tp">Tensor Parallelism (TP Degree):</label>
+              <input type="number" id="cfg-tp" class="form-control" value="1" min="1" max="16">
+              <span class="field-hint">División de capas densas y Ring-AllReduce</span>
+            </div>
+
+            <div class="form-group">
+              <label for="cfg-skewness">Desbalanceo MoE (Skewness Zipfiano):</label>
+              <div class="slider-row">
+                <input type="range" id="cfg-skewness-slider" min="0.0" max="2.0" step="0.1" value="0.0" class="slider-control">
+                <input type="number" id="cfg-skewness-input" class="form-control num-sm" value="0.0" min="0.0" max="2.0" step="0.1">
+              </div>
+              <span id="skewness-label" class="field-hint">0.0 (Distribución Uniforme de Tokens)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tarjeta B: Arquitectura de Red NoC (BookSim2) -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-icon">🌐</div>
+            <div>
+              <h2>Arquitectura de Red NoC (BookSim2)</h2>
+              <p class="card-subtitle">Topología de conmutación, canales virtuales y enrutamiento a nivel de flit</p>
+            </div>
+          </div>
+
+          <div class="card-body form-grid">
+            <!-- Topología -->
+            <div class="form-group">
+              <label for="cfg-topology">Topología de Red:</label>
+              <select id="cfg-topology" class="form-control">
+                <option value="torus" selected>Torus (Toro con Enlaces Wrap-Around)</option>
+                <option value="mesh">Mesh (Malla Regular o AnyNet Asimétrica)</option>
+                <option value="ring">Ring (Anillo Unidimensional)</option>
+              </select>
+            </div>
+
+            <!-- Dimensiones de Red -->
+            <div class="form-group">
+              <label for="cfg-net-dims">Dimensiones Espaciales (net_dims):</label>
+              <input type="text" id="cfg-net-dims" class="form-control" value="8" placeholder="ej. 8, o 4 2, o 2 2 2">
+              <div class="dim-pills-row">
+                <span id="gpu-count-pill" class="badge-pill">8 GPUs en total</span>
+                <span id="anynet-note-pill" class="badge-pill badge-info hidden">AnyNet 2D Asimétrica</span>
+              </div>
+            </div>
+
+            <!-- Algoritmo de Enrutamiento -->
+            <div class="form-group">
+              <label for="cfg-routing">Algoritmo de Enrutamiento:</label>
+              <select id="cfg-routing" class="form-control">
+                <option value="dim_order" selected>dim_order (Dimension-Order Routing DOR)</option>
+                <option value="min_adapt">min_adapt (Mínimo Adaptativo por Congestión)</option>
+                <option value="min">min (Caminos Mínimos Dijkstra - AnyNet)</option>
+              </select>
+              <span class="field-hint">Función de selección de puertos en routers</span>
+            </div>
+
+            <!-- Canales Virtuales -->
+            <div class="form-group">
+              <label for="cfg-vcs">Canales Virtuales por Puerto (VCs):</label>
+              <input type="number" id="cfg-vcs" class="form-control" value="4" min="1" max="16">
+              <span class="field-hint">Torus exige al menos 2 VCs (Dateline routing)</span>
+            </div>
+
+            <!-- Checkbox SIM_DEBUG_PIDS -->
+            <div class="form-group full-width checkbox-card">
+              <label class="checkbox-label">
+                <input type="checkbox" id="cfg-debug-pids" checked>
+                <span class="checkbox-custom"></span>
+                <div>
+                  <strong>Captura detallada de flits en vuelo (<code>SIM_DEBUG_PIDS="1"</code>)</strong>
+                  <p class="checkbox-subtext">Genera <code>packet_tracking_debug.csv</code> para análisis microarquitectural de colas e inspección ciclo a ciclo.</p>
+                </div>
+              </label>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Contenedor de Guardarraíles y Avisos en Tiempo Real -->
+      <div id="guardrails-container" class="guardrails-area">
+        <!-- Inyectado dinámicamente por app.js -->
+      </div>
+
+      <!-- Panel Inferior: Comando CLI y Consola en Vivo -->
+      <div class="card bottom-console-card">
+        <div class="command-preview-bar">
+          <div class="cmd-label">Comando CLI Equivalente:</div>
+          <code id="cmd-preview-text">python run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 4 --batch_size 32 --output_len 2 --iter 2</code>
+          <button id="btn-copy-cmd" class="btn-sm" title="Copiar al portapapeles">📋 Copiar</button>
+        </div>
+
+        <div class="action-buttons-row">
+          <button id="btn-run-sim" class="btn-primary">
+            <span class="btn-icon">🚀</span>
+            <span>Lanzar Co-Simulación</span>
+          </button>
+          <button id="btn-abort-sim" class="btn-danger" disabled>
+            <span class="btn-icon">🛑</span>
+            <span>Abortar</span>
+          </button>
+          
+          <div class="exec-metrics">
+            <span id="exec-timer" class="metric-tag">⏱️ 00:00:00</span>
+            <span id="exec-progress-tag" class="metric-tag">Progreso: 0%</span>
+          </div>
+        </div>
+
+        <!-- Barra de Progreso Visual -->
+        <div class="progress-bar-container">
+          <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%;"></div>
+        </div>
+        <div id="progress-detail-text" class="progress-detail-text">Listo para iniciar simulación.</div>
+
+        <!-- Consola Terminal Interactiva -->
+        <div class="console-box">
+          <div class="console-header">
+            <div class="console-dots">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+              <span class="console-title">Consola de Simulación en Vivo (stdout/stderr)</span>
+            </div>
+            <div class="console-actions">
+              <label class="autoscroll-toggle">
+                <input type="checkbox" id="chk-autoscroll" checked>
+                <span>Auto-scroll</span>
+              </label>
+              <button id="btn-clear-console" class="btn-console-tool" title="Limpiar pantalla">🗑️ Limpiar</button>
+            </div>
+          </div>
+          <pre id="console-output" class="console-output">Esperando el inicio de una nueva simulación...</pre>
+        </div>
+
+        <!-- Toast de Notificación al Finalizar -->
+        <div id="completion-toast" class="completion-toast hidden">
+          <div class="toast-content">
+            <div class="toast-icon">✅</div>
+            <div class="toast-text">
+              <strong>¡Simulación completada con éxito!</strong>
+              <p>Los datos han sido sellados en staging temporal. Haz clic para inspeccionar los resultados.</p>
+            </div>
+          </div>
+          <button id="btn-jump-results" class="btn-primary btn-sm">Ver Resultados (Pestaña 2) ➔</button>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- PESTAÑA 2: RESULTADOS Y LÍNEAS DE TIEMPO (PREPARADA PARA FASE 2) -->
+    <section id="tab-results" class="tab-pane">
+      <!-- Banner Contextual de Staging -->
+      <div id="staging-banner" class="staging-banner">
+        <div class="staging-info">
+          <span class="staging-badge">Área Temporal</span>
+          <span id="staging-folder-name" class="staging-name">Ninguna simulación activa en staging</span>
+          <span id="staging-save-status" class="staging-unsaved">(No guardada)</span>
+        </div>
+        <div class="staging-actions">
+          <button id="btn-save-staging" class="btn-sm btn-success" disabled>💾 Guardar en Resultados</button>
+          <button id="btn-discard-staging" class="btn-sm btn-outline-danger" disabled>🗑️ Descartar</button>
+        </div>
+      </div>
+
+      <!-- Tarjetas KPI Resumen -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <div class="kpi-label">Tiempo de Muro (Wall-Clock)</div>
+          <div id="kpi-wallclock" class="kpi-value">-- µs</div>
+          <div class="kpi-sub">Duración total de inferencia</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Latencia Media de Flit</div>
+          <div id="kpi-flit-lat" class="kpi-value">-- ciclos</div>
+          <div class="kpi-sub">BookSim2 NoC average</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Total Paquetes Transmitidos</div>
+          <div id="kpi-total-pkts" class="kpi-value">-- pkts</div>
+          <div class="kpi-sub">Inyecciones colectivas MoE/TP</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Retardo Medio en Colas NIC</div>
+          <div id="kpi-queue-delay" class="kpi-value">-- ciclos</div>
+          <div class="kpi-sub">Contención por créditos / in-cast</div>
+        </div>
+      </div>
+
+      <!-- Placeholder para Líneas de Tiempo Interactivas Canvas (Fase 2) -->
+      <div class="timeline-container-card">
+        <div class="timeline-card-header">
+          <div class="card-icon">⏱️</div>
+          <div>
+            <h3>Cronograma Causal GPU Ciclo a Ciclo (HTML5 Canvas)</h3>
+            <p class="card-subtitle">Renderizado interactivo de barras con zoom, pan y tooltip (Fase 2)</p>
+          </div>
+        </div>
+        <div class="canvas-placeholder">
+          <div class="placeholder-content">
+            <div class="placeholder-icon">📊</div>
+            <p><strong>Lienzo interactivo preparado para la Fase 2</strong></p>
+            <p class="placeholder-hint">Visualizará Atención (verde), Scatter/Gather (azul), AllReduce (morado) y Stalls (rojo) renderizados directamente en el navegador.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-container-card">
+        <div class="timeline-card-header">
+          <div class="card-icon">📦</div>
+          <div>
+            <h3>Visualizador de Paquetes NoC en Vuelo (BookSim2 Canvas)</h3>
+            <p class="card-subtitle">Seguimiento de colas, retardo de vuelo y flits ciclo a ciclo (Fase 2)</p>
+          </div>
+        </div>
+        <div class="canvas-placeholder">
+          <div class="placeholder-content">
+            <div class="placeholder-icon">🛰️</div>
+            <p><strong>Visualizador de paquetes preparado para la Fase 2</strong></p>
+            <p class="placeholder-hint">Inspección temporal flit a flit de `packet_tracking_debug.csv` con control de reproducción y filtrado por nodo.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PESTAÑA 3: HISTORIAL Y COMPARATIVA (PREPARADA PARA FASE 3) -->
+    <section id="tab-history" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">📂</div>
+          <div>
+            <h2>Historial de Simulaciones y Comparativa de Métricas</h2>
+            <p class="card-subtitle">Selección de ejecuciones guardadas para análisis comparativo multidimensional</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="placeholder-box">
+            <p><strong>Estructura lista para la Fase 3:</strong></p>
+            <p>Esta pestaña integrará un explorador de simulaciones guardadas en <code>build/results/</code> con checkboxes para comparar aceleración, latencia de red, desbalanceo de carga y curvas de saturación en tiempo real.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PESTAÑA 4: TOPOLOGÍA NOC Y ARQUITECTURA (PREPARADA PARA FASE 4) -->
+    <section id="tab-topology" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">🗺️</div>
+          <div>
+            <h2>Topología NoC y Mapa de Arquitectura</h2>
+            <p class="card-subtitle">Visor vectorial interactivo de routers y mapa de calor de tráfico por GPU</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="placeholder-box">
+            <p><strong>Estructura lista para la Fase 4:</strong></p>
+            <p>Esta pestaña incorporará un mapa vectorial interactivo (SVG/Canvas) de conmutadores NoC para Toro 1D, Malla 2D 4x2 y Malla 3D, mostrando en tiempo real los puntos calientes y cuellos de botella de in-cast.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal de Ayuda y Créditos -->
+  <div id="help-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-row">
+          <span class="modal-icon">ℹ️</span>
+          <h3>Acerca de LLM-NoC Co-Simulation Workbench</h3>
+        </div>
+        <button id="btn-close-modal" class="modal-close-btn">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="credit-section">
+          <h4>🎓 Autor y Trabajo de Fin de Máster (TFM)</h4>
+          <p><strong>Autor / Investigador:</strong> SocaDLV</p>
+          <p><strong>Repositorio Oficial:</strong> <a href="https://github.com/SocaDLV/TFM" target="_blank" rel="noopener noreferrer">https://github.com/SocaDLV/TFM</a></p>
+          <p><strong>Institución Académica:</strong> Universitat Politècnica de València (UPV)</p>
+          <p><strong>Marco Científico:</strong> Co-simulación ciclo a ciclo de inferencia distribuida de LLMs (Mixtral 8x7B, DeepSeek-V3) con modelado de red NoC a nivel de flit mediante un Oráculo BSP con Causalidad Cuádruple.</p>
+        </div>
+
+        <div class="credit-section">
+          <h4>🏛️ Reconocimientos y Proyectos Base</h4>
+          <ul>
+            <li>
+              <strong>LLMSimulator:</strong> Desarrollado por el laboratorio <em>SCALE (Seoul National University)</em>. Proporciona el modelado computacional y de memoria GPU (Roofline, atención MLA, GQA, MoE).
+            </li>
+            <li>
+              <strong>BookSim2:</strong> Desarrollado por el <em>Stanford Concurrent VLSI Architecture Group</em> (Bill Dally et al.). Proporciona la simulación microarquitectural ciclo a ciclo del router de canales virtuales (`IQRouter`), topologías directas (Toro, Malla, AnyNet) y control de flujo por créditos.
+            </li>
+          </ul>
+        </div>
+
+        <div class="credit-section">
+          <h4>💡 Innovaciones del Co-Simulador</h4>
+          <p>Integración de colectivas de red (MoEScatter, MoEGather, Ring-AllReduce) en BookSim2, preservación de asincronía y causalidad temporal cuádruple, soporte para Mallas 2D asimétricas mediante AnyNet, seguimiento exhaustivo de paquetes (<code>[TRACK_PID]</code>) y trazabilidad completa de ciclo de vida.</p>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button id="btn-modal-ok" class="btn-primary btn-sm">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+

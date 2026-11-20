@@ -1,0 +1,1 @@
+python run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 4 --routing dim_order --batch_size 32 --input_len 1024 --output_len 2 --iter 2 --tensor_degree 1 --skewness 0.0 --data_mode synthesis
