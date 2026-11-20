@@ -87,6 +87,20 @@
    - 9.4. Bloque D: Trazabilidad, Visualización y Rigor Metodológico (P16–P20)
    - 9.5. Bloque E: Perfiles Hardware (B100), Subsistema de Memoria (Ramulator 2.0) y Energía (P21–P25)
    - 9.6. Bloque F: Topologías Concretas, Enrutamiento NoC y Escalabilidad (P26–P30)
+10. [Capítulo 10: Interfaz Gráfica de Usuario (GUI) y Entorno Interactivo de Co-Simulación Web Local (Workbench)](#capítulo-10-interfaz-gráfica-de-usuario-gui-y-entorno-interactivo-de-co-simulación-web-local-workbench)
+   - 10.1. Motivación y Arquitectura del Workbench (`launch_gui.py` y `gui/`)
+   - 10.2. Aislamiento Estricto y Ciclo de Vida en Staging (`build/tmp_staging/`)
+   - 10.3. Pestaña 1: Configurador Interactivo y Guardarraíles en Tiempo Real
+   - 10.4. Pestaña 2: Resultados Arquitectónicos y Visualizadores en Canvas HTML5 al Vuelo
+   - 10.5. Selector Multidimensional de Iteraciones (Fase 2.5)
+   - 10.6. Visualizador Híbrido Sincronizado Split-Screen (Fase 2.5)
+   - 10.7. Pestaña 3: Gestor de Historial y Comparador Multi-Simulación Arbitrario (Fase 3)
+   - 10.8. Pulido y Mejoras de Usabilidad Científica (Fase 3.5)
+   - 10.9. Refinamiento del Visualizador Híbrido: Contenedor Acotado con Scroll Único, Virtual Scrolling y Tooltips Microarquitectónicos (Fases 3.8 y 3.9)
+   - 10.10. Auditoría Matemática y Paridad Absoluta CLI ↔ GUI (Fase 3.9.1)
+   - 10.11. Pestaña 4: Mapa Topológico Interactivo NoC, Heatmap de Tráfico e Inspector Arquitectónico (Fase 4)
+   - 10.12. Refinamiento de Pestaña 4: Mapa de Calor Térmico en Enlaces/Flujos NoC y Tooltips Interactivos en Hover sobre Conexiones (Fase 4.5)
+   - 10.13. Despliegue en Linux (`run_gui.sh`) y Validación End-to-End del Sistema (Fase 5)
 
 ---
 
@@ -3512,6 +3526,58 @@ El lienzo implementa detección matemática de puntero en tiempo real mediante r
   - Al posar el cursor sobre un enlace o flujo, se resalta inmediatamente con un trazado blanco/dorado brillante (`#f8fafc`, $+2.5\text{ px}$ de grosor) y se abre el tooltip flotante (`#topology-tooltip`):
     - **En Enlace Físico ($u \leftrightarrow v$):** Exhibe tipo de enlace, latencia base de conmutación (1c vecino o 2c wrap-around), volumen en paquetes y flits con cuota porcentual, balance direccional ($u \to v$ vs. $v \to u$), retardo medio en cola NIC y latencia media de red.
     - **En Flujo Lógico ($s \to d$):** Exhibe distancia topológica en saltos mínimos, volumen transmitido, cuota de tráfico, retardo en cola NIC (media y pico máximo registrado) y latencia desglosada (vuelo/contención NoC y latencia total de entrega).
+
+---
+
+## 10.13. Despliegue en Linux (`run_gui.sh`) y Validación End-to-End del Sistema (Fase 5)
+
+La Fase 5 culmina el desarrollo del *LLM-NoC Co-Simulation Workbench*, dotándolo de un mecanismo de arranque robusto para entornos Linux, higiene automática de directorios y una batería de pruebas de integración *End-to-End* (E2E) que certifica el funcionamiento impecable de sus 4 pestañas y el 100% de paridad matemática con los scripts CLI originales.
+
+### 1. Lanzador Portable para Linux (`run_gui.sh`)
+Para facilitar la reproducibilidad científica y la defensa técnica del TFM, se implementó el script ejecutable [`LLMSimulator/run_gui.sh`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/run_gui.sh) con permisos `chmod +x`. El lanzador realiza de forma desatendida las siguientes comprobaciones previas antes de levantar el servidor:
+1. **Posicionamiento Automático:** Determina el directorio canónico del script mediante `cd "$(dirname "${BASH_SOURCE[0]}")"`.
+2. **Auditoría de Entorno Python y Paquetes Científicos:** Verifica la disponibilidad de `python3` y la presencia de `pandas`, `numpy` y `matplotlib`. Si falta algún paquete, emite un mensaje descriptivo con el comando de instalación exacto.
+3. **Comprobación de Compilación del Simulador C++:** Valida la existencia del binario ejecutable `./build/run`. En caso de ausencia, guía al usuario imprimiendo los comandos estándar de compilación:
+   ```bash
+   cmake -B build
+   cmake --build build -j$(nproc)
+   ```
+4. **Higiene de Directorio Staging:** Detecta y purga carpetas vacías o sesiones huérfanas en `build/tmp_staging/` garantizando un estado inicial limpio (`idle`).
+5. **Propagación Transparente de Argumentos:** Analiza parámetros CLI (como `--port <N>` o `--no-browser`) sin mutar `$@` y transfiere el control directamente mediante `exec python3 launch_gui.py "$@"`.
+
+---
+
+### 2. Resultados de la Batería de Validación End-to-End (E2E)
+Se ejecutó un banco de pruebas automatizado integral contra una instancia real del servidor HTTP local (`launch_gui.py --no-browser --port 8095`), validando el ciclo de vida completo de una simulación:
+
+#### A. Recursos Estáticos y Tipado MIME
+Se verificó respuesta `HTTP 200` y cabeceras `Content-Type` correctas en todos los ficheros esenciales:
+- `/` $\implies$ `text/html; charset=utf-8` ($52.653\text{ B}$)
+- `/styles.css` $\implies$ `text/css; charset=utf-8` ($46.530\text{ B}$)
+- `/app.js` $\implies$ `text/javascript; charset=utf-8` ($82.538\text{ B}$)
+- `/timeline_canvas.js` $\implies$ `text/javascript; charset=utf-8` ($57.523\text{ B}$)
+- `/topology_canvas.js` $\implies$ `text/javascript; charset=utf-8` ($32.397\text{ B}$)
+- `/api/status` $\implies$ `application/json; charset=utf-8`
+
+#### B. Simulación Real en Staging: Malla 2D Asimétrica AnyNet con Tensor Parallelism (TP=2)
+Se lanzó vía `POST /api/run` una simulación de **Mixtral 8x7B en Malla 4x2 (8 GPUs)** con $TP=2$, $BS=32$ y 2 iteraciones, verificando:
+- **Generación Automática de AnyNet:** Escritura correcta del archivo de enlaces `mesh_4x2.txt` y configuración `test.cfg`.
+- **Monitorización Continua (`GET /api/status`):** Seguimiento en tiempo real de la ejecución hasta el $100\%$ de progreso completado en $7,5\text{ s}$ en `build/tmp_staging/`.
+- **Inspección de Pestaña 2:**
+  - Resumen macroscópico: $\text{Wall-Clock} = 1.063,18\text{ }\mu\text{s}$, $\text{Cómputo} = 828,48\text{ }\mu\text{s}$, $\text{Tránsito NoC} = 257,47\text{ }\mu\text{s}$, $\text{Stalls} = 14,47\text{ }\mu\text{s}$, $\text{Paquetes} = 119.000$, $\text{Flits} = 1.071.000$, $\lambda = 0,2616\text{ f/c/n}$.
+  - Detección de operaciones en cronograma: presencia activa de `AllReduce` (Tensor Parallelism), `Scatter` y `Gather` (MoE).
+  - Virtual Scrolling en visor de paquetes: $5.672\text{ paquetes}$ renderizados al vuelo en la ventana temporal sin truncamiento (`truncated: false`).
+- **Inspección de Pestaña 4 (Topología NoC):**
+  - Mapeo de los 10 enlaces físicos con $176.296\text{ paquetes}$ proyectados según el enrutamiento determinista y $56\text{ flujos}$ dirigidos observados.
+- **Inspección de Pestaña 3 (Comparativa Multi-Simulación):**
+  - Generación de las 3 gráficas vectoriales Base64 (`anatomia_latencia`, `desglose_primitivas_moe` y `curva_saturacion_red`) contrastando la simulación en staging contra simulaciones históricas guardadas (`deepseekV3_4x2dev_mesh` y `mixtral_8dev_torus_skew1.0`).
+- **Descarte Seguro (`POST /api/results/discard`):**
+  - Limpieza total del directorio `build/tmp_staging/` (0 elementos restantes) y transición automática del backend al estado `idle`.
+
+---
+
+### 3. Certificación de Aislamiento Estricto (Golden Rule of Isolation)
+Mediante inspección forense con `git diff` y `git status`, se certificó que **ninguno de los scripts CLI tradicionales** (`run_sim.py`, `analyze_traces.py`, `plot_cronograma.py`, `plot_packet_tracking.py`) ni los archivos fuente en C++ (`src/`, `eval/`, `booksim2/`) sufrieron alteración alguna durante el desarrollo de las 5 fases. La GUI web reside en un espacio totalmente autónomo en `gui/`, garantizando la coexistencia armónica y la repetibilidad estricta de los resultados.
 
 ---
 

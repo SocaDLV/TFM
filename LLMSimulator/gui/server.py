@@ -486,6 +486,9 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                             else:
                                 item.unlink()
 
+                # Reset runner instance state to idle
+                runner_instance.reset()
+
                 self._send_json(200, {
                     "success": True,
                     "status": "discarded",

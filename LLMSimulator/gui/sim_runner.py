@@ -90,6 +90,22 @@ class SimulationRunner:
                 "params": self.current_params
             }
 
+    def reset(self):
+        """Resets runner state back to idle after discarding or saving staging."""
+        with self.lock:
+            if self.status != "running":
+                self.status = "idle"
+                self.staging_folder_name = None
+                self.staging_dir = None
+                self.start_time = None
+                self.end_time = None
+                self.elapsed_seconds = 0.0
+                self.progress_percent = 0
+                self.progress_detail = ""
+                self.log_lines = []
+                self.error_message = None
+                self.current_params = {}
+
     def validate_params(self, params):
         """Validates configuration parameters against microarchitectural guardrails."""
         model = str(params.get("model", "mixtral")).strip()
