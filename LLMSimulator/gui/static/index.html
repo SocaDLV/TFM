@@ -299,6 +299,12 @@
           <span id="staging-save-status" class="staging-unsaved">(No guardada)</span>
         </div>
         <div class="staging-actions">
+          <div class="iteration-control-group">
+            <label for="iteration-selector">Ámbito / Iteración:</label>
+            <select id="iteration-selector" class="form-control select-sm">
+              <option value="last" selected>Última Iteración (Steady-State)</option>
+            </select>
+          </div>
           <input type="text" id="staging-custom-label" class="form-control staging-label-input" placeholder="Etiqueta opcional (ej: Torus TP=2 Baseline)">
           <button id="btn-save-staging" class="btn-sm btn-success" disabled>💾 Guardar Simulación</button>
           <button id="btn-discard-staging" class="btn-sm btn-outline-danger" disabled>🗑️ Descartar</button>
@@ -353,6 +359,10 @@
         <button id="btn-subview-packets" class="subview-btn">
           <span>🛰️</span>
           <span>Visualizador de Paquetes NoC en Vuelo</span>
+        </button>
+        <button id="btn-subview-hybrid" class="subview-btn">
+          <span>⚡</span>
+          <span>Visualizador Híbrido (Sincronizado)</span>
         </button>
       </div>
 
@@ -448,22 +458,299 @@
         </div>
       </div>
 
+      <!-- Sub-vista C: Visualizador Híbrido (Split-Screen Sincronizado) -->
+      <div id="subview-hybrid-container" class="timeline-container-card hidden">
+        <div class="timeline-toolbar">
+          <div class="toolbar-left">
+            <span class="toolbar-label">Ventana Sincronizada:</span>
+            <div class="btn-group">
+              <button class="btn-hybrid-preset btn-sm" data-preset="10">10 µs</button>
+              <button class="btn-hybrid-preset btn-sm active" data-preset="20">20 µs</button>
+              <button class="btn-hybrid-preset btn-sm" data-preset="50">50 µs</button>
+              <button class="btn-hybrid-preset btn-sm" data-preset="100">100 µs</button>
+              <button class="btn-hybrid-preset btn-sm" data-preset="250">250 µs</button>
+              <button class="btn-hybrid-preset btn-sm" data-preset="all">Total</button>
+            </div>
+            <div class="btn-group zoom-group">
+              <button id="btn-hybrid-zoom-in" class="btn-sm" title="Acercar (Zoom In)">➕</button>
+              <button id="btn-hybrid-zoom-out" class="btn-sm" title="Alejar (Zoom Out)">➖</button>
+              <button id="btn-hybrid-zoom-reset" class="btn-sm" title="Restablecer">↺</button>
+            </div>
+            <span id="hybrid-packet-badge" class="badge-pill badge-info">0 paquetes en ventana</span>
+          </div>
+          <div class="toolbar-right">
+            <span id="hybrid-window-info" class="window-info-text">Ventana: -- µs</span>
+          </div>
+        </div>
+
+        <!-- Split-Screen Container -->
+        <div class="split-screen-container">
+          <!-- Split Top: Cronograma GPU -->
+          <div class="split-pane split-pane-top">
+            <div class="split-pane-header">
+              <span class="split-pane-title">📊 Cronograma de Ejecución GPU (0..N-1)</span>
+              <span class="split-pane-sub">Operaciones de Cómputo y Colectivas de Red</span>
+            </div>
+            <div class="canvas-wrapper hybrid-canvas-wrapper">
+              <canvas id="hybrid-chronogram-canvas" height="260"></canvas>
+            </div>
+          </div>
+
+          <!-- Split Divider Line -->
+          <div class="split-divider">
+            <div class="split-divider-line"></div>
+            <span class="split-divider-badge">⏱️ Eje Temporal X Sincronizado (ns)</span>
+            <div class="split-divider-line"></div>
+          </div>
+
+          <!-- Split Bottom: Paquetes en Vuelo -->
+          <div class="split-pane split-pane-bottom">
+            <div class="split-pane-header">
+              <span class="split-pane-title">🛰️ Flujo de Paquetes NoC en Tránsito</span>
+              <span class="split-pane-sub">NIC Queue Delay (Naranja) + Red NoC Flight (Azul)</span>
+            </div>
+            <div class="canvas-wrapper hybrid-canvas-wrapper">
+              <canvas id="hybrid-packets-canvas" height="260"></canvas>
+            </div>
+          </div>
+
+          <!-- Shared Tooltip -->
+          <div id="hybrid-tooltip" class="timeline-tooltip hidden"></div>
+        </div>
+
+        <!-- Unified Scrubber Slider -->
+        <div class="scrubber-row">
+          <span class="scrubber-label">Navegación Temporal Unificada:</span>
+          <input type="range" id="hybrid-scrubber" min="0" max="1000" value="0" class="slider-control">
+          <span id="hybrid-scrubber-pos" class="scrubber-pos-text">0.00 µs</span>
+        </div>
+
+        <div class="canvas-legend">
+          <span class="legend-item"><span class="legend-dot dot-calc"></span> Cómputo</span>
+          <span class="legend-item"><span class="legend-dot dot-scatter"></span> MoE Scatter</span>
+          <span class="legend-item"><span class="legend-dot dot-gather"></span> MoE Gather</span>
+          <span class="legend-item"><span class="legend-dot dot-allreduce"></span> AllReduce</span>
+          <span class="legend-item"><span class="legend-dot dot-stall"></span> Stall</span>
+          <span class="legend-item"><span class="legend-dot dot-queue"></span> Cola NIC</span>
+          <span class="legend-item"><span class="legend-dot dot-flight"></span> Vuelo NoC</span>
+          <span class="legend-hint">💡 Cursor vertical sincronizado | Zoom y desplazamiento acoplados en tiempo real</span>
+        </div>
+      </div>
+
     </section>
 
-    <!-- PESTAÑA 3: HISTORIAL Y COMPARATIVA (PREPARADA PARA FASE 3) -->
+    <!-- PESTAÑA 3: HISTORIAL Y COMPARATIVA (FASE 3) -->
     <section id="tab-history" class="tab-pane">
-      <div class="card">
+      <!-- Panel Superior: Gestor de Simulaciones Guardadas -->
+      <div class="card history-manager-card">
         <div class="card-header">
           <div class="card-icon">📂</div>
           <div>
-            <h2>Historial de Simulaciones y Comparativa de Métricas</h2>
-            <p class="card-subtitle">Selección de ejecuciones guardadas para análisis comparativo multidimensional</p>
+            <h2>Gestor de Historial de Simulaciones</h2>
+            <p class="card-subtitle">Exploración, catalogación y carga directa en los visores interactivos de la Pestaña 2</p>
           </div>
         </div>
+
         <div class="card-body">
-          <div class="placeholder-box">
-            <p><strong>Estructura lista para la Fase 3:</strong></p>
-            <p>Esta pestaña integrará un explorador de simulaciones guardadas en <code>build/results/</code> con checkboxes para comparar aceleración, latencia de red, desbalanceo de carga y curvas de saturación en tiempo real.</p>
+          <!-- Barra de Filtros y Búsqueda -->
+          <div class="history-toolbar">
+            <div class="toolbar-group">
+              <label for="history-filter-model">Modelo:</label>
+              <select id="history-filter-model" class="form-control select-sm">
+                <option value="all" selected>Todos los Modelos</option>
+                <option value="mixtral">Mixtral 8x7B</option>
+                <option value="deepseekV3">DeepSeek-V3</option>
+                <option value="llama">LLaMA</option>
+              </select>
+            </div>
+
+            <div class="toolbar-group">
+              <label for="history-filter-topo">Topología:</label>
+              <select id="history-filter-topo" class="form-control select-sm">
+                <option value="all" selected>Todas las Topologías</option>
+                <option value="torus">Torus</option>
+                <option value="mesh">Mesh</option>
+                <option value="ring">Ring</option>
+              </select>
+            </div>
+
+            <div class="toolbar-group search-group">
+              <label for="history-search-input">Búsqueda:</label>
+              <input type="text" id="history-search-input" class="form-control input-sm" placeholder="Buscar por carpeta, etiqueta o hiperparámetro...">
+            </div>
+
+            <div class="toolbar-actions">
+              <button id="btn-refresh-history" class="btn-sm" title="Refrescar catálogo">🔄 Actualizar Lista</button>
+            </div>
+          </div>
+
+          <!-- Barra de Selección Masiva -->
+          <div class="history-selection-bar">
+            <div class="selection-status">
+              <span id="history-selected-count" class="badge-pill badge-info">0 simulaciones seleccionadas</span>
+            </div>
+            <div class="selection-tools">
+              <button id="btn-select-all-history" class="btn-link-sm">Seleccionar todas visibles</button>
+              <span class="divider-dot">•</span>
+              <button id="btn-deselect-all-history" class="btn-link-sm">Deseleccionar todas</button>
+            </div>
+          </div>
+
+          <!-- Tabla Interactiva de Simulaciones -->
+          <div class="table-responsive history-table-wrapper">
+            <table id="history-table" class="data-table">
+              <thead>
+                <tr>
+                  <th class="th-chk"><input type="checkbox" id="chk-select-all-history" title="Seleccionar todas las visibles"></th>
+                  <th class="th-folder">Carpeta y Etiqueta</th>
+                  <th class="th-model">Modelo</th>
+                  <th class="th-topo">Topología / GPUs</th>
+                  <th class="th-params">Hiperparámetros</th>
+                  <th class="th-date">Fecha Registro</th>
+                  <th class="th-actions">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="history-table-body">
+                <tr>
+                  <td colspan="7" class="table-empty-row">Cargando catálogo de simulaciones...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel Inferior: Comparador Multi-Simulación Arbitrario -->
+      <div class="card comparison-manager-card">
+        <div class="card-header">
+          <div class="card-icon">📊</div>
+          <div>
+            <h2>Comparador Multi-Simulación Arbitrario</h2>
+            <p class="card-subtitle">Análisis comparativo macroscópico y microarquitectural de red con generación de figuras científicas</p>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <!-- Barra de Control de Comparativa -->
+          <div class="comparison-controls-bar">
+            <div class="controls-left">
+              <button id="btn-run-comparison" class="btn-primary" disabled>
+                <span class="btn-icon">📊</span>
+                <span id="btn-run-comparison-text">Generar Comparativa (0 seleccionadas)</span>
+              </button>
+              <label class="checkbox-label-sm">
+                <input type="checkbox" id="chk-semilog-saturation">
+                <span>Escala Semilogarítmica (Eje Y Saturación)</span>
+              </label>
+            </div>
+            <div class="controls-right">
+              <button id="btn-export-csv" class="btn-sm btn-outline" disabled title="Descargar datos tabulares en formato CSV">
+                <span>⬇️</span>
+                <span>Exportar Tabla CSV</span>
+              </button>
+              <span id="comparison-status-tag" class="metric-tag hidden">Generando gráficas...</span>
+            </div>
+          </div>
+
+          <!-- Área de Resultados de Comparativa -->
+          <div id="comparison-results-area">
+            <div id="comparison-placeholder" class="placeholder-box">
+              <p><strong>Ninguna comparativa activa</strong></p>
+              <p>Selecciona una o más simulaciones en la tabla superior mediante los <em>checkboxes</em> y haz clic en <strong>"Generar Comparativa"</strong> para calcular la tabla numérica y las 3 gráficas científicas.</p>
+            </div>
+
+            <div id="comparison-content" class="comparison-content hidden">
+              <!-- Sección A: Tabla Comparativa Numérica -->
+              <div class="comparison-section">
+                <div class="section-title-row">
+                  <h3>📋 Métricas Numéricas Comparadas (Última Iteración / Steady-State)</h3>
+                  <span class="section-hint">Valores medios por dispositivo normalizados</span>
+                </div>
+                <div class="table-responsive">
+                  <table id="comparison-metrics-table" class="data-table table-comparison">
+                    <thead>
+                      <tr>
+                        <th>Simulación / Etiqueta</th>
+                        <th>Modelo</th>
+                        <th>Topología</th>
+                        <th>GPUs</th>
+                        <th>Wall-Clock</th>
+                        <th>Cómputo</th>
+                        <th>Tránsito NoC</th>
+                        <th>Stalls Barrera</th>
+                        <th>Scatter</th>
+                        <th>Gather</th>
+                        <th>AllReduce</th>
+                        <th>Tasa Inyección (&lambda;)</th>
+                        <th>Latencia Flit</th>
+                        <th>Latencia Paquete</th>
+                        <th>Total Paquetes</th>
+                      </tr>
+                    </thead>
+                    <tbody id="comparison-metrics-body">
+                      <!-- Filas inyectadas dinámicamente -->
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Sección B: Galería de Gráficas Científicas -->
+              <div class="comparison-section">
+                <div class="section-title-row">
+                  <h3>📈 Figuras Científicas Comparativas</h3>
+                  <span class="section-hint">Generadas en memoria y listas para descarga individual</span>
+                </div>
+
+                <div class="comparison-gallery-grid">
+                  <!-- Gráfica 1: Anatomía de Latencia -->
+                  <div class="chart-card">
+                    <div class="chart-header">
+                      <div class="chart-title">
+                        <strong>1. Anatomía de Latencia</strong>
+                        <span class="chart-sub">Cómputo vs. Tránsito de Red vs. Stalls de Sincronización</span>
+                      </div>
+                      <button class="btn-sm btn-download-chart" data-chart="anatomia" title="Descargar figura en PNG de alta resolución">⬇️ Descargar PNG</button>
+                    </div>
+                    <div class="chart-img-wrapper">
+                      <img id="chart-img-anatomia" src="" alt="Anatomía de Latencia" class="chart-img">
+                    </div>
+                  </div>
+
+                  <!-- Gráfica 2: Desglose Primitivas MoE -->
+                  <div class="chart-card">
+                    <div class="chart-header">
+                      <div class="chart-title">
+                        <strong>2. Desglose de Primitivas Colectivas</strong>
+                        <span class="chart-sub">MoE Scatter vs. MoE Gather vs. Ring-AllReduce</span>
+                      </div>
+                      <button class="btn-sm btn-download-chart" data-chart="primitivas" title="Descargar figura en PNG de alta resolución">⬇️ Descargar PNG</button>
+                    </div>
+                    <div class="chart-img-wrapper">
+                      <img id="chart-img-primitivas" src="" alt="Desglose Primitivas MoE" class="chart-img">
+                    </div>
+                  </div>
+
+                  <!-- Gráfica 3: Curva de Saturación de Red -->
+                  <div class="chart-card full-width-chart">
+                    <div class="chart-header">
+                      <div class="chart-title">
+                        <strong>3. Curva de Saturación de Red NoC (BookSim2)</strong>
+                        <span class="chart-sub">Latencia Media de Flit vs. Tasa Real de Inyección &lambda; (flits/ciclo/nodo)</span>
+                      </div>
+                      <button id="btn-download-saturacion" class="btn-sm btn-download-chart" data-chart="saturacion" title="Descargar figura en PNG de alta resolución">⬇️ Descargar PNG</button>
+                    </div>
+                    <div class="chart-img-wrapper">
+                      <img id="chart-img-saturacion" src="" alt="Curva de Saturación NoC" class="chart-img">
+                      <div id="saturacion-empty-notice" class="placeholder-box hidden">
+                        <p>ℹ️ Ninguna de las simulaciones seleccionadas dispone de archivo <code>packet_tracking_debug.csv</code>.</p>
+                        <p>Para generar la curva de saturación con nubes de dispersión, asegúrate de haber activado <code>SIM_DEBUG_PIDS="1"</code> en la simulación.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
           </div>
         </div>
       </div>

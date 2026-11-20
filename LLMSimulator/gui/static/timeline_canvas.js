@@ -63,7 +63,25 @@ class ChronogramCanvas {
     this.hoveredBlock = null;
     this.hoveredGpu = -1;
 
+    // Crosshair state (for synchronized hybrid split-screen view)
+    this.crosshairX = null;
+    this.crosshairNs = null;
+
     this.bindEvents();
+  }
+
+  setCrosshair(x, ns) {
+    this.crosshairX = x;
+    this.crosshairNs = ns;
+    this.render();
+  }
+
+  clearCrosshair() {
+    if (this.crosshairX !== null) {
+      this.crosshairX = null;
+      this.crosshairNs = null;
+      this.render();
+    }
   }
 
   bindEvents() {
@@ -429,6 +447,58 @@ class ChronogramCanvas {
 
         this.drawBlock(ctx, b, x1, bY, bWidth, bH, span, plotWidth);
       }
+    }
+
+    // 3. Draw iteration markers (dividing lines across tracks in full simulation view)
+    if (this.data && this.data.iteration_markers && this.data.iteration_markers.length > 1) {
+      this.data.iteration_markers.forEach(m => {
+        if (m.start_ns > this.minTimeNs && m.start_ns <= this.viewEndNs) {
+          const x = this.marginLeft + ((m.start_ns - this.viewStartNs) / span) * plotWidth;
+          if (x >= this.marginLeft && x <= this.marginLeft + plotWidth) {
+            ctx.save();
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = "#f59e0b"; // gold / amber
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, this.headerHeight);
+            ctx.lineTo(x, height - this.footerHeight);
+            ctx.stroke();
+
+            // Iteration badge in header
+            ctx.fillStyle = "#f59e0b";
+            ctx.fillRect(x - 30, 4, 60, 18);
+            ctx.fillStyle = "#000";
+            ctx.font = "bold 9px JetBrains Mono, monospace";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(`Iter ${m.iter}`, x, 13);
+            ctx.restore();
+          }
+        }
+      });
+    }
+
+    // 4. Synchronized vertical crosshair line
+    if (this.crosshairX !== null && this.crosshairX !== undefined &&
+        this.crosshairX >= this.marginLeft && this.crosshairX <= this.marginLeft + plotWidth) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(this.crosshairX, this.headerHeight);
+      ctx.lineTo(this.crosshairX, height - this.footerHeight);
+      ctx.stroke();
+
+      if (this.crosshairNs !== null) {
+        ctx.fillStyle = "#38bdf8";
+        ctx.fillRect(this.crosshairX - 32, this.headerHeight - 20, 64, 16);
+        ctx.fillStyle = "#000";
+        ctx.font = "bold 9px JetBrains Mono, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(formatTimeNs(this.crosshairNs), this.crosshairX, this.headerHeight - 12);
+      }
+      ctx.restore();
     }
   }
 
@@ -824,7 +894,516 @@ class PacketFlightCanvas {
   }
 }
 
+/* ==========================================================================
+   3. HybridPacketCanvas (Panel Inferior Sincronizado en Nanosegundos)
+   ========================================================================== */
+class HybridPacketCanvas {
+  constructor(canvasEl, tooltipEl, onHoverPacket) {
+    this.canvas = canvasEl;
+    this.tooltip = tooltipEl;
+    this.onHoverPacket = onHoverPacket;
+
+    this.packetsData = null; // { packets, total_in_window, returned, truncated, start_ns, end_ns }
+    this.viewStartNs = 0;
+    this.viewEndNs = 20000;
+    this.minTimeNs = 0;
+    this.maxTimeNs = 20000;
+
+    this.marginLeft = 85;
+    this.marginRight = 20;
+    this.headerHeight = 24;
+    this.footerHeight = 8;
+
+    this.crosshairX = null;
+    this.crosshairNs = null;
+  }
+
+  loadData(packetsResponse, viewStartNs, viewEndNs) {
+    if (Array.isArray(packetsResponse)) {
+      this.packetsData = { packets: packetsResponse };
+    } else {
+      this.packetsData = packetsResponse || { packets: [] };
+    }
+    if (viewStartNs !== undefined) this.viewStartNs = viewStartNs;
+    if (viewEndNs !== undefined) this.viewEndNs = viewEndNs;
+    this.render();
+  }
+
+  setCrosshair(x, ns) {
+    this.crosshairX = x;
+    this.crosshairNs = ns;
+    this.render();
+  }
+
+  clearCrosshair() {
+    if (this.crosshairX !== null) {
+      this.crosshairX = null;
+      this.crosshairNs = null;
+      this.render();
+    }
+  }
+
+  render() {
+    if (!this.canvas) return;
+    const { width, height, ctx } = setupHiDPICanvas(this.canvas);
+    this.canvas.style.cursor = "crosshair";
+
+    ctx.fillStyle = "#090d16";
+    ctx.fillRect(0, 0, width, height);
+
+    const plotWidth = width - this.marginLeft - this.marginRight;
+    const plotHeight = height - this.headerHeight - this.footerHeight;
+    const span = this.viewEndNs - this.viewStartNs;
+
+    if (span <= 0) return;
+
+    // Header axis line
+    ctx.strokeStyle = "#334155";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, this.headerHeight);
+    ctx.lineTo(width, this.headerHeight);
+    ctx.stroke();
+
+    if (!this.packetsData || !this.packetsData.packets || this.packetsData.packets.length === 0) {
+      ctx.fillStyle = "#64748b";
+      ctx.font = "12px JetBrains Mono, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("No hay paquetes en tránsito dentro de esta ventana de tiempo.", width / 2, height / 2 + 5);
+      this.drawCrosshairLine(ctx, height, plotWidth);
+      return;
+    }
+
+    const packets = this.packetsData.packets;
+    const rowHeight = Math.max(5, Math.min(22, plotHeight / packets.length));
+    const barH = Math.max(3, rowHeight - 2);
+
+    for (let i = 0; i < packets.length; i++) {
+      const p = packets[i];
+      const y = this.headerHeight + i * rowHeight;
+
+      if (i % 2 === 0) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.015)";
+        ctx.fillRect(this.marginLeft, y, plotWidth, rowHeight);
+      }
+
+      // Left label
+      if (rowHeight >= 10) {
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "9px JetBrains Mono, monospace";
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`#${p.pid} G${p.src}➔G${p.dst}`, this.marginLeft - 6, y + rowHeight / 2);
+      }
+
+      // Segment 1: Queueing delay [pkt_start_ns, pkt_inject_ns] in orange
+      const xStart = this.marginLeft + ((p.pkt_start_ns - this.viewStartNs) / span) * plotWidth;
+      const xInject = this.marginLeft + ((p.pkt_inject_ns - this.viewStartNs) / span) * plotWidth;
+      const queueW = Math.max(1, xInject - xStart);
+
+      ctx.fillStyle = "#e67e22"; // orange
+      ctx.fillRect(xStart, y + 1, queueW, barH);
+
+      // Segment 2: NoC flight time [pkt_inject_ns, pkt_end_ns] in blue
+      const xEnd = this.marginLeft + ((p.pkt_end_ns - this.viewStartNs) / span) * plotWidth;
+      const flightW = Math.max(1, xEnd - xInject);
+
+      ctx.fillStyle = "#0284c7"; // blue
+      ctx.fillRect(xInject, y + 1, flightW, barH);
+    }
+
+    this.drawCrosshairLine(ctx, height, plotWidth);
+  }
+
+  drawCrosshairLine(ctx, height, plotWidth) {
+    if (this.crosshairX !== null && this.crosshairX !== undefined &&
+        this.crosshairX >= this.marginLeft && this.crosshairX <= this.marginLeft + plotWidth) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(this.crosshairX, this.headerHeight);
+      ctx.lineTo(this.crosshairX, height - this.footerHeight);
+      ctx.stroke();
+
+      if (this.crosshairNs !== null) {
+        ctx.fillStyle = "#38bdf8";
+        ctx.fillRect(this.crosshairX - 32, height - this.footerHeight - 16, 64, 16);
+        ctx.fillStyle = "#000";
+        ctx.font = "bold 9px JetBrains Mono, monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(formatTimeNs(this.crosshairNs), this.crosshairX, height - this.footerHeight - 8);
+      }
+      ctx.restore();
+    }
+  }
+
+  getPacketAt(x, y) {
+    if (!this.packetsData || !this.packetsData.packets || this.packetsData.packets.length === 0) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const plotHeight = rect.height - this.headerHeight - this.footerHeight;
+    const packets = this.packetsData.packets;
+    const rowHeight = plotHeight / packets.length;
+
+    const rowIdx = Math.floor((y - this.headerHeight) / rowHeight);
+    if (rowIdx >= 0 && rowIdx < packets.length) {
+      return packets[rowIdx];
+    }
+    return null;
+  }
+}
+
+/* ==========================================================================
+   4. HybridSyncController (Gestor de Sincronización Split-Screen)
+   ========================================================================== */
+class HybridSyncController {
+  constructor(optsOrChronoEl, packetsCanvasEl, tooltipEl, fetchPacketsWindowFn, onViewportChange) {
+    if (optsOrChronoEl && typeof optsOrChronoEl === "object" && !optsOrChronoEl.tagName) {
+      const opts = optsOrChronoEl;
+      this.chronoCanvasEl = opts.chronoCanvasEl;
+      this.packetsCanvasEl = opts.packetsCanvasEl;
+      this.tooltipEl = opts.tooltipEl;
+      this.scrubberEl = opts.scrubberEl;
+      this.scrubberPosEl = opts.scrubberPosEl;
+      this.windowInfoEl = opts.windowInfoEl;
+      this.packetBadgeEl = opts.packetBadgeEl;
+      this.fetchPacketsWindowFn = opts.fetchPacketsWindowFn;
+      this.onViewportChange = opts.onViewportChange || null;
+    } else {
+      this.chronoCanvasEl = optsOrChronoEl;
+      this.packetsCanvasEl = packetsCanvasEl;
+      this.tooltipEl = tooltipEl;
+      this.fetchPacketsWindowFn = fetchPacketsWindowFn;
+      this.onViewportChange = onViewportChange || null;
+    }
+
+    this.chronoCanvas = null;
+    this.packetCanvas = null;
+
+    this.viewStartNs = 0;
+    this.viewEndNs = 20000;
+    this.minTimeNs = 0;
+    this.maxTimeNs = 20000;
+
+    this.isDragging = false;
+    this.dragStartX = 0;
+    this.dragStartViewStart = 0;
+    this.dragStartViewEnd = 0;
+
+    this.fetchDebounceTimer = null;
+
+    this.init();
+  }
+
+  loadData(chronoData) {
+    this.loadChronogram(chronoData);
+  }
+
+  init() {
+    this.chronoCanvas = new ChronogramCanvas(
+      this.chronoCanvasEl,
+      this.tooltipEl,
+      (start, end, min, max) => this.onViewportUpdated(start, end, min, max)
+    );
+    this.chronoCanvas.marginLeft = 85;
+
+    this.packetCanvas = new HybridPacketCanvas(
+      this.packetsCanvasEl,
+      this.tooltipEl,
+      (pkt) => {}
+    );
+    this.packetCanvas.marginLeft = 85;
+
+    this.bindSharedEvents();
+  }
+
+  bindSharedEvents() {
+    const handleMove = (e, canvasTarget) => {
+      const rect = canvasTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const plotWidth = rect.width - this.chronoCanvas.marginLeft - this.chronoCanvas.marginRight;
+
+      if (x >= this.chronoCanvas.marginLeft && x <= rect.width - this.chronoCanvas.marginRight) {
+        const span = this.viewEndNs - this.viewStartNs;
+        const mouseNs = this.viewStartNs + ((x - this.chronoCanvas.marginLeft) / plotWidth) * span;
+
+        this.chronoCanvas.setCrosshair(x, mouseNs);
+        this.packetCanvas.setCrosshair(x, mouseNs);
+
+        if (canvasTarget === this.packetsCanvasEl) {
+          const pkt = this.packetCanvas.getPacketAt(x, y);
+          if (pkt) {
+            this.showPacketTooltip(pkt, e.clientX, e.clientY);
+          } else {
+            this.hideTooltip();
+          }
+        }
+      } else {
+        this.chronoCanvas.clearCrosshair();
+        this.packetCanvas.clearCrosshair();
+        this.hideTooltip();
+      }
+    };
+
+    const handleLeave = () => {
+      this.chronoCanvas.clearCrosshair();
+      this.packetCanvas.clearCrosshair();
+      this.hideTooltip();
+    };
+
+    this.chronoCanvasEl.addEventListener("mousemove", (e) => handleMove(e, this.chronoCanvasEl));
+    this.packetsCanvasEl.addEventListener("mousemove", (e) => handleMove(e, this.packetsCanvasEl));
+
+    this.chronoCanvasEl.addEventListener("mouseleave", handleLeave);
+    this.packetsCanvasEl.addEventListener("mouseleave", handleLeave);
+
+    const handleWheel = (e, canvasTarget) => {
+      e.preventDefault();
+      const rect = canvasTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const plotWidth = rect.width - this.chronoCanvas.marginLeft - this.chronoCanvas.marginRight;
+      let ratio = 0.5;
+      if (x >= this.chronoCanvas.marginLeft && x <= rect.width - this.chronoCanvas.marginRight) {
+        ratio = (x - this.chronoCanvas.marginLeft) / plotWidth;
+      }
+      const factor = e.deltaY > 0 ? 1.15 : 0.85;
+      this.zoom(factor, ratio);
+    };
+
+    this.chronoCanvasEl.addEventListener("wheel", (e) => handleWheel(e, this.chronoCanvasEl), { passive: false });
+    this.packetsCanvasEl.addEventListener("wheel", (e) => handleWheel(e, this.packetsCanvasEl), { passive: false });
+
+    const handleMouseDown = (e, canvasTarget) => {
+      const rect = canvasTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      if (x < this.chronoCanvas.marginLeft) return;
+
+      this.isDragging = true;
+      this.dragStartX = e.clientX;
+      this.dragStartViewStart = this.viewStartNs;
+      this.dragStartViewEnd = this.viewEndNs;
+      this.chronoCanvasEl.style.cursor = "grabbing";
+      this.packetsCanvasEl.style.cursor = "grabbing";
+    };
+
+    const handleGlobalMouseMove = (e) => {
+      if (!this.isDragging) return;
+      const rect = this.chronoCanvasEl.getBoundingClientRect();
+      const plotWidth = rect.width - this.chronoCanvas.marginLeft - this.chronoCanvas.marginRight;
+      if (plotWidth <= 0) return;
+
+      const dx = e.clientX - this.dragStartX;
+      const span = this.dragStartViewEnd - this.dragStartViewStart;
+      const dt = -(dx / plotWidth) * span;
+
+      let newStart = this.dragStartViewStart + dt;
+      let newEnd = this.dragStartViewEnd + dt;
+
+      if (newStart < this.minTimeNs) {
+        newStart = this.minTimeNs;
+        newEnd = newStart + span;
+      }
+      if (newEnd > this.maxTimeNs) {
+        newEnd = this.maxTimeNs;
+        newStart = Math.max(this.minTimeNs, newEnd - span);
+      }
+
+      this.updateViewport(newStart, newEnd);
+    };
+
+    const handleGlobalMouseUp = () => {
+      if (this.isDragging) {
+        this.isDragging = false;
+        this.chronoCanvasEl.style.cursor = "crosshair";
+        this.packetsCanvasEl.style.cursor = "crosshair";
+      }
+    };
+
+    this.chronoCanvasEl.addEventListener("mousedown", (e) => handleMouseDown(e, this.chronoCanvasEl));
+    this.packetsCanvasEl.addEventListener("mousedown", (e) => handleMouseDown(e, this.packetsCanvasEl));
+    window.addEventListener("mousemove", handleGlobalMouseMove);
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+
+    if (this.scrubberEl) {
+      this.scrubberEl.addEventListener("input", () => {
+        const span = this.viewEndNs - this.viewStartNs;
+        const maxStart = this.maxTimeNs - span;
+        const ratio = this.scrubberEl.value / 1000;
+        const newStart = this.minTimeNs + ratio * (maxStart - this.minTimeNs);
+        this.updateViewport(newStart, newStart + span);
+      });
+    }
+  }
+
+  loadChronogram(chronoData) {
+    this.chronoCanvas.loadData(chronoData);
+    this.minTimeNs = chronoData.min_time_ns || 0;
+    this.maxTimeNs = chronoData.max_time_ns || 1;
+    this.viewStartNs = this.chronoCanvas.viewStartNs;
+    this.viewEndNs = this.chronoCanvas.viewEndNs;
+
+    this.packetCanvas.minTimeNs = this.minTimeNs;
+    this.packetCanvas.maxTimeNs = this.maxTimeNs;
+    this.packetCanvas.viewStartNs = this.viewStartNs;
+    this.packetCanvas.viewEndNs = this.viewEndNs;
+
+    this.triggerFetchPackets();
+  }
+
+  setWindowPreset(presetUs) {
+    if (presetUs === "all") {
+      this.updateViewport(this.minTimeNs, this.maxTimeNs);
+    } else {
+      const windowNs = presetUs * 1000;
+      const currentCenter = (this.viewStartNs + this.viewEndNs) / 2;
+      let start = currentCenter - windowNs / 2;
+      let end = currentCenter + windowNs / 2;
+
+      if (start < this.minTimeNs) {
+        start = this.minTimeNs;
+        end = start + windowNs;
+      }
+      if (end > this.maxTimeNs) {
+        end = this.maxTimeNs;
+        start = Math.max(this.minTimeNs, end - windowNs);
+      }
+      this.updateViewport(start, end);
+    }
+  }
+
+  zoom(factor, centerRatio = 0.5) {
+    const currentSpan = this.viewEndNs - this.viewStartNs;
+    let newSpan = currentSpan * factor;
+    newSpan = Math.max(100, Math.min((this.maxTimeNs - this.minTimeNs) * 1.5, newSpan));
+
+    const centerTime = this.viewStartNs + currentSpan * centerRatio;
+    let newStart = centerTime - newSpan * centerRatio;
+    let newEnd = newStart + newSpan;
+
+    if (newStart < this.minTimeNs) {
+      newStart = this.minTimeNs;
+      newEnd = newStart + newSpan;
+    }
+    if (newEnd > this.maxTimeNs && (newEnd - newStart) <= (this.maxTimeNs - this.minTimeNs)) {
+      newEnd = this.maxTimeNs;
+      newStart = Math.max(this.minTimeNs, newEnd - newSpan);
+    }
+
+    this.updateViewport(newStart, newEnd);
+  }
+
+  updateViewport(newStart, newEnd) {
+    this.viewStartNs = newStart;
+    this.viewEndNs = newEnd;
+
+    this.chronoCanvas.viewStartNs = newStart;
+    this.chronoCanvas.viewEndNs = newEnd;
+    this.chronoCanvas.render();
+
+    this.packetCanvas.viewStartNs = newStart;
+    this.packetCanvas.viewEndNs = newEnd;
+    this.packetCanvas.render();
+
+    const spanUs = (newEnd - newStart) / 1000;
+    if (this.windowInfoEl) {
+      this.windowInfoEl.textContent = `Ventana: ${(newStart / 1000).toFixed(2)} µs ➔ ${(newEnd / 1000).toFixed(2)} µs (${spanUs.toFixed(2)} µs)`;
+    }
+    if (this.scrubberPosEl) {
+      this.scrubberPosEl.textContent = `${(newStart / 1000).toFixed(2)} µs`;
+    }
+
+    const currentSpan = newEnd - newStart;
+    const maxStart = this.maxTimeNs - currentSpan;
+    if (this.scrubberEl && maxStart > this.minTimeNs) {
+      const ratio = (newStart - this.minTimeNs) / (maxStart - this.minTimeNs);
+      this.scrubberEl.value = Math.round(ratio * 1000);
+    }
+
+    this.triggerFetchPackets();
+  }
+
+  onViewportUpdated(start, end, min, max) {
+    this.viewStartNs = start;
+    this.viewEndNs = end;
+    this.minTimeNs = min;
+    this.maxTimeNs = max;
+    if (this.packetCanvas) {
+      this.packetCanvas.viewStartNs = start;
+      this.packetCanvas.viewEndNs = end;
+      this.packetCanvas.minTimeNs = min;
+      this.packetCanvas.maxTimeNs = max;
+      this.packetCanvas.render();
+    }
+    this.triggerFetchPackets();
+  }
+
+  triggerFetchPackets() {
+    clearTimeout(this.fetchDebounceTimer);
+    this.fetchDebounceTimer = setTimeout(async () => {
+      if (this.fetchPacketsWindowFn) {
+        const data = await this.fetchPacketsWindowFn(this.viewStartNs, this.viewEndNs);
+        if (data) {
+          this.packetCanvas.loadData(data, this.viewStartNs, this.viewEndNs);
+          if (this.packetBadgeEl) {
+            const count = data.total_in_window || 0;
+            const truncText = data.truncated ? ` (${data.returned} mostrados, muestreado)` : "";
+            this.packetBadgeEl.textContent = `${count} paquetes en ventana${truncText}`;
+          }
+        }
+      }
+    }, 60);
+  }
+
+  showPacketTooltip(pkt, clientX, clientY) {
+    if (!this.tooltipEl) return;
+    this.tooltipEl.innerHTML = `
+      <div class="tooltip-header">
+        <span class="badge badge-scatter">PID #${pkt.pid}</span>
+        <span class="tooltip-gpu">GPU ${pkt.src} ➔ GPU ${pkt.dst}</span>
+      </div>
+      <div class="tooltip-body">
+        <div class="tooltip-row"><span>Operación:</span> <strong>${pkt.op_type} Nº${pkt.op_idx || 1}</strong></div>
+        <div class="tooltip-row"><span>Flits:</span> <strong>${pkt.flits} flits</strong></div>
+        <hr class="tooltip-divider">
+        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola:</span> <strong>${pkt.queue_delay_cycles} c</strong></div>
+        <div class="tooltip-row"><span style="color:#38bdf8;">■ Travesía NoC:</span> <strong>${pkt.flight_cycles} c</strong></div>
+        <div class="tooltip-row"><span>Latencia Paquete:</span> <strong class="highlight-val">${pkt.total_latency_cycles} c</strong></div>
+        <hr class="tooltip-divider">
+        <div class="tooltip-row"><span>Inicio (Creación):</span> <code>${formatTimeNs(pkt.pkt_start_ns)}</code></div>
+        <div class="tooltip-row"><span>Inyección en NoC:</span> <code>${formatTimeNs(pkt.pkt_inject_ns)}</code></div>
+        <div class="tooltip-row"><span>Recepción Destino:</span> <code>${formatTimeNs(pkt.pkt_end_ns)}</code></div>
+      </div>
+    `;
+
+    this.tooltipEl.classList.remove("hidden");
+    const tipRect = this.tooltipEl.getBoundingClientRect();
+    let left = clientX + 15;
+    let top = clientY + 15;
+
+    if (left + tipRect.width > window.innerWidth - 10) left = clientX - tipRect.width - 15;
+    if (top + tipRect.height > window.innerHeight - 10) top = window.innerHeight - tipRect.height - 10;
+
+    this.tooltipEl.style.left = `${Math.max(10, left)}px`;
+    this.tooltipEl.style.top = `${Math.max(10, top)}px`;
+  }
+
+  hideTooltip() {
+    if (this.tooltipEl) {
+      this.tooltipEl.classList.add("hidden");
+    }
+  }
+
+  render() {
+    this.chronoCanvas.render();
+    this.packetCanvas.render();
+  }
+}
+
 // Export classes to global window
 window.ChronogramCanvas = ChronogramCanvas;
 window.PacketFlightCanvas = PacketFlightCanvas;
+window.HybridPacketCanvas = HybridPacketCanvas;
+window.HybridSyncController = HybridSyncController;
 

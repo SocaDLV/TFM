@@ -2505,6 +2505,24 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
   - **Enriquecimiento de Red Colectiva con Métricas Individualizadas por GPU:** Cruza datos con `packet_tracking_debug.csv` discriminando paquetes entrantes en Scatter ($\text{Dest} == d$), salientes en Gather ($\text{Source} == d$) y subgrupos de AllReduce, reportando en cada fila el recuento exacto local de paquetes ($N_{\text{local}}$), su latencia media local ($\text{Lat.Media: } X.Xc$) y su productividad individual ($X.XX\text{ f/c}$), resolviendo el enmascaramiento de sesgo y rotulando explícitamente `(0 pkts)` en dispositivos sin carga colectiva.
   - **Coalescencia Causal Global:** Procesa toda la traza de cada GPU de forma previa a la partición en ventanas para garantizar que las operaciones que cruzan fronteras de visualización mantengan íntegro su contexto analítico.
 
+### [`LLMSimulator/launch_gui.py`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/launch_gui.py)
+- **Propósito:** Lanzador CLI de la interfaz web local del banco de co-simulación (*LLM-NoC Co-Simulation Workbench*).
+- **Mecanismos Clave:**
+  - Inicializa el servidor HTTP multi-hilo local en `0.0.0.0:8080` (personalizable con `--port` y `--host`).
+  - Lanza automáticamente el navegador web predeterminado del sistema operativo hacia la URL local (anulable con `--no-browser`).
+  - Garantiza la resolución adecuada de rutas en `sys.path` para el módulo aislado `gui/`.
+
+### [`LLMSimulator/gui/`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/)
+- **Propósito:** Paquete modular de backend y frontend estático que implementa la interfaz web interactiva sin frameworks externos pesados (100% Python estándar `http.server` + JavaScript vanilla).
+- **Componentes Clave:**
+  - **`gui/server.py`:** Servidor HTTP REST multi-hilo (`ThreadingHTTPServer` + `WorkbenchAPIHandler`). Expone endpoints para el ciclo de vida de simulación (`/api/run`, `/api/abort`, `/api/status`), gestión del área temporal (`/api/results/active`, `/api/results/save`, `/api/results/discard`) y servicio de métricas en tiempo real (`/api/results/summary`, `/api/results/chronogram`, `/api/results/packets`, `/api/results/packets_window`).
+  - **`gui/sim_runner.py`:** Controlador de subprocesos no bloqueante (`SimulationRunner`). Aísla la ejecución en `build/tmp_staging/`, monitoriza el progreso en streaming línea a línea, calcula el avance porcentual y ofrece cancelación limpia inmediata vía señales `SIGTERM`/`SIGKILL`.
+  - **`gui/trace_parser.py`:** Motor de ingesta y parseo analítico de alto rendimiento. Extrae métricas KPI arquitecturales, detecta caídas temporales de iteraciones (`split_dataframe_by_drops`), calcula offsets cronológicos para visualización de simulación completa (`iteration="all"`), y sirve ventanas temporales acotadas de flits con submuestreo determinista (`get_packets_in_time_window`).
+  - **`gui/static/index.html`:** Interfaz visual responsiva estructurada en 4 pestañas operativas (Configurador, Resultados/Líneas de Tiempo, Historial/Comparativa, Topología NoC), modal de ayuda/créditos técnicos y barra de estado en vivo.
+  - **`gui/static/timeline_canvas.js`:** Motor gráfico vectorial basado en Canvas HTML5 (`HiDPI/Retina`). Implementa los controladores `ChronogramCanvas`, `PacketFlightCanvas`, `HybridPacketCanvas` y `HybridSyncController` con sincronización ciclo a ciclo de doble eje X, marcadores de iteración, zoom, panorámica horizontal y tooltip flotante interactivo.
+  - **`gui/static/app.js`:** Controlador reactivo del frontend. Gestiona guardarraíles arquitectónicos en vivo, consola terminal con auto-scroll, navegación de sub-vistas, selectores de iteración y sincronización de controles de línea temporal.
+  - **`gui/analysis_gui.py`:** Motor analítico multi-simulación en memoria. Escanea el catálogo en `build/results/` y `build/tmp_staging/` extrayendo metadatos ligeros (`list_all_simulations`), compara un subconjunto arbitrario de simulaciones seleccionadas (`compare_simulations`), estructura tablas de métricas para exportación CSV y genera en memoria (codificadas en base64, sin archivos temporales en disco) las 3 figuras científicas: Anatomía de Latencia (`anatomia_latencia`), Desglose de Primitivas Colectivas (`desglose_primitivas_moe`) y Curva de Saturación de Red NoC (`curva_saturacion_red`) con nubes de dispersión, centroides destacados y escala semilogarítmica adaptativa.
+
 ---
 
 ## 8.9. Subsistema de Red BookSim2 (`booksim2/src/`)
@@ -3102,5 +3120,135 @@ Este capítulo recopila 20 preguntas escépticas y de alta exigencia técnica fo
 
 ---
 
-*Fin del Documento Maestro - TFM Technical Bible (Octubre 2026)*
+# CAPÍTULO 10: Interfaz Gráfica de Usuario (GUI) y Entorno Interactivo de Co-Simulación Web Local (Workbench)
+
+## 10.1. Motivación y Arquitectura del Workbench (`launch_gui.py` y `gui/`)
+Para democratizar la experimentación con el co-simulador `LLMSimulator` + `BookSim2`, eliminar la barrera de entrada de las líneas de comandos complejas y proporcionar una experiencia visual interactiva de nivel profesional (inspirada en herramientas pedagógicas de arquitectura de computadores como Haoziwan RISC-V o CTU Prague), se diseñó e implementó el **LLM-NoC Co-Simulation Workbench**.
+
+La arquitectura técnica se sustenta en tres principios rectores:
+1. **Cero Dependencias Externas:** El servidor backend (`LLMSimulator/gui/server.py`) utiliza exclusivamente librerías estándar de Python 3 (`http.server`, `threading`, `json`, `subprocess`, `urllib.parse`), prescindiendo de dependencias pesadas como Node.js, Flask o Django.
+2. **Frontend Ligero en Vanilla JavaScript y HTML5 Canvas:** La interfaz gráfica no utiliza frameworks que requieran transpilación (como React o Vue); implementa componentes modulares nativos en CSS3 moderno (`styles.css`) y JavaScript vanilla (`app.js`, `timeline_canvas.js`), garantizando carga instantánea y renderizado fluido a 60 FPS en cualquier navegador moderno en Linux.
+3. **Regla de Oro de Aislamiento:** El entorno de GUI reside de manera estrictamente encapsulada en `LLMSimulator/launch_gui.py` y `LLMSimulator/gui/`. No modifica ni interfiere en la operativa de los scripts CLI existentes (`run_sim.py`, `analyze_traces.py`, `plot_cronograma.py`, `plot_packet_tracking.py`) ni en el código C++ del co-simulador.
+
+---
+
+## 10.2. Aislamiento Estricto y Ciclo de Vida en Staging (`build/tmp_staging/`)
+Uno de los problemas más comunes en la experimentación intensiva es la proliferación desordenada de carpetas con ejecuciones de prueba o parámetros erróneos que ensucian el historial principal (`build/results/`).
+
+Para resolver esto, el Workbench introduce un ciclo de vida con **Área de Staging Temporal**:
+- Todas las simulaciones ejecutadas desde la interfaz gráfica se dirigen a un directorio efímero:
+  $$\text{Ruta Temporal} = \text{build/tmp\_staging/}\{\text{modelo}\}\_\{\text{gpus}\}\text{dev}\_\{\text{topología}\}\_\text{bs}\{\text{BS}\}\_\{\text{timestamp}\}/$$
+- Al completarse la ejecución, los resultados quedan disponibles de inmediato en la Pestaña 2 bajo el banner contextual:
+  $$\mathbf{\text{Simulación: }}\langle\text{nombre\_carpeta}\rangle\mathbf{\text{ (No guardada)}}$$
+- **Persistencia Selectiva:** El investigador dispone de dos botones explícitos:
+  1. **Guardar Simulación (`POST /api/results/save`):** Permite introducir una etiqueta descriptiva (ej. `Torus TP=2 Baseline`) y traslada atómicamente la carpeta desde `build/tmp_staging/` a `build/results/`, actualizando el banner a `(Guardada)` y preservando los datos de forma permanente.
+  2. **Descartar Simulación (`POST /api/results/discard`):** Elimina completamente la carpeta de staging del sistema de archivos, devolviendo la interfaz al estado inicial sin dejar residuos.
+
+---
+
+## 10.3. Pestaña 1: Configurador Interactivo y Guardarraíles en Tiempo Real
+El configurador interactivo permite parametrizar tanto el modelo LLM como la red NoC, garantizando que el usuario nunca lance una simulación con configuraciones físicamente inconsistentes mediante **Guardarraíles Proactivos**:
+
+1. **Deadlock en Topología Torus:**
+   - Si se selecciona `topology: torus` con $VCs < 2$, el sistema emite un aviso de bloqueo crítico explicando que el algoritmo Dateline exige obligatoriamente al menos 2 canales virtuales para romper ciclos cerrados en el Grafo de Dependencia de Canales (CDG).
+2. **Topología Asimétrica (AnyNet):**
+   - Si las dimensiones de red son asimétricas (ej. `net_dims: 4 2`), se restringe la topología a Malla 2D y el enrutamiento a `min` (Dijkstra), advirtiendo si se intenta forzar Torus o DOR.
+3. **Divisibilidad de Tensor Parallelism:**
+   - Verifica que el número total de GPUs sea divisible exactamente por el grado de paralelismo tensorial ($N_{\text{GPUs}} \pmod{TP} == 0$).
+4. **Límite de Paralelismo de Expertos (Mixtral 8x7B):**
+   - Prohíbe configurar más de 8 GPUs para Mixtral, dado que contiene exactamente 8 expertos y el particionamiento de un experto individual entre múltiples nodos no está soportado.
+5. **Previsualización CLI y Consola en Vivo:**
+   - La barra inferior reconstruye en tiempo real el comando exacto equivalente:
+     ```bash
+     python run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 4 --routing dim_order --batch_size 32 --output_len 2 --iter 2
+     ```
+   - Al pulsar "Lanzar Co-Simulación", el motor `SimulationRunner` ejecuta el subproceso sin bloquear el servidor, reportando el progreso en streaming a través de una consola con auto-scroll y ofreciendo un botón de cancelación inmediata ("Abortar").
+
+---
+
+## 10.4. Pestaña 2: Resultados Arquitectónicos y Visualizadores en Canvas HTML5 al Vuelo
+A diferencia de los scripts tradicionales que generan archivos de imagen estáticos PNG mediante `matplotlib`, la Pestaña 2 reconstruye las líneas de tiempo **directamente y al vuelo en el navegador mediante HTML5 Canvas** a partir de los archivos de trazas crudas (`TFM_device_*.trc` y `packet_tracking_debug.csv`).
+
+### Tarjetas KPI Arquitectónicas (7 Métricas Esenciales)
+Calculadas por `gui/trace_parser.py`:
+1. **Wall-Clock Time:** Tiempo total de inferencia de la iteración seleccionada en microsegundos.
+2. **Cómputo GPU:** Tiempo acumulado de operaciones aritméticas locales (`Attn`, `ExpertFFN`, `DenseFFN`) y su porcentaje relativo.
+3. **Tránsito NoC Puro:** Tiempo de travesía de red en colectivas (`moe_scatter`, `moe_gather`, `all_reduce`) y su porcentaje relativo.
+4. **Stalls de Barrera:** Tiempo ocioso en barreras causales (`sync_for_moe_gather`, sincronizaciones residuales) y su porcentaje relativo.
+5. **Tasa de Inyección Real ($\lambda$):** Tráfico efectivo inyectado por nodo en flits/ciclo/nodo.
+6. **Latencia Media de Flit:** Ciclos promedio de tránsito en BookSim2.
+7. **Total Paquetes / Flits:** Volumen total de tráfico microarquitectural transferido.
+
+### Sub-vistas Interactivas
+- **Sub-vista A (Cronograma GPU Ciclo a Ciclo):** Diagrama de Gantt multi-GPU con pistas individuales por dispositivo (GPU 0..N-1), colores semánticos (verde: cómputo, azul cielo: Scatter, azul oscuro: Gather, morado: AllReduce, rojo: Stalls), zoom continuo, panorámica horizontal y tooltips con desglose microarquitectural al posar el cursor.
+- **Sub-vista B (Visualizador de Paquetes en Vuelo):** Visualizador de flits individuales con descomposición temporal de cada paquete en dos segmentos físicos coloreados: retardo en cola de la NIC transmisora (naranja, $[ctime \to itime]$) y tiempo de vuelo NoC (azul, $[itime \to atime]$), con botones de salto a regímenes de congestión (fase libre, congestión media P50 y congestión crítica pico).
+
+---
+
+## 10.5. Selector Multidimensional de Iteraciones (Fase 2.5)
+Para permitir tanto el análisis riguroso de régimen estacionario como la comparación con el calentamiento (*warm-up*) y la concatenación temporal de toda la ejecución, se implementó en `gui/trace_parser.py` y `app.js` un **Selector de Iteraciones** totalmente integrado:
+
+- **Modos de Selección:**
+  - `Última Iteración (Steady-State)` (por defecto `iteration="last"`): Aísla la última iteración descartando el calentamiento.
+  - `Iteración 1 (Warm-up)` / `Iteración 2..N` (`iteration="1"`, `iteration="2"`): Permite auditar de forma independiente cualquier iteración individual.
+  - `Simulación Completa (Concatenada)` (`iteration="all"`): Concatena cronológicamente todas las iteraciones ejecutadas en un único eje temporal continuo.
+
+- **Mecánica de Concatenación y Marcadores Temporales (`iteration_markers`):**
+  Para la opción `iteration="all"`, el backend calcula los desplazamientos acumulativos:
+  $$\text{Offset}_k = \sum_{j=1}^{k-1} \max\left(\text{START\_NS}_j\right)$$
+  aplicando este desfase a cada paquete y bloque de GPU. Además, el backend retorna una estructura `iteration_markers`:
+  ```json
+  [
+    {"iter": 1, "start_ns": 0.0, "duration_ns": 1103902.0},
+    {"iter": 2, "start_ns": 1103902.0, "duration_ns": 1100043.2}
+  ]
+  ```
+  El motor gráfico Canvas dibuja líneas divisorias verticales discontinuas en color dorado/ámbar con una etiqueta flotante distintiva (`Iter 1`, `Iter 2`), permitiendo inspeccionar la frontera de calentamiento de forma inmediata.
+
+---
+
+## 10.6. Visualizador Híbrido Sincronizado Split-Screen (Fase 2.5)
+La cumbre analítica de la Pestaña 2 es el **Visualizador Híbrido Sincronizado**, accesible mediante la sub-vista `⚡ Visualizador Híbrido (Sincronizado)`:
+
+### Estructura de Pantalla Dividida (Split-Screen)
+La vista divide verticalmente el espacio de trabajo en dos paneles acoplados:
+- **Panel Superior (50%):** Cronograma de Ejecución GPU ($0 \dots N-1$), mostrando bloques de cómputo, colectivas y stalls de barrera.
+- **Panel Inferior (50%):** Flujo de Paquetes NoC en Tránsito, donde cada barra representa el ciclo de vida de un paquete trazado directamente sobre la misma escala temporal.
+
+### Características de Sincronización Estricta
+1. **Escala Temporal X Idéntica en Nanosegundos:**
+   Ambos paneles comparten exactamente el mismo rango temporal $[\text{viewStartNs}, \text{viewEndNs}]$ y la misma relación de píxeles por nanosegundo. Las marcas de inyección de paquetes en el panel inferior coinciden al nanosegundo con los bloques de Scatter, Gather o AllReduce de las GPUs correspondientes en el panel superior.
+2. **Cursor Vertical Crosshair Acoplado:**
+   Al desplazar el ratón sobre cualquiera de los dos lienzos, una línea vertical luminosa de referencia temporal (`rgba(56, 189, 248, 0.85)`) cruza simultáneamente ambos paneles con un marcador superior que indica el instante exacto en nanosegundos o microsegundos.
+3. **Controles de Navegación Unificados:**
+   La rueda del ratón (zoom centrado en cursor), el arrastre horizontal (panorámica fluida), los botones de preajuste de ventana (`10 µs`, `20 µs`, `50 µs`, `100 µs`, `250 µs`, `Total`) y la barra de desplazamiento horizontal (*scrubber*) actúan simultáneamente sobre ambas vistas a través del controlador `HybridSyncController`.
+4. **Consulta Eficiente con Submuestreo Determinista (`GET /api/results/packets_window`):**
+   Para evitar saturar la memoria del navegador cuando la ventana abarca cientos de miles de flits, el endpoint `packets_window` calcula dinámicamente el solapamiento $[start\_ns, end\_ns]$ y, si el número de paquetes supera el umbral configurable (`max_packets=450`), aplica un submuestreo uniforme estratificado preservando la representatividad estadística del tráfico sin degradar la tasa de refresco.
+
+---
+
+## 10.7. Pestaña 3: Gestor de Historial y Comparador Multi-Simulación Arbitrario (Fase 3)
+La Pestaña 3 del Workbench resuelve la necesidad crítica de auditar, comparar y exportar resultados experimentales acumulados a lo largo de las distintas campañas de simulación:
+
+### Gestor de Catálogo de Simulaciones
+- **Escaneo Dinámico y Detección de Staging:** Rastrea automáticamente todas las carpetas válidas en `build/results/` (que contienen archivos `.trc`) e incluye, en la primera fila destacada con un distintivo ámbar `TEMPORAL (No guardada)`, cualquier ejecución activa presente en `build/tmp_staging/`.
+- **Filtros Reactivos y Búsqueda:** Permite filtrar el catálogo en tiempo real por modelo arquitectural (Mixtral 8x7B, DeepSeek-V3, LLaMA), por topología NoC (Torus, Mesh, Ring) o mediante búsqueda de texto libre sobre nombres de carpeta, etiquetas personalizadas e hiperparámetros.
+- **Acciones Directas por Fila:**
+  - **`👁️ Abrir en Visor`:** Carga de manera instantánea cualquier simulación (guardada o temporal) en los visores interactivos de la Pestaña 2 (Cronograma GPU, Paquetes NoC y Visualizador Híbrido).
+  - **`🏷️ Etiquetar`:** Permite asociar o editar una nota descriptiva persistente en el archivo `gui_metadata.json` dentro de la carpeta.
+  - **`🗑️ Eliminar`:** Proporciona eliminación segura con protección contra *path traversal* (`POST /api/history/delete`).
+
+### Comparador Multi-Simulación Arbitrario
+- **Selección Flexible por Checkboxes:** El investigador puede marcar cualquier combinación de simulaciones ($1, 2, \dots, K$), incluyendo la comparación directa entre simulaciones de referencia guardadas y la simulación temporal recién ejecutada antes de decidir guardarla.
+- **Generación de Figuras Científicas en Memoria (Base64):**
+  Al pulsar "Generar Comparativa", el motor `gui/analysis_gui.py` procesa los registros en estado estacionario (última iteración) y genera directamente en búferes de memoria `io.BytesIO` (sin ensuciar el disco) las tres figuras estándar del TFM:
+  1. **Anatomía de Latencia:** Barras apiladas de tiempo medio de cómputo GPU (`#10b981`), tránsito de red NoC (`#38bdf8`) y stalls de sincronización (`#ef4444`), con insignias numéricas de tiempo total en $\mu\text{s}$ y milisegundos.
+  2. **Desglose de Primitivas Colectivas:** Comparativa agrupada del coste en $\mu\text{s}$ de las fases de comunicación colectiva (`MoEScatter`, `MoEGather` y `Ring-AllReduce`).
+  3. **Curva de Saturación de Red NoC:** Diagrama $(\lambda, \text{Latencia Flit})$ con nubes translúcidas de operaciones individuales, centroides destacados con etiquetas flotantes y flechas indicadoras, línea de tendencia global y opción de escala semilogarítmica en el eje vertical.
+- **Descarga Individual y Exportación a CSV:**
+  Cada gráfica incorpora un botón para descarga individual en PNG de alta resolución. Asimismo, la tabla comparativa de métricas se exporta de forma instantánea a un archivo `.csv` descargable con formato estándar para inclusión en hojas de cálculo o memorias de investigación.
+
+---
+
+*Fin del Documento Maestro - TFM Technical Bible (Noviembre 2026)*
 

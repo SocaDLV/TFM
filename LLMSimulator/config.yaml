@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261120_115341/
-  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261120_115341/gantt/
+  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261120_130847/
+  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261120_130847/gantt/

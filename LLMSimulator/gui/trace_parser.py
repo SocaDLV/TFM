@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Trace and Packet Tracking Parser for LLM-NoC Co-Simulation Workbench.
-Reconstructs cycle-to-cycle GPU chronograms, packet flight data, and macroscopic KPIs
-directly from raw files (.trc and packet_tracking_debug.csv) without generating static PNGs.
+Reconstructs cycle-to-cycle GPU chronograms, packet flight data, macroscopic KPIs,
+and synchronized hybrid split-screen projections directly from raw files
+(.trc and packet_tracking_debug.csv) without generating static PNGs.
+Supports multi-iteration analysis (Iteración 1..N o Simulación Completa).
 """
 
 import os
@@ -14,10 +16,79 @@ import pandas as pd
 from pathlib import Path
 
 
-def load_network_ops_debug(folder_path):
+def split_dataframe_by_drops(df, col_name, drop_threshold=-1.0):
     """
-    Loads packet_tracking_debug.csv, applies anti-appends filter to isolate the steady-state
-    iteration, and aggregates statistics per network collective and per GPU.
+    Splits a DataFrame into sequential iteration segments whenever col_name drops
+    by more than drop_threshold (e.g. START_NS < -1.0 or Op_Start_NS < -100.0).
+    Returns a list of DataFrames: [seg_iter_1, seg_iter_2, ...].
+    """
+    if df.empty or col_name not in df.columns:
+        return [df]
+    drops = df[col_name].diff() < drop_threshold
+    if not drops.any():
+        return [df]
+    cut_indices = [0] + list(df.index[drops]) + [len(df)]
+    segments = []
+    for i in range(len(cut_indices) - 1):
+        seg = df.iloc[cut_indices[i] : cut_indices[i + 1]].copy().reset_index(drop=True)
+        if not seg.empty:
+            segments.append(seg)
+    return segments if segments else [df]
+
+
+def get_cluster_iteration_info(folder_path):
+    """
+    Scans all *device_*.trc files in folder_path to determine the number of iterations
+    and the max wall-clock duration of each iteration across all GPUs.
+    Returns: (num_iters, durations_list, offsets_list)
+    """
+    folder = Path(folder_path).resolve()
+    trc_files = sorted(glob.glob(str(folder / "*device_*.trc")))
+    if not trc_files:
+        return 1, [0.0], [0.0]
+
+    max_ends_per_iter = {}
+    min_starts_per_iter = {}
+
+    for tf in trc_files:
+        try:
+            df = pd.read_csv(tf, on_bad_lines="skip")
+            df.columns = df.columns.str.strip()
+            df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
+            df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
+            df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
+            df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
+            df = df[df["DURATION"] > 0]
+            if df.empty:
+                continue
+
+            segs = split_dataframe_by_drops(df, "START_NS", -1.0)
+            for k, seg in enumerate(segs):
+                s_min = float(seg["START_NS"].min())
+                e_max = float(seg["END_NS"].max())
+                min_starts_per_iter[k] = min(min_starts_per_iter.get(k, float("inf")), s_min)
+                max_ends_per_iter[k] = max(max_ends_per_iter.get(k, 0.0), e_max)
+        except Exception:
+            pass
+
+    num_iters = len(max_ends_per_iter) if max_ends_per_iter else 1
+    durations = []
+    for k in range(num_iters):
+        s = min_starts_per_iter.get(k, 0.0)
+        e = max_ends_per_iter.get(k, 1.0)
+        durations.append(max(1.0, e - s))
+
+    offsets = [0.0]
+    for k in range(1, num_iters):
+        offsets.append(offsets[-1] + durations[k - 1])
+
+    return num_iters, durations, offsets
+
+
+def load_network_ops_debug(folder_path, iteration="last", iteration_offsets=None):
+    """
+    Loads packet_tracking_debug.csv, segments by iteration, applies temporal offsets if iteration=='all',
+    and aggregates statistics per network collective and per GPU.
     """
     csv_path = os.path.join(folder_path, "packet_tracking_debug.csv")
     if not os.path.exists(csv_path):
@@ -30,28 +101,61 @@ def load_network_ops_debug(folder_path):
 
         df_p.columns = df_p.columns.str.strip()
 
-        # Anti-appends filter
-        if "Op_Start_NS" in df_p.columns and not df_p["Op_Start_NS"].isna().all():
-            drops = df_p["Op_Start_NS"].diff() < 0
-            if drops.any():
-                last_drop_idx = drops[drops].index[-1]
-                df_p = df_p.loc[last_drop_idx:].copy()
-        elif "Creation_Cycle" in df_p.columns:
-            drops = df_p["Creation_Cycle"].diff() < -1000
-            if drops.any():
-                last_drop_idx = drops[drops].index[-1]
-                df_p = df_p.loc[last_drop_idx:].copy()
+        # Normalizar tipos
+        for c in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
+                  "Total_Latency", "Num_Flits", "Op_Idx", "Op_Start_NS", "Op_End_NS", "Avg_Flit_Latency", "Throughput"]:
+            if c in df_p.columns:
+                df_p[c] = pd.to_numeric(df_p[c], errors="coerce")
+
+        segs = split_dataframe_by_drops(df_p, "Op_Start_NS", -100.0)
+        num_iters = len(segs)
+
+        if iteration == "all":
+            processed_segs = []
+            for k, seg in enumerate(segs):
+                off = iteration_offsets[k] if (iteration_offsets and k < len(iteration_offsets)) else 0.0
+                seg = seg.copy()
+                if off > 0:
+                    if "Op_Start_NS" in seg.columns:
+                        seg["Op_Start_NS"] = seg["Op_Start_NS"] + off
+                    if "Op_End_NS" in seg.columns:
+                        seg["Op_End_NS"] = seg["Op_End_NS"] + off
+                seg["ITERATION"] = k + 1
+                processed_segs.append(seg)
+            df_active = pd.concat(processed_segs, ignore_index=True)
+        elif iteration == "last":
+            df_active = segs[-1].copy()
+            df_active["ITERATION"] = num_iters
+        else:
+            try:
+                iter_k = int(iteration) - 1
+                if 0 <= iter_k < num_iters:
+                    df_active = segs[iter_k].copy()
+                    df_active["ITERATION"] = iter_k + 1
+                else:
+                    df_active = segs[-1].copy()
+                    df_active["ITERATION"] = num_iters
+            except ValueError:
+                df_active = segs[-1].copy()
+                df_active["ITERATION"] = num_iters
 
         all_nodes = set()
-        if "Source" in df_p.columns:
-            all_nodes.update(df_p["Source"].dropna().unique())
-        if "Dest" in df_p.columns:
-            all_nodes.update(df_p["Dest"].dropna().unique())
+        if "Source" in df_active.columns:
+            all_nodes.update(df_active["Source"].dropna().unique())
+        if "Dest" in df_active.columns:
+            all_nodes.update(df_active["Dest"].dropna().unique())
         max_node = int(max(all_nodes)) if all_nodes else 7
         num_gpus = max(8, max_node + 1)
 
         ops = []
-        for (op_type, op_idx), grp in df_p.groupby(["Op_Type", "Op_Idx"], sort=False):
+        group_cols = ["ITERATION", "Op_Type", "Op_Idx"] if "ITERATION" in df_active.columns else ["Op_Type", "Op_Idx"]
+        for keys, grp in df_active.groupby(group_cols, sort=False):
+            if "ITERATION" in df_active.columns:
+                iter_num, op_type, op_idx = keys
+            else:
+                op_type, op_idx = keys
+                iter_num = 1
+
             start_ns = float(grp["Op_Start_NS"].iloc[0]) if "Op_Start_NS" in grp.columns else 0.0
             end_ns = float(grp["Op_End_NS"].iloc[0]) if "Op_End_NS" in grp.columns else 0.0
             min_pid = int(grp["PID"].min())
@@ -100,6 +204,7 @@ def load_network_ops_debug(folder_path):
                 }
 
             ops.append({
+                "iter": int(iter_num),
                 "type": str(op_type),
                 "idx": int(op_idx) if str(op_idx).isdigit() else 1,
                 "start_ns": start_ns,
@@ -128,10 +233,10 @@ def match_network_op(label, start_ns, end_ns, ops):
     return None
 
 
-def get_simulation_summary(folder_path):
+def get_simulation_summary(folder_path, iteration="last"):
     """
-    Computes macroscopic KPIs and architecture metadata for a simulation folder
-    isolating the last iteration.
+    Computes macroscopic KPIs and architecture metadata for a simulation folder,
+    supporting specific iterations ('1', '2'...), the steady-state ('last'), or full run ('all').
     """
     folder = Path(folder_path).resolve()
     if not folder.exists():
@@ -211,7 +316,22 @@ def get_simulation_summary(folder_path):
         except Exception:
             pass
 
-    # 2. Análisis macroscópico de archivos .trc
+    # 2. Análisis multi-iteración de los archivos .trc
+    num_iters, durations, offsets = get_cluster_iteration_info(folder)
+    metadata["num_iterations"] = num_iters
+
+    # Resolver índice de iteración objetivo
+    if iteration == "all":
+        target_iter_mode = "all"
+    elif iteration == "last":
+        target_iter_mode = num_iters - 1
+    else:
+        try:
+            val = int(iteration) - 1
+            target_iter_mode = max(0, min(val, num_iters - 1))
+        except ValueError:
+            target_iter_mode = num_iters - 1
+
     trc_files = glob.glob(str(folder / "*device_*.trc"))
     compute_total = 0.0
     transit_total = 0.0
@@ -220,8 +340,6 @@ def get_simulation_summary(folder_path):
     gather_total = 0.0
     allreduce_total = 0.0
     devices_counted = 0
-    min_cluster_start = float("inf")
-    max_cluster_end = 0.0
 
     for trc_path in sorted(trc_files):
         try:
@@ -231,30 +349,26 @@ def get_simulation_summary(folder_path):
             df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
             df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
             df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
-
-            drops = df["START_NS"].diff() < 0
-            if drops.any():
-                last_drop_idx = drops[drops].index[-1]
-                df = df.loc[last_drop_idx:].copy()
-
             df = df[df["DURATION"] > 0]
             if df.empty:
                 continue
 
-            dev_start = df["START_NS"].min()
-            dev_end = df["END_NS"].max()
-            min_cluster_start = min(min_cluster_start, dev_start)
-            max_cluster_end = max(max_cluster_end, dev_end)
+            segs = split_dataframe_by_drops(df, "START_NS", -1.0)
+            if target_iter_mode == "all":
+                df_active = pd.concat(segs, ignore_index=True)
+            else:
+                idx = min(target_iter_mode, len(segs) - 1)
+                df_active = segs[idx]
 
-            df["TYPE"] = df["TYPE"].astype(str).str.strip().str.lower()
-            scatter = df[df["TYPE"].str.contains("scatter")]["DURATION"].sum()
-            gather = df[df["TYPE"].str.contains("gather")]["DURATION"].sum()
-            all_red = df[df["TYPE"].str.contains("all_reduce|allreduce")]["DURATION"].sum()
+            df_active["TYPE"] = df_active["TYPE"].astype(str).str.strip().str.lower()
+            scatter = df_active[df_active["TYPE"].str.contains("scatter")]["DURATION"].sum()
+            gather = df_active[df_active["TYPE"].str.contains("gather")]["DURATION"].sum()
+            all_red = df_active[df_active["TYPE"].str.contains("all_reduce|allreduce")]["DURATION"].sum()
             transit = scatter + gather + all_red
 
-            stall = df[df["TYPE"].str.contains("stall")]["DURATION"].sum()
-            non_comp_mask = df["TYPE"].str.contains("scatter|gather|stall|all_reduce|allreduce")
-            compute = df[~non_comp_mask]["DURATION"].sum()
+            stall = df_active[df_active["TYPE"].str.contains("stall")]["DURATION"].sum()
+            non_comp_mask = df_active["TYPE"].str.contains("scatter|gather|stall|all_reduce|allreduce")
+            compute = df_active[~non_comp_mask]["DURATION"].sum()
 
             compute_total += compute
             transit_total += transit
@@ -267,7 +381,11 @@ def get_simulation_summary(folder_path):
             print(f"⚠️ trace_parser: Error en {trc_path}: {e}")
 
     num_gpus = max(devices_counted, metadata["num_gpus"])
-    cluster_wall_clock_ns = max_cluster_end - min_cluster_start if max_cluster_end > min_cluster_start else 0.0
+    if target_iter_mode == "all":
+        cluster_wall_clock_ns = float(sum(durations))
+    else:
+        cluster_wall_clock_ns = float(durations[target_iter_mode])
+
     c_avg_ns = compute_total / devices_counted if devices_counted > 0 else 0.0
     t_avg_ns = transit_total / devices_counted if devices_counted > 0 else 0.0
     s_avg_ns = stall_total / devices_counted if devices_counted > 0 else 0.0
@@ -275,7 +393,7 @@ def get_simulation_summary(folder_path):
     gath_avg_ns = gather_total / devices_counted if devices_counted > 0 else 0.0
     ar_avg_ns = allreduce_total / devices_counted if devices_counted > 0 else 0.0
 
-    # 3. Métricas de packet_tracking_debug.csv
+    # 3. Métricas de packet_tracking_debug.csv para el ámbito seleccionado
     csv_path = folder / "packet_tracking_debug.csv"
     has_packet_csv = csv_path.exists()
     total_packets = 0
@@ -290,34 +408,33 @@ def get_simulation_summary(folder_path):
             df_p = pd.read_csv(csv_path, on_bad_lines="skip")
             if not df_p.empty and "Creation_Cycle" in df_p.columns:
                 df_p.columns = df_p.columns.str.strip()
-                # Anti-appends filter
-                if "Op_Start_NS" in df_p.columns and not df_p["Op_Start_NS"].isna().all():
-                    drops = df_p["Op_Start_NS"].diff() < 0
-                    if drops.any():
-                        last_reset = drops[drops].index[-1]
-                        df_p = df_p.loc[last_reset:].copy()
-                elif "Creation_Cycle" in df_p.columns:
-                    drops = df_p["Creation_Cycle"].diff() < -1000
-                    if drops.any():
-                        last_reset = drops[drops].index[-1]
-                        df_p = df_p.loc[last_reset:].copy()
+                for c in ["Creation_Cycle", "Receive_Cycle", "Num_Flits", "Avg_Flit_Latency", "Total_Latency", "Queueing_Delay", "Op_Start_NS"]:
+                    if c in df_p.columns:
+                        df_p[c] = pd.to_numeric(df_p[c], errors="coerce")
 
-                df_p = df_p.dropna(subset=["Creation_Cycle", "Receive_Cycle"])
-                total_packets = len(df_p)
-                if "Num_Flits" in df_p.columns:
-                    total_flits = int(df_p["Num_Flits"].sum())
+                segs_csv = split_dataframe_by_drops(df_p, "Op_Start_NS", -100.0)
+                if target_iter_mode == "all":
+                    df_slice = pd.concat(segs_csv, ignore_index=True)
+                else:
+                    c_idx = min(target_iter_mode, len(segs_csv) - 1)
+                    df_slice = segs_csv[c_idx]
+
+                df_slice = df_slice.dropna(subset=["Creation_Cycle", "Receive_Cycle"])
+                total_packets = len(df_slice)
+                if "Num_Flits" in df_slice.columns:
+                    total_flits = int(df_slice["Num_Flits"].sum())
                 else:
                     total_flits = total_packets * 9
 
                 if total_packets > 0:
-                    dur_cycles = max(1.0, float(df_p["Receive_Cycle"].max() - df_p["Creation_Cycle"].min()))
+                    dur_cycles = max(1.0, cluster_wall_clock_ns)
                     lambda_rate = total_flits / (num_gpus * dur_cycles)
-                    if "Avg_Flit_Latency" in df_p.columns:
-                        avg_flit_lat = float(df_p["Avg_Flit_Latency"].mean())
-                    if "Total_Latency" in df_p.columns:
-                        avg_pkt_lat = float(df_p["Total_Latency"].mean())
-                    if "Queueing_Delay" in df_p.columns:
-                        avg_queue_delay = float(df_p["Queueing_Delay"].mean())
+                    if "Avg_Flit_Latency" in df_slice.columns:
+                        avg_flit_lat = float(df_slice["Avg_Flit_Latency"].mean())
+                    if "Total_Latency" in df_slice.columns:
+                        avg_pkt_lat = float(df_slice["Total_Latency"].mean())
+                    if "Queueing_Delay" in df_slice.columns:
+                        avg_queue_delay = float(df_slice["Queueing_Delay"].mean())
         except Exception as e:
             print(f"⚠️ trace_parser: Error leyendo CSV en summary: {e}")
 
@@ -328,6 +445,8 @@ def get_simulation_summary(folder_path):
     s_pct = (float(s_avg_ns) / tot_ref * 100.0) if tot_ref > 0 else 0.0
 
     kpis_data = {
+        "num_iterations": int(num_iters),
+        "active_iteration": str(iteration),
         "wall_clock_ns": round(float(cluster_wall_clock_ns), 1),
         "wall_clock_us": round(float(cluster_wall_clock_ns) / 1000.0, 2),
         "compute_time_ns": round(float(c_avg_ns), 1),
@@ -365,30 +484,11 @@ def get_simulation_summary(folder_path):
     }
 
 
-def parse_single_trc(filepath):
-    """Parses a single .trc file, extracts layers, classifies sub-ops, and coalesces blocks."""
-    basename = os.path.basename(filepath)
-    try:
-        gpu_id = int(basename.split("_")[-1].split(".")[0])
-    except Exception:
-        gpu_id = 0
-
-    df = pd.read_csv(filepath, on_bad_lines="skip")
-    df.columns = df.columns.str.strip()
-    df["GPU"] = gpu_id
-    df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
-    df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
-    df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
-    df["TYPE"] = df["TYPE"].astype(str).str.strip()
-    df["DETAILS"] = df["DETAILS"].fillna("").astype(str).str.strip()
-    df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
-
-    # Anti-appends filter
-    drops = df["START_NS"].diff() < 0
-    if drops.any():
-        last_drop_idx = drops[drops].index[-1]
-        df = df.loc[last_drop_idx:].copy()
-
+def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
+    """
+    Parses a single contiguous DataFrame segment (one iteration) of a .trc file.
+    Applies offset_ns to all absolute timestamps (start_ns, end_ns, sub_ops).
+    """
     df = df[df["DURATION"] > 0].reset_index(drop=True)
     if df.empty:
         return []
@@ -428,7 +528,6 @@ def parse_single_trc(filepath):
         elif "stall" in op:
             return "stall", "#e74c3c", "Stall", "Stall", None
 
-        # Shared Expert
         if "shared_expert" in op:
             shared_m = re.search(r"shared_expert_ffn_(\d+)", op)
             shared_id = int(shared_m.group(1)) if shared_m else 0
@@ -444,7 +543,6 @@ def parse_single_trc(filepath):
                 micro = "FFN"
             return "calc", "#2ecc71", "SharedExpert", micro, shared_id
 
-        # Routed Experts
         exp_m = re.search(r"expert_ffn_(\d+)", op)
         if "expert_ffn" in op or exp_m:
             exp_id = int(exp_m.group(1)) if exp_m else None
@@ -460,7 +558,6 @@ def parse_single_trc(filepath):
                 micro = "FFN"
             return "calc", "#2ecc71", "ExpertFFN", micro, exp_id
 
-        # Dense FFN
         if "feedforward" in op:
             if "gate_proj" in op:
                 micro = "Gate_Proj"
@@ -474,7 +571,6 @@ def parse_single_trc(filepath):
                 micro = "FFN"
             return "calc", "#2ecc71", "DenseFFN", micro, None
 
-        # Attention
         if "attn_qkv" in op:
             return "calc", "#2ecc71", "Attention", "QKV_Proj", None
         elif "attentiongen" in op or "self_attention" in op:
@@ -519,8 +615,8 @@ def parse_single_trc(filepath):
     blocks = []
     for _, grp in df.groupby("group", sort=False):
         first_row = grp.iloc[0]
-        start_ns = float(grp["START_NS"].min())
-        end_ns = float(grp["END_NS"].max())
+        start_ns = float(grp["START_NS"].min()) + offset_ns
+        end_ns = float(grp["END_NS"].max()) + offset_ns
         dur_ns = end_ns - start_ns
         category = first_row["CATEGORY"]
         color = first_row["COLOR"]
@@ -532,7 +628,9 @@ def parse_single_trc(filepath):
         for _, r in grp.iloc[:-1].iterrows():
             if r["DURATION"] > 0.5:
                 sub_ops.append({
-                    "end_ns": float(r["END_NS"]),
+                    "start_ns": float(r["START_NS"]) + offset_ns,
+                    "end_ns": float(r["END_NS"]) + offset_ns,
+                    "duration_ns": float(r["DURATION"]),
                     "name": str(r["MICRO_OP"])
                 })
 
@@ -580,6 +678,7 @@ def parse_single_trc(filepath):
             title = f"Layer {layer} | AllReduce"
 
         blocks.append({
+            "iter": int(iter_num),
             "gpu_id": gpu_id,
             "layer": layer,
             "category": category,
@@ -587,9 +686,9 @@ def parse_single_trc(filepath):
             "macro_op": macro_op,
             "title": title,
             "subtitle": seq_str,
-            "start_ns": start_ns,
-            "end_ns": end_ns,
-            "duration_ns": dur_ns,
+            "start_ns": round(start_ns, 1),
+            "end_ns": round(end_ns, 1),
+            "duration_ns": round(dur_ns, 1),
             "mem_bound_pct": mem_bound_pct,
             "sub_ops": sub_ops,
             "local_net": None
@@ -598,25 +697,78 @@ def parse_single_trc(filepath):
     return blocks
 
 
-def get_chronogram_data(folder_path):
+def parse_single_trc(filepath, iteration="last", iteration_offsets=None):
+    """
+    Parses a single .trc file. Depending on iteration, extracts either a single iteration
+    ('last' or '1'..'N') or concatenates all iterations with offsets ('all').
+    """
+    basename = os.path.basename(filepath)
+    try:
+        gpu_id = int(basename.split("_")[-1].split(".")[0])
+    except Exception:
+        gpu_id = 0
+
+    df = pd.read_csv(filepath, on_bad_lines="skip")
+    df.columns = df.columns.str.strip()
+    df["GPU"] = gpu_id
+    df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
+    df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
+    df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
+    df["TYPE"] = df["TYPE"].astype(str).str.strip()
+    df["DETAILS"] = df["DETAILS"].fillna("").astype(str).str.strip()
+    df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
+
+    segs = split_dataframe_by_drops(df, "START_NS", -1.0)
+    num_iters = len(segs)
+
+    if iteration == "all":
+        all_blocks = []
+        for k, seg in enumerate(segs):
+            off = iteration_offsets[k] if (iteration_offsets and k < len(iteration_offsets)) else 0.0
+            blocks_k = parse_single_trc_segment(seg, gpu_id, offset_ns=off, iter_num=k + 1)
+            all_blocks.extend(blocks_k)
+        return all_blocks
+    elif iteration == "last":
+        return parse_single_trc_segment(segs[-1], gpu_id, offset_ns=0.0, iter_num=num_iters)
+    else:
+        try:
+            val = int(iteration) - 1
+            idx = max(0, min(val, num_iters - 1))
+        except ValueError:
+            idx = num_iters - 1
+        return parse_single_trc_segment(segs[idx], gpu_id, offset_ns=0.0, iter_num=idx + 1)
+
+
+def get_chronogram_data(folder_path, iteration="last"):
     """
     Parses all .trc files in folder, applies network ops matching per GPU,
     and returns a consolidated timeline for HTML5 Canvas rendering.
+    Supports iteration='last', 'all', or '1'..'N'.
     """
     folder = Path(folder_path).resolve()
     trc_files = glob.glob(str(folder / "*device_*.trc"))
     if not trc_files:
         raise FileNotFoundError(f"No se encontraron ficheros *device_*.trc en: {folder_path}")
 
-    network_ops = load_network_ops_debug(folder_path)
+    num_iters, durations, offsets = get_cluster_iteration_info(folder)
+    network_ops = load_network_ops_debug(folder_path, iteration=iteration, iteration_offsets=offsets)
 
     all_blocks = []
     for tf in sorted(trc_files):
-        blocks = parse_single_trc(tf)
+        blocks = parse_single_trc(tf, iteration=iteration, iteration_offsets=offsets)
         all_blocks.extend(blocks)
 
     if not all_blocks:
-        return {"num_gpus": 0, "min_ns": 0, "max_ns": 0, "blocks": []}
+        return {
+            "num_gpus": 0,
+            "num_iterations": num_iters,
+            "active_iteration": str(iteration),
+            "iteration_markers": [],
+            "min_ns": 0,
+            "max_ns": 0,
+            "tracks": [],
+            "blocks": []
+        }
 
     num_gpus = max(b["gpu_id"] for b in all_blocks) + 1
     min_ns = min(b["start_ns"] for b in all_blocks)
@@ -663,8 +815,23 @@ def get_chronogram_data(folder_path):
             b["throughput_flits_per_cycle"] = b["local_net"].get("prod_flits_cycle", 0.0)
         tracks[b["gpu_id"]].append(b)
 
+    # Iteration markers para líneas divisorias en el Canvas
+    if iteration == "all":
+        iteration_markers = [
+            {"iter": k + 1, "start_ns": round(offsets[k], 1), "duration_ns": round(durations[k], 1)}
+            for k in range(num_iters)
+        ]
+    else:
+        iter_num = num_iters if iteration == "last" else int(iteration)
+        iteration_markers = [
+            {"iter": iter_num, "start_ns": 0.0, "duration_ns": round(max_ns - min_ns, 1)}
+        ]
+
     return {
         "num_gpus": num_gpus,
+        "num_iterations": num_iters,
+        "active_iteration": str(iteration),
+        "iteration_markers": iteration_markers,
         "min_ns": round(min_ns, 1),
         "max_ns": round(max_ns, 1),
         "min_time_ns": round(min_ns, 1),
@@ -677,9 +844,9 @@ def get_chronogram_data(folder_path):
     }
 
 
-def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
+def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", iteration="last"):
     """
-    Reads packet_tracking_debug.csv, isolates the steady-state iteration,
+    Reads packet_tracking_debug.csv, filters according to iteration,
     and returns a paginated slice supporting regime presets ('free', 'medium', 'critical', 'custom').
     """
     folder = Path(folder_path).resolve()
@@ -687,6 +854,8 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
     if not csv_path.exists():
         return {
             "has_data": False,
+            "num_iterations": 1,
+            "active_iteration": str(iteration),
             "total_packets": 0,
             "offset": 0,
             "limit": limit,
@@ -698,6 +867,8 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
     if df.empty or "Creation_Cycle" not in df.columns:
         return {
             "has_data": False,
+            "num_iterations": 1,
+            "active_iteration": str(iteration),
             "total_packets": 0,
             "offset": 0,
             "limit": limit,
@@ -707,30 +878,45 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
 
     df.columns = df.columns.str.strip()
 
-    # Normalización de columnas
     for col in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
                 "Total_Latency", "Network_Latency", "Queueing_Delay", "Num_Flits", "Size_Bytes",
                 "Avg_Flit_Latency", "Throughput", "Op_Idx", "Op_Start_NS", "Op_End_NS"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    # Filtro Anti-Appends para aislar la última iteración
-    if "Op_Start_NS" in df.columns and not df["Op_Start_NS"].isna().all():
-        drops = df["Op_Start_NS"].diff() < 0
-        if drops.any():
-            last_reset = drops[drops].index[-1]
-            df = df.loc[last_reset:].copy()
-    elif "Creation_Cycle" in df.columns:
-        drops = df["Creation_Cycle"].diff() < -1000
-        if drops.any():
-            last_reset = drops[drops].index[-1]
-            df = df.loc[last_reset:].copy()
+    num_iters, durations, offsets = get_cluster_iteration_info(folder)
+    segs = split_dataframe_by_drops(df, "Op_Start_NS", -100.0)
+    num_csv_iters = len(segs)
 
-    df = df.dropna(subset=["Creation_Cycle", "Receive_Cycle"]).sort_values(by="PID", ascending=True).reset_index(drop=True)
-    total_pkts = len(df)
+    if iteration == "all":
+        processed_segs = []
+        for k, seg in enumerate(segs):
+            off = offsets[k] if k < len(offsets) else 0.0
+            seg = seg.copy()
+            if off > 0:
+                if "Op_Start_NS" in seg.columns:
+                    seg["Op_Start_NS"] = seg["Op_Start_NS"] + off
+                if "Op_End_NS" in seg.columns:
+                    seg["Op_End_NS"] = seg["Op_End_NS"] + off
+            processed_segs.append(seg)
+        df_active = pd.concat(processed_segs, ignore_index=True)
+    elif iteration == "last":
+        df_active = segs[-1].copy()
+    else:
+        try:
+            val = int(iteration) - 1
+            idx = max(0, min(val, num_csv_iters - 1))
+        except ValueError:
+            idx = num_csv_iters - 1
+        df_active = segs[idx].copy()
+
+    df_active = df_active.dropna(subset=["Creation_Cycle", "Receive_Cycle"]).sort_values(by="PID", ascending=True).reset_index(drop=True)
+    total_pkts = len(df_active)
     if total_pkts == 0:
         return {
             "has_data": False,
+            "num_iterations": num_iters,
+            "active_iteration": str(iteration),
             "total_packets": 0,
             "offset": 0,
             "limit": limit,
@@ -744,21 +930,17 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
     if regime == "free":
         effective_offset = 0
     elif regime == "medium":
-        # Centrado alrededor de la latencia mediana (P50)
-        med_val = df["Total_Latency"].median()
-        # Encontrar el índice del paquete más cercano a la mediana
-        med_pos = int((df["Total_Latency"] - med_val).abs().values.argmin())
+        med_val = df_active["Total_Latency"].median()
+        med_pos = int((df_active["Total_Latency"] - med_val).abs().values.argmin())
         effective_offset = max(0, med_pos - limit // 2)
     elif regime == "critical":
-        # Centrado alrededor del pico máximo de Total_Latency
-        max_pos = int(df["Total_Latency"].values.argmax())
+        max_pos = int(df_active["Total_Latency"].values.argmax())
         effective_offset = max(0, max_pos - limit // 2)
     else:
         effective_offset = max(0, min(offset, total_pkts - 1))
 
-    # Asegurar límites válidos
     limit = max(10, min(limit, 500))
-    df_slice = df.iloc[effective_offset: effective_offset + limit]
+    df_slice = df_active.iloc[effective_offset : effective_offset + limit]
 
     min_cycle = float(df_slice["Creation_Cycle"].min()) if not df_slice.empty else 0.0
     max_cycle = float(df_slice["Receive_Cycle"].max()) if not df_slice.empty else 1.0
@@ -782,7 +964,6 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
         p_op_start = float(row.get("Op_Start_NS", op_start_ns))
         p_op_end = float(row.get("Op_End_NS", p_op_start + tot_lat))
 
-        # Conversión a tiempo global estimado (1 ciclo = 1 ns)
         global_create_ns = p_op_start + c_cycle
         global_inject_ns = p_op_start + inj_cycle
         global_receive_ns = p_op_start + rx_cycle
@@ -817,6 +998,8 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
     return {
         "has_data": True,
         "clock_period_ns": 1.0,
+        "num_iterations": num_iters,
+        "active_iteration": str(iteration),
         "total_packets": total_pkts,
         "offset": effective_offset,
         "limit": limit,
@@ -826,3 +1009,160 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom"):
         "cycle_span": max_cycle - min_cycle,
         "packets": packets
     }
+
+
+def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", max_packets=450):
+    """
+    Returns all in-flight packets whose lifecycle [pkt_start_ns, pkt_end_ns]
+    overlaps with the visible time window [start_ns, end_ns] in global nanoseconds.
+    If the number of packets exceeds max_packets, applies uniform deterministic sampling.
+    """
+    folder = Path(folder_path).resolve()
+    csv_path = folder / "packet_tracking_debug.csv"
+    if not csv_path.exists():
+        return {
+            "has_data": False,
+            "num_iterations": 1,
+            "active_iteration": str(iteration),
+            "start_ns": float(start_ns),
+            "end_ns": float(end_ns),
+            "total_in_window": 0,
+            "returned": 0,
+            "truncated": False,
+            "packets": []
+        }
+
+    try:
+        df = pd.read_csv(csv_path, on_bad_lines="skip")
+        if df.empty or "Creation_Cycle" not in df.columns:
+            return {
+                "has_data": False,
+                "num_iterations": 1,
+                "active_iteration": str(iteration),
+                "start_ns": float(start_ns),
+                "end_ns": float(end_ns),
+                "total_in_window": 0,
+                "returned": 0,
+                "truncated": False,
+                "packets": []
+            }
+
+        df.columns = df.columns.str.strip()
+        for col in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
+                    "Total_Latency", "Network_Latency", "Queueing_Delay", "Num_Flits",
+                    "Op_Idx", "Op_Start_NS", "Op_End_NS"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        num_iters, durations, offsets = get_cluster_iteration_info(folder)
+        segs = split_dataframe_by_drops(df, "Op_Start_NS", -100.0)
+
+        # Determinar segmentos a procesar
+        if iteration == "all":
+            slices_to_process = [(k, segs[k], offsets[k] if k < len(offsets) else 0.0) for k in range(len(segs))]
+        elif iteration == "last":
+            slices_to_process = [(len(segs) - 1, segs[-1], 0.0)]
+        else:
+            try:
+                val = int(iteration) - 1
+                idx = max(0, min(val, len(segs) - 1))
+            except ValueError:
+                idx = len(segs) - 1
+            slices_to_process = [(idx, segs[idx], 0.0)]
+
+        matching_rows = []
+        for k_iter, seg, off_ns in slices_to_process:
+            seg = seg.dropna(subset=["Creation_Cycle", "Receive_Cycle"]).copy()
+            if seg.empty:
+                continue
+
+            # Calcular ciclo base por colectiva
+            base_cycles = seg.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
+            adjusted_op_start = seg["Op_Start_NS"] + off_ns
+
+            seg["pkt_start_ns"] = adjusted_op_start + (seg["Creation_Cycle"] - base_cycles)
+            seg["pkt_inject_ns"] = adjusted_op_start + (seg["Inject_Cycle"] - base_cycles)
+            seg["pkt_end_ns"] = adjusted_op_start + (seg["Receive_Cycle"] - base_cycles)
+
+            # Filtro de solapamiento con la ventana visible
+            in_window = seg[(seg["pkt_end_ns"] >= start_ns) & (seg["pkt_start_ns"] <= end_ns)]
+            if not in_window.empty:
+                matching_rows.append(in_window)
+
+        if not matching_rows:
+            return {
+                "has_data": True,
+                "num_iterations": num_iters,
+                "active_iteration": str(iteration),
+                "start_ns": float(start_ns),
+                "end_ns": float(end_ns),
+                "total_in_window": 0,
+                "returned": 0,
+                "truncated": False,
+                "packets": []
+            }
+
+        all_matching = pd.concat(matching_rows, ignore_index=True)
+        all_matching = all_matching.sort_values(by=["pkt_start_ns", "PID"], ascending=[True, True]).reset_index(drop=True)
+        total_in_window = len(all_matching)
+
+        max_pkts = max(10, min(int(max_packets), 1000))
+        if total_in_window > max_pkts:
+            indices = np.linspace(0, total_in_window - 1, max_pkts, dtype=int)
+            sampled_df = all_matching.iloc[indices]
+            truncated = True
+        else:
+            sampled_df = all_matching
+            truncated = False
+
+        packets = []
+        for _, r in sampled_df.iterrows():
+            c_cycle = float(r.get("Creation_Cycle", 0.0))
+            inj_cycle = float(r.get("Inject_Cycle", c_cycle))
+            rx_cycle = float(r.get("Receive_Cycle", inj_cycle))
+            q_delay = float(r.get("Queueing_Delay", max(0.0, inj_cycle - c_cycle)))
+            net_lat = float(r.get("Network_Latency", max(0.0, rx_cycle - inj_cycle)))
+            tot_lat = float(r.get("Total_Latency", q_delay + net_lat))
+            flits = int(r.get("Num_Flits", 9))
+
+            packets.append({
+                "pid": int(r["PID"]),
+                "src": int(r["Source"]),
+                "dst": int(r["Dest"]),
+                "op_type": str(r.get("Op_Type", "Scatter")),
+                "op_idx": int(r.get("Op_Idx", 1)) if pd.notna(r.get("Op_Idx")) else 1,
+                "flits": flits,
+                "queue_delay_cycles": round(q_delay, 1),
+                "flight_cycles": round(net_lat, 1),
+                "total_latency_cycles": round(tot_lat, 1),
+                "pkt_start_ns": round(float(r["pkt_start_ns"]), 1),
+                "pkt_inject_ns": round(float(r["pkt_inject_ns"]), 1),
+                "pkt_end_ns": round(float(r["pkt_end_ns"]), 1),
+            })
+
+        return {
+            "has_data": True,
+            "num_iterations": num_iters,
+            "active_iteration": str(iteration),
+            "start_ns": float(start_ns),
+            "end_ns": float(end_ns),
+            "total_in_window": int(total_in_window),
+            "returned": len(packets),
+            "truncated": bool(truncated),
+            "packets": packets
+        }
+
+    except Exception as e:
+        print(f"⚠️ trace_parser: Error en get_packets_in_time_window: {e}")
+        return {
+            "has_data": False,
+            "error": str(e),
+            "num_iterations": 1,
+            "active_iteration": str(iteration),
+            "start_ns": float(start_ns),
+            "end_ns": float(end_ns),
+            "total_in_window": 0,
+            "returned": 0,
+            "truncated": False,
+            "packets": []
+        }

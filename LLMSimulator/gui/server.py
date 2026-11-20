@@ -20,8 +20,10 @@ from gui.sim_runner import runner_instance
 from gui.trace_parser import (
     get_simulation_summary,
     get_chronogram_data,
-    get_packet_tracking_data
+    get_packet_tracking_data,
+    get_packets_in_time_window
 )
+from gui.analysis_gui import list_all_simulations, compare_simulations
 
 
 class WorkbenchAPIHandler(BaseHTTPRequestHandler):
@@ -157,6 +159,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
         if path == "/api/results/summary":
             source = query.get("source", ["staging"])[0]
             folder_name = query.get("folder", [None])[0]
+            iteration = query.get("iteration", ["last"])[0]
             target_dir = self._resolve_simulation_dir(source, folder_name)
 
             if not target_dir:
@@ -164,7 +167,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                summary = get_simulation_summary(target_dir)
+                summary = get_simulation_summary(target_dir, iteration=iteration)
                 self._send_json(200, {"success": True, "source": source, **summary})
             except Exception as e:
                 self._send_error(500, f"Error al generar resumen de simulación: {e}")
@@ -173,6 +176,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
         if path == "/api/results/chronogram":
             source = query.get("source", ["staging"])[0]
             folder_name = query.get("folder", [None])[0]
+            iteration = query.get("iteration", ["last"])[0]
             target_dir = self._resolve_simulation_dir(source, folder_name)
 
             if not target_dir:
@@ -180,7 +184,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                chrono_data = get_chronogram_data(target_dir)
+                chrono_data = get_chronogram_data(target_dir, iteration=iteration)
                 self._send_json(200, {"success": True, "source": source, "folder": target_dir.name, **chrono_data})
             except Exception as e:
                 self._send_error(500, f"Error al generar cronograma de simulación: {e}")
@@ -189,6 +193,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
         if path == "/api/results/packets":
             source = query.get("source", ["staging"])[0]
             folder_name = query.get("folder", [None])[0]
+            iteration = query.get("iteration", ["last"])[0]
             target_dir = self._resolve_simulation_dir(source, folder_name)
 
             if not target_dir:
@@ -208,10 +213,60 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
             regime = query.get("regime", ["custom"])[0]
 
             try:
-                packet_data = get_packet_tracking_data(target_dir, offset=offset, limit=limit, regime=regime)
+                packet_data = get_packet_tracking_data(target_dir, offset=offset, limit=limit, regime=regime, iteration=iteration)
                 self._send_json(200, {"success": True, "source": source, "folder": target_dir.name, **packet_data})
             except Exception as e:
                 self._send_error(500, f"Error al parsear seguimiento de paquetes: {e}")
+            return
+
+        if path == "/api/results/packets_window":
+            source = query.get("source", ["staging"])[0]
+            folder_name = query.get("folder", [None])[0]
+            target_dir = self._resolve_simulation_dir(source, folder_name)
+
+            if not target_dir:
+                self._send_error(404, f"Simulación no encontrada en {source}: {folder_name or '(activa)'}")
+                return
+
+            try:
+                start_ns = float(query.get("start_ns", [0.0])[0])
+            except ValueError:
+                start_ns = 0.0
+
+            try:
+                end_ns = float(query.get("end_ns", [20000.0])[0])
+            except ValueError:
+                end_ns = 20000.0
+
+            iteration = query.get("iteration", ["last"])[0]
+
+            try:
+                max_packets = int(query.get("max_packets", [450])[0])
+            except ValueError:
+                max_packets = 450
+
+            try:
+                window_data = get_packets_in_time_window(
+                    target_dir,
+                    start_ns=start_ns,
+                    end_ns=end_ns,
+                    iteration=iteration,
+                    max_packets=max_packets
+                )
+                self._send_json(200, {"success": True, "source": source, "folder": target_dir.name, **window_data})
+            except Exception as e:
+                self._send_error(500, f"Error al consultar paquetes en ventana temporal: {e}")
+            return
+
+        # ---------------------------------------------------------------------
+        # REST API Routes: Phase 3 (History & Comparative Analysis)
+        # ---------------------------------------------------------------------
+        if path == "/api/history/list":
+            try:
+                sims = list_all_simulations(self.results_root, self.staging_root)
+                self._send_json(200, {"success": True, "simulations": sims, "total": len(sims)})
+            except Exception as e:
+                self._send_error(500, f"Error listando simulaciones: {e}")
             return
 
         # ---------------------------------------------------------------------
@@ -384,6 +439,123 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 })
             except Exception as e:
                 self._send_error(500, f"Error al descartar simulación en staging: {e}")
+            return
+
+        # ---------------------------------------------------------------------
+        # POST: Phase 3 (History & Comparative Analysis)
+        # ---------------------------------------------------------------------
+        elif path == "/api/history/label":
+            content_length = int(self.headers.get("Content-Length", 0))
+            payload = {}
+            if content_length > 0:
+                try:
+                    payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+
+            folder_name = payload.get("folder") or payload.get("folder_name")
+            label = payload.get("label", "").strip()
+
+            if not folder_name:
+                self._send_error(400, "Nombre de carpeta no especificado.")
+                return
+
+            try:
+                target = (self.results_root / folder_name).resolve()
+                if not str(target).startswith(str(self.results_root.resolve())):
+                    self._send_error(403, "Acceso no autorizado fuera de build/results/")
+                    return
+
+                if not target.exists() or not target.is_dir():
+                    self._send_error(404, f"Simulación no encontrada en historial: {folder_name}")
+                    return
+
+                meta_file = target / "gui_metadata.json"
+                meta_data = {}
+                if meta_file.exists():
+                    try:
+                        with open(meta_file, "r", encoding="utf-8") as f:
+                            meta_data = json.load(f)
+                    except Exception:
+                        meta_data = {}
+
+                meta_data["label"] = label
+                meta_data["folder_name"] = folder_name
+                meta_data["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                with open(meta_file, "w", encoding="utf-8") as f:
+                    json.dump(meta_data, f, indent=2, ensure_ascii=False)
+
+                self._send_json(200, {
+                    "success": True,
+                    "folder": folder_name,
+                    "label": label,
+                    "message": "Etiqueta actualizada correctamente."
+                })
+            except Exception as e:
+                self._send_error(500, f"Error al actualizar etiqueta: {e}")
+            return
+
+        elif path == "/api/history/delete":
+            content_length = int(self.headers.get("Content-Length", 0))
+            payload = {}
+            if content_length > 0:
+                try:
+                    payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+
+            folder_name = payload.get("folder") or payload.get("folder_name")
+            if not folder_name:
+                self._send_error(400, "Nombre de carpeta no especificado.")
+                return
+
+            try:
+                target = (self.results_root / folder_name).resolve()
+                if not str(target).startswith(str(self.results_root.resolve())):
+                    self._send_error(403, "Acceso no autorizado fuera de build/results/")
+                    return
+
+                if not target.exists() or not target.is_dir():
+                    self._send_error(404, f"Simulación no encontrada: {folder_name}")
+                    return
+
+                shutil.rmtree(target)
+                self._send_json(200, {
+                    "success": True,
+                    "folder": folder_name,
+                    "message": f"Simulación '{folder_name}' eliminada correctamente del historial."
+                })
+            except Exception as e:
+                self._send_error(500, f"Error al eliminar simulación: {e}")
+            return
+
+        elif path == "/api/analysis/compare":
+            content_length = int(self.headers.get("Content-Length", 0))
+            payload = {}
+            if content_length > 0:
+                try:
+                    payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+
+            simulations = payload.get("simulations", [])
+            semilog = bool(payload.get("semilog", False))
+
+            if not simulations:
+                self._send_error(400, "Debe seleccionar al menos una simulación para comparar.")
+                return
+
+            try:
+                comp_data = compare_simulations(
+                    simulations,
+                    semilog=semilog,
+                    base_results_dir=self.results_root,
+                    base_staging_dir=self.staging_root
+                )
+                self._send_json(200, {"success": True, **comp_data})
+            except Exception as e:
+                self._send_error(500, f"Error generando comparativa: {e}")
             return
 
         else:
