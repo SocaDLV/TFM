@@ -211,6 +211,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }, 50);
     } else if (targetTabId === "tab-history") {
       loadHistoryList();
+    } else if (targetTabId === "tab-topology") {
+      loadTopologyView();
     }
   }
 
@@ -1717,6 +1719,364 @@ document.addEventListener("DOMContentLoaded", () => {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  // =========================================================================
+  // FASE 4: Tab 4 Controller (Topology NoC & Architecture Heatmap)
+  // =========================================================================
+  let topologyCanvas = null;
+  let currentTopologyData = null;
+
+  const topoSimLabel = document.getElementById("topo-sim-label");
+  const btnTopoSyncPreview = document.getElementById("btn-topo-sync-preview");
+  const btnTopoLoadActive = document.getElementById("btn-topo-load-active");
+  const topoMetricSelect = document.getElementById("topo-metric-select");
+  const topoOpFilter = document.getElementById("topo-op-filter");
+  const topoIterSelect = document.getElementById("topo-iter-select");
+  const topoToggleFlows = document.getElementById("topo-toggle-flows");
+  const topoToggleLabels = document.getElementById("topo-toggle-labels");
+  const topoGraphTitle = document.getElementById("topo-graph-title");
+  const topoGraphSub = document.getElementById("topo-graph-sub");
+  const topoMetaTags = document.getElementById("topo-meta-tags");
+  const inspectorNodeTitle = document.getElementById("inspector-node-title");
+  const inspectorNodeContent = document.getElementById("inspector-node-content");
+
+  if (document.getElementById("topology-canvas")) {
+    topologyCanvas = new TopologyCanvas("topology-canvas", "topology-tooltip");
+    topologyCanvas.onNodeSelected = (node) => renderNodeInspector(node);
+  }
+
+  async function loadTopologyView(forcePreview = false) {
+    if (!topologyCanvas) return;
+
+    const opFilter = topoOpFilter ? topoOpFilter.value : "all";
+    const iteration = topoIterSelect ? topoIterSelect.value : "last";
+
+    if (forcePreview || !currentStagingFolder) {
+      // Modo Vista Previa usando valores de Pestaña 1
+      const topoVal = cfgTopology ? cfgTopology.value : "torus";
+      const modelVal = cfgModel ? cfgModel.value : "mixtral";
+      const gpusVal = cfgDevices ? parseInt(cfgDevices.value) || 8 : 8;
+      const bsVal = cfgBatchSize ? parseInt(cfgBatchSize.value) || 32 : 32;
+      const skewVal = cfgSkewness ? parseFloat(cfgSkewness.value) || 0.0 : 0.0;
+      const tpVal = cfgTensorDegree ? parseInt(cfgTensorDegree.value) || 1 : 1;
+      const vcsVal = cfgVCs ? parseInt(cfgVCs.value) || 4 : 4;
+      const routingVal = cfgRouting ? cfgRouting.value : "dim_order";
+
+      let netDims = `${gpusVal}`;
+      if (topoVal === "mesh") {
+        if (gpusVal === 8) netDims = "4 2";
+        else if (gpusVal === 4) netDims = "2 2";
+        else if (gpusVal === 16) netDims = "4 4";
+      }
+
+      if (topoSimLabel) {
+        topoSimLabel.textContent = `[Vista Previa] ${modelVal} | ${topoVal.toUpperCase()} (${netDims}) | ${gpusVal} GPUs`;
+      }
+
+      try {
+        const url = `/api/results/topology?preview=true&topology=${encodeURIComponent(topoVal)}&net_dims=${encodeURIComponent(netDims)}&num_gpus=${gpusVal}&model=${encodeURIComponent(modelVal)}&batch_size=${bsVal}&skewness=${skewVal}&tensor_degree=${tpVal}&vcs=${vcsVal}&routing=${encodeURIComponent(routingVal)}&op_filter=${encodeURIComponent(opFilter)}&iteration=${encodeURIComponent(iteration)}`;
+        const res = await fetch(url);
+        if (res.ok) {
+          const data = await res.json();
+          currentTopologyData = data;
+          updateTopologyMetaTags(data);
+          topologyCanvas.setData(data);
+          resetNodeInspector();
+        }
+      } catch (err) {
+        console.error("Error cargando vista previa topológica:", err);
+      }
+      return;
+    }
+
+    // Modo Simulación Real
+    const source = currentResultsSource || "staging";
+    const folder = currentStagingFolder;
+
+    if (topoSimLabel) {
+      topoSimLabel.textContent = folder;
+    }
+
+    try {
+      const url = `/api/results/topology?source=${encodeURIComponent(source)}&folder=${encodeURIComponent(folder)}&iteration=${encodeURIComponent(iteration)}&op_filter=${encodeURIComponent(opFilter)}`;
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        currentTopologyData = data;
+        updateTopologyMetaTags(data);
+        updateTopologyIterOptions(data.num_iterations || 1);
+        topologyCanvas.setData(data);
+        resetNodeInspector();
+      }
+    } catch (err) {
+      console.error("Error cargando topología de simulación:", err);
+    }
+  }
+
+  function updateTopologyMetaTags(d) {
+    if (!topoMetaTags) return;
+    const topo = (d.topology || "torus").toUpperCase();
+    const dims = d.net_dims ? `(${d.net_dims.replace(" ", "x")})` : "";
+    const model = d.model || "mixtral";
+    const gpus = d.num_gpus || 8;
+    const totalPkts = d.total_packets || 0;
+    const hasData = d.has_packet_data;
+
+    let tagsHtml = `
+      <span class="tag">📐 ${topo} ${dims}</span>
+      <span class="tag">⚡ ${gpus} GPUs</span>
+      <span class="tag">🧠 ${model}</span>
+      <span class="tag">🚦 VCs: ${d.vcs || 4}</span>
+    `;
+
+    if (hasData) {
+      tagsHtml += `<span class="tag" style="color:#10b981;border-color:#10b981;">📦 ${totalPkts.toLocaleString()} paquetes analizados</span>`;
+    } else {
+      tagsHtml += `<span class="tag" style="color:#f59e0b;border-color:#f59e0b;">⚠️ Sin trazas de paquetes (Modo Topológico)</span>`;
+    }
+
+    topoMetaTags.innerHTML = tagsHtml;
+
+    if (topoGraphTitle) {
+      topoGraphTitle.textContent = `Grafo NoC: ${topo} ${dims} — ${d.folder_name || 'Simulación'}`;
+    }
+    if (topoGraphSub) {
+      topoGraphSub.textContent = hasData 
+        ? `Distribución de carga térmica y flujos de paquetes para ${d.active_op_filter === 'all' ? 'todas las colectivas' : d.active_op_filter}`
+        : `Estructura física de enlaces y routers BookSim2`;
+    }
+  }
+
+  function updateTopologyIterOptions(numIters) {
+    if (!topoIterSelect) return;
+    const curVal = topoIterSelect.value;
+    let html = `<option value="last">Última Iteración (Steady-State)</option>`;
+    if (numIters > 1) {
+      html += `<option value="all">Simulación Completa (${numIters} Iteraciones)</option>`;
+      for (let i = 1; i <= numIters; i++) {
+        html += `<option value="${i}">Iteración ${i}</option>`;
+      }
+    }
+    topoIterSelect.innerHTML = html;
+    if (Array.from(topoIterSelect.options).some(o => o.value === curVal)) {
+      topoIterSelect.value = curVal;
+    } else {
+      topoIterSelect.value = "last";
+    }
+  }
+
+  function resetNodeInspector() {
+    if (!inspectorNodeTitle || !inspectorNodeContent) return;
+    inspectorNodeTitle.textContent = "Inspector de Nodo";
+    inspectorNodeContent.innerHTML = `
+      <div class="inspector-prompt">
+        <p>Haz clic o pasa el ratón sobre cualquier nodo GPU/Router en el mapa para inspeccionar sus métricas de tráfico, cola NIC y flujos de comunicación.</p>
+      </div>
+    `;
+  }
+
+  function renderNodeInspector(node) {
+    if (!inspectorNodeTitle || !inspectorNodeContent) return;
+    if (!node) {
+      resetNodeInspector();
+      return;
+    }
+
+    inspectorNodeTitle.textContent = `Ficha Microarquitectural — ${node.label}`;
+
+    // Filter flows connected to this node
+    const allFlows = (currentTopologyData && currentTopologyData.flows) ? currentTopologyData.flows : [];
+    const incomingFlows = allFlows.filter(f => f.dst === node.id).slice(0, 5);
+    const outgoingFlows = allFlows.filter(f => f.src === node.id).slice(0, 5);
+
+    let incomingRows = "";
+    if (incomingFlows.length > 0) {
+      incomingFlows.forEach(f => {
+        incomingRows += `
+          <tr>
+            <td>GPU ${f.src} ➔ GPU ${f.dst}</td>
+            <td style="color:#ef4444;font-weight:700;">${f.packets.toLocaleString()}</td>
+            <td>${f.flits.toLocaleString()}</td>
+            <td>${f.avg_latency.toFixed(1)} c</td>
+            <td>${f.share_pct.toFixed(1)}%</td>
+          </tr>
+        `;
+      });
+    } else {
+      incomingRows = `<tr><td colspan="5" style="color:var(--text-dim);text-align:center;">Sin tráfico entrante</td></tr>`;
+    }
+
+    let outgoingRows = "";
+    if (outgoingFlows.length > 0) {
+      outgoingFlows.forEach(f => {
+        outgoingRows += `
+          <tr>
+            <td>GPU ${f.src} ➔ GPU ${f.dst}</td>
+            <td style="color:#38bdf8;font-weight:700;">${f.packets.toLocaleString()}</td>
+            <td>${f.flits.toLocaleString()}</td>
+            <td>${f.avg_latency.toFixed(1)} c</td>
+            <td>${f.share_pct.toFixed(1)}%</td>
+          </tr>
+        `;
+      });
+    } else {
+      outgoingRows = `<tr><td colspan="5" style="color:var(--text-dim);text-align:center;">Sin tráfico saliente</td></tr>`;
+    }
+
+    inspectorNodeContent.innerHTML = `
+      <div class="node-inspector-content">
+        <div class="node-inspector-top">
+          <span class="node-inspector-gpu-title">Router NoC ${node.id}</span>
+          <span class="node-experts-badge">${escapeHtml(node.experts)}</span>
+        </div>
+
+        <div>
+          <div class="inspector-section-title">Distribución de Tráfico NoC</div>
+          <div class="node-kpi-grid">
+            <div class="node-kpi-box">
+              <span class="label">Carga RX (% clúster):</span>
+              <span class="val" style="color:#ef4444;">${node.rx_share_pct.toFixed(2)}%</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Carga TX (% clúster):</span>
+              <span class="val" style="color:#38bdf8;">${node.tx_share_pct.toFixed(2)}%</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Paquetes RX:</span>
+              <span class="val">${node.rx_packets.toLocaleString()} pkts</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Paquetes TX:</span>
+              <span class="val">${node.tx_packets.toLocaleString()} pkts</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="inspector-section-title">Microarquitectura de Red y Colas</div>
+          <div class="node-kpi-grid">
+            <div class="node-kpi-box">
+              <span class="label">Retardo en Cola NIC:</span>
+              <span class="val" style="color:#f59e0b;">${node.avg_queueing_delay.toFixed(1)} ciclos</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Latencia Media de Vuelo:</span>
+              <span class="val">${node.avg_total_latency.toFixed(1)} ciclos</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Flits RX Recibidos:</span>
+              <span class="val">${node.rx_flits.toLocaleString()}</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Flits TX Emitidos:</span>
+              <span class="val">${node.tx_flits.toLocaleString()}</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="inspector-section-title">Tiempos de GPU (Iteración Activa)</div>
+          <div class="node-kpi-grid">
+            <div class="node-kpi-box">
+              <span class="label">Cómputo GPU:</span>
+              <span class="val" style="color:#10b981;">${node.compute_us.toFixed(1)} µs</span>
+            </div>
+            <div class="node-kpi-box">
+              <span class="label">Tránsito NoC:</span>
+              <span class="val" style="color:#38bdf8;">${node.transit_us.toFixed(1)} µs</span>
+            </div>
+            <div class="node-kpi-box" style="grid-column: span 2;">
+              <span class="label">Espera en Barrera BSP (Stall):</span>
+              <span class="val" style="color:#ef4444;">${node.stall_us.toFixed(1)} µs</span>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="inspector-section-title">Mayores Flujos Entrantes (In-Cast RX)</div>
+          <div class="node-flow-table-wrapper">
+            <table class="node-flow-table">
+              <thead>
+                <tr>
+                  <th>Flujo</th>
+                  <th>Paquetes</th>
+                  <th>Flits</th>
+                  <th>Latencia</th>
+                  <th>Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${incomingRows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div>
+          <div class="inspector-section-title">Mayores Flujos Salientes (TX)</div>
+          <div class="node-flow-table-wrapper">
+            <table class="node-flow-table">
+              <thead>
+                <tr>
+                  <th>Flujo</th>
+                  <th>Paquetes</th>
+                  <th>Flits</th>
+                  <th>Latencia</th>
+                  <th>Share</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${outgoingRows}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+    `;
+  }
+
+  if (topoMetricSelect) {
+    topoMetricSelect.addEventListener("change", (e) => {
+      if (topologyCanvas) topologyCanvas.setMetric(e.target.value);
+    });
+  }
+
+  if (topoToggleFlows) {
+    topoToggleFlows.addEventListener("change", (e) => {
+      if (topologyCanvas) topologyCanvas.setShowFlows(e.target.checked);
+    });
+  }
+
+  if (topoToggleLabels) {
+    topoToggleLabels.addEventListener("change", (e) => {
+      if (topologyCanvas) topologyCanvas.setShowLabels(e.target.checked);
+    });
+  }
+
+  if (topoOpFilter) {
+    topoOpFilter.addEventListener("change", () => {
+      loadTopologyView(false);
+    });
+  }
+
+  if (topoIterSelect) {
+    topoIterSelect.addEventListener("change", () => {
+      loadTopologyView(false);
+    });
+  }
+
+  if (btnTopoSyncPreview) {
+    btnTopoSyncPreview.addEventListener("click", () => {
+      loadTopologyView(true);
+    });
+  }
+
+  if (btnTopoLoadActive) {
+    btnTopoLoadActive.addEventListener("click", () => {
+      loadTopologyView(false);
+    });
   }
 
   // =========================================================================

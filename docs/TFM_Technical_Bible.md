@@ -2515,12 +2515,13 @@ Este capítulo constituye la guía exhaustiva y sistemática de todos los archiv
 ### [`LLMSimulator/gui/`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/)
 - **Propósito:** Paquete modular de backend y frontend estático que implementa la interfaz web interactiva sin frameworks externos pesados (100% Python estándar `http.server` + JavaScript vanilla).
 - **Componentes Clave:**
-  - **`gui/server.py`:** Servidor HTTP REST multi-hilo (`ThreadingHTTPServer` + `WorkbenchAPIHandler`). Expone endpoints para el ciclo de vida de simulación (`/api/run`, `/api/abort`, `/api/status`), gestión del área temporal (`/api/results/active`, `/api/results/save`, `/api/results/discard`) y servicio de métricas en tiempo real (`/api/results/summary`, `/api/results/chronogram`, `/api/results/packets`, `/api/results/packets_window`).
+  - **`gui/server.py`:** Servidor HTTP REST multi-hilo (`ThreadingHTTPServer` + `WorkbenchAPIHandler`). Expone endpoints para el ciclo de vida de simulación (`/api/run`, `/api/abort`, `/api/status`), gestión del área temporal (`/api/results/active`, `/api/results/save`, `/api/results/discard`), servicio de métricas en tiempo real (`/api/results/summary`, `/api/results/chronogram`, `/api/results/packets`, `/api/results/packets_window`) y topología/tráfico NoC (`/api/results/topology`).
   - **`gui/sim_runner.py`:** Controlador de subprocesos no bloqueante (`SimulationRunner`). Aísla la ejecución en `build/tmp_staging/`, monitoriza el progreso en streaming línea a línea, calcula el avance porcentual y ofrece cancelación limpia inmediata vía señales `SIGTERM`/`SIGKILL`.
-  - **`gui/trace_parser.py`:** Motor de ingesta y parseo analítico de alto rendimiento. Extrae métricas KPI arquitecturales, detecta caídas temporales de iteraciones (`split_dataframe_by_drops`), calcula offsets cronológicos para visualización de simulación completa (`iteration="all"`), y sirve ventanas temporales acotadas de flits con submuestreo determinista (`get_packets_in_time_window`).
-  - **`gui/static/index.html`:** Interfaz visual responsiva estructurada en 4 pestañas operativas (Configurador, Resultados/Líneas de Tiempo, Historial/Comparativa, Topología NoC), modal de ayuda/créditos técnicos y barra de estado en vivo.
+  - **`gui/trace_parser.py`:** Motor de ingesta y parseo analítico de alto rendimiento. Extrae métricas KPI arquitecturales con paridad matemática exacta CLI ↔ GUI, detecta caídas temporales de iteraciones (`split_dataframe_by_drops`), calcula offsets cronológicos para visualización de simulación completa (`iteration="all"`), sirve ventanas temporales acotadas de flits con submuestreo determinista (`get_packets_in_time_window`), y genera grafos topológicos NoC con matriz de tráfico y mapa de calor por nodo (`get_topology_traffic_data`).
+  - **`gui/static/index.html`:** Interfaz visual responsiva estructurada en 4 pestañas operativas (Configurador, Resultados/Líneas de Tiempo, Historial/Comparativa, Topología NoC y Arquitectura), inspector microarquitectural de nodo, comparador de bloques Transformer (Mixtral vs. DeepSeek-V3 vs. LLaMA), modal de ayuda/créditos técnicos y barra de estado en vivo.
   - **`gui/static/timeline_canvas.js`:** Motor gráfico vectorial basado en Canvas HTML5 (`HiDPI/Retina`). Implementa los controladores `ChronogramCanvas`, `PacketFlightCanvas`, `HybridPacketCanvas` y `HybridSyncController` con sincronización ciclo a ciclo de doble eje X, marcadores de iteración, zoom, panorámica horizontal y tooltip flotante interactivo.
-  - **`gui/static/app.js`:** Controlador reactivo del frontend. Gestiona guardarraíles arquitectónicos en vivo, consola terminal con auto-scroll, navegación de sub-vistas, selectores de iteración y sincronización de controles de línea temporal.
+  - **`gui/static/topology_canvas.js`:** Motor gráfico vectorial interactivo en Canvas HTML5 (`TopologyCanvas`) para visualización de redes NoC (Toro 1D, Malla 2D, Malla 3D). Renderiza enlaces físicos ortogonales y wrap-around (con latencias de 1 y 2 ciclos), mapa de calor continuo de carga/hotspots por nodo, flechas ponderadas de flujos de tráfico (`flows`) y tooltips interactivos en hover/click.
+  - **`gui/static/app.js`:** Controlador reactivo del frontend. Gestiona guardarraíles arquitectónicos en vivo, consola terminal con auto-scroll, navegación de sub-vistas, selectores de iteración/colectiva, panel inspector de nodos y sincronización de controles de línea temporal y mapa topológico.
   - **`gui/analysis_gui.py`:** Motor analítico multi-simulación en memoria. Escanea el catálogo en `build/results/` y `build/tmp_staging/` extrayendo metadatos ligeros (`list_all_simulations`), compara un subconjunto arbitrario de simulaciones seleccionadas (`compare_simulations`), estructura tablas de métricas para exportación CSV y genera en memoria (codificadas en base64, sin archivos temporales en disco) las 3 figuras científicas: Anatomía de Latencia (`anatomia_latencia`), Desglose de Primitivas Colectivas (`desglose_primitivas_moe`) y Curva de Saturación de Red NoC (`curva_saturacion_red`) con nubes de dispersión, centroides destacados y escala semilogarítmica adaptativa.
 
 ---
@@ -3392,6 +3393,125 @@ Durante la auditoría matemática de la Fase 3.9.1, se identificaron y subsanaro
 | **Latencia Media Paquete NoC** | $1.321,2\text{ ciclos}$ | $1.321,2\text{ ciclos}$ | $10.269,6\text{ ciclos}$ | $10.269,6\text{ ciclos}$ | **IDÉNTICO (100%)** |
 | **Micro-op AttnGen (% Mem)** | $0,0\%$ (Compute) | $0,0\%$ (Compute) | $0,0\%$ (Compute) | $0,0\%$ (Compute) | **IDÉNTICO (100%)** |
 | **Macro Attention (% Mem)** | $97,9\%$ (Mem-Bound) | $97,9\%$ (Mem-Bound) | -- | -- | **IDÉNTICO (100%)** |
+
+---
+
+## 10.11. Pestaña 4: Mapa Topológico Interactivo NoC, Heatmap de Tráfico e Inspector Arquitectónico (Fase 4)
+La Pestaña 4 del Workbench proporciona una ventana gráfica vectorial interactiva hacia el corazón de la red de interconexión NoC y la microarquitectura de los modelos Transformer simulados. Integra dos subsistemas visuales de alto valor analítico:
+
+### 1. Visor Topológico Vectorial Interactivo (`TopologyCanvas` en `gui/static/topology_canvas.js`)
+El motor gráfico implementa un renderizado adaptativo en Canvas HTML5 (`HiDPI`) que se acomoda automáticamente a la topología y dimensionalidad de la red configurada:
+- **Toro 1D / Anillo ($k$ nodos en 1 dimensión):**
+  - Disposición radial centrada de los conmutadores:
+    $$\theta_i = \frac{2\pi \cdot i}{N} - \frac{\pi}{2}, \quad x_i = C_x + R \cos\theta_i, \quad y_i = C_y + R \sin\theta_i$$
+  - Enlaces directos ortogonales entre routers contiguos $(i \leftrightarrow (i+1)\%N)$ con latencia física de **1 ciclo** (`1c`).
+  - Enlace envolvente *wrap-around* / *dateline* $(k-1 \leftrightarrow 0)$: modelado como un arco curvado exterior con latencia física de **2 ciclos** (`2c (Wrap)`), reflejando la longitud duplicada de la pista de interconexión en placa/silicio según se modela en `kncube.cpp`.
+- **Malla 2D / Toro 2D ($K_x \times K_y$, incluyendo AnyNet 4x2):**
+  - Mapeo bidimensional en cuadrícula ortogonal con conmutadores de esquina (2 vecinos), borde (3 vecinos) e interiores (4 vecinos).
+  - En Mallas regulares o grafos AnyNet como `mesh_4x2.txt` (4 columnas, 2 filas, 8 GPUs), se dibujan exactamente los 10 enlaces bidireccionales físicos (20 canales unidireccionales de AnyNet) con latencia de 1 ciclo.
+  - En Toros 2D, se añaden los arcos envolventes horizontales y verticales exteriores con latencia de 2 ciclos.
+- **Malla 3D / Toro 3D ($K_x \times K_y \times K_z$):**
+  - Proyección isométrica multicapa separando planos Z, con enlaces ortogonales en los ejes X, Y y Z.
+
+### 2. Mapa de Calor de Tráfico (Heatmap) y Detección de Cuellos de Botella *In-Cast*
+Cada conmutador/GPU se colorea mediante un mapa de calor térmico continuo interpolado en cuatro tonos cromáticos:
+$$\text{Azul Frío } (\text{Carga Mínima}) \longrightarrow \text{Verde Esmeralda} \longrightarrow \text{Ámbar} \longrightarrow \text{Rojo Carmesí } (\text{Punto Caliente / Hotspot})$$
+
+El usuario puede alternar en tiempo real entre múltiples métricas microarquitecturales:
+1. **Tráfico Recibido (% RX / In-Cast Hotspots):** Fracción porcentual de paquetes que ingresan en cada GPU. Permite verificar visualmente de un vistazo el desbalance de enrutamiento inducido por funciones de distribución sesgadas (como Zipf/Power-Law).
+   - **Caso de Estudio Validado (`mixtral_8dev_torus_bs32_skew1.0`):**
+     Con $\text{skewness} = 1.0$, el router de la **GPU 0 absorbe el $30.81\%$ de los paquetes** en la fase `MoE Scatter` (17.568 paquetes), convirtiéndose en un cuello de botella térmico crítico (*In-Cast Hotspot*), mientras que la **GPU 7 absorbe únicamente el $5.08\%$** (2.896 paquetes).
+2. **Tráfico Emitido (% TX):** Fracción de paquetes inyectados por cada GPU.
+3. **Retardo en Cola NIC (`Queueing_Delay`):** Espera activa de los paquetes antes de entrar en los canales virtuales del router. En GPU 0 bajo $\text{skew}=1.0$, el retardo medio en cola alcanza $447,8\text{ ciclos}$, mientras que los emisores saturados alcanzan hasta $2.919,1\text{ ciclos}$ de retardo en cola esperando a que el router destino drene sus flits.
+4. **Tiempo de Bloqueo (`NETWORK_STALL`):** Retraso temporal acumulado en la barrera BSP antes de poder reanudar el cómputo de la capa.
+
+### 3. Matriz y Flujos de Comunicación Ponderados (`Source ➔ Dest`)
+Superpuestos al grafo topológico, el visor dibuja flechas direccionales curvadas para cada par emisor-receptor $(s, d)$:
+- **Grosor y Opacidad Adaptativos:** Escalan dinámicamente con el volumen de tráfico relativo ($N_{\text{paquetes}} / N_{\text{max}}$).
+- **Filtro de Colectiva:** Permite aislar el tráfico de `MoE Scatter` (tokens hacia expertos), `MoE Gather` (retorno de activaciones procesadas) o `Ring-AllReduce` (Tensor Parallelism).
+- **Aislamiento por Nodo en Hover/Click:** Al posar el cursor o hacer clic sobre un nodo, se atenúan todas las conexiones ajenas y se iluminan con colores diferenciados sus flujos salientes (ámbar `#fbbf24`) y entrantes (carmesí `#f43f5e`).
+
+### 4. Inspector Microarquitectural de Nodo
+Un panel lateral contextual exhibe la radiografía completa del conmutador seleccionado:
+- **Asignación de Expertos:**
+  - En Mixtral 8x7B (8 GPUs): `Exp #d` (un experto por GPU).
+  - En DeepSeek-V3 (8 GPUs): `Exp #(32*d)..#(32*d+31) + Shared` (32 micro-expertos por GPU más el experto compartido redundante).
+  - En LLaMA: `Denso (Sin MoE)`.
+- **Métricas Cuantitativas:** Paquetes y flits TX/RX, retardo en cola NIC, latencia media de red, tiempo de cómputo GPU, tiempo de tránsito NoC y stalls de barrera.
+- **Top 5 Flujos Entrantes y Salientes:** Tabla desglosada con volumen de paquetes, flits, latencia de vuelo y cuota de tráfico sobre el total del clúster.
+
+### 5. Inspector Comparativo de Arquitecturas Transformer
+En la base de la pestaña, se integran tres fichas comparativas que desglosan el flujo de ejecución capa a capa y la huella en red:
+1. **Mixtral 8x7B (Sparse MoE):**
+   - Atención GQA ($d_{\text{model}}=4096$) $\rightarrow$ Router Softmax Top-2 $\rightarrow$ MoE Scatter ($288\text{ B/token}$, 9 flits) $\rightarrow$ 8 Expertos SwiGLU ($176\text{ MB/exp}$) $\rightarrow$ MoE Gather simétrico.
+2. **DeepSeek-V3 (Fine-Grained MoE + MLA):**
+   - Atención MLA con compresión latente KV a 512 dim ($576\text{ B/token}$) $\rightarrow$ Router Top-8 sobre 256 micro-expertos $\rightarrow$ Scatter en FP8 ($7.168\text{ B}$) $\rightarrow$ 32 micro-expertos/GPU + 1 Shared Expert local $\rightarrow$ Gather en BF16 ($14.336\text{ B}$, volumen 2x respecto a Scatter) $\rightarrow$ Capas 0–2 densas, 3–59 híbridas.
+3. **LLaMA (Denso Baseline):**
+   - MHA/GQA tradicional $\rightarrow$ FFN SwiGLU monolítico denso $\rightarrow$ Sin tráfico MoE (solo Ring-AllReduce si $TP > 1$).
+
+---
+
+## 10.12. Refinamiento de Pestaña 4: Mapa de Calor Térmico en Enlaces/Flujos NoC y Tooltips Interactivos en Hover sobre Conexiones (Fase 4.5)
+
+La Fase 4.5 dota a la infraestructura de interconexión (tanto a los enlaces físicos entre routers como a las flechas de flujo dirigido lógico $Src \to Dst$) del mismo rigor analítico y visual que poseían los nodos GPU, cerrando la brecha de inspección microarquitectural en la red NoC.
+
+### 1. Mapeo y Proyección de Enrutamiento sobre Enlaces Físicos (`_compute_routing_path` en `gui/trace_parser.py`)
+Para evaluar la carga real que soporta cada enlace de la red física a partir de las trazas de paquetes de BookSim2 (`packet_tracking_debug.csv`), el backend implementa una función de enrutamiento determinista que reproduce con fidelidad los algoritmos del simulador:
+- **Toro 1D / Anillo:** Determina la distancia circular mínima hacia adelante y hacia atrás:
+  $$d_{\text{fwd}} = (dst - src) \pmod N, \quad d_{\text{bwd}} = (src - dst) \pmod N$$
+  Si $d_{\text{bwd}} < d_{\text{fwd}}$, el tráfico atraviesa el enlace envolvente *wrap-around* / *dateline* $(N-1 \leftrightarrow 0)$ de 2 ciclos.
+- **Mallas y Toros 2D / 3D:** Implementa *Dimension-Order Routing* (`DOR`), recorriendo estrictamente la dimensión 0 (eje X), posteriormente la dimensión 1 (eje Y) y finalmente la dimensión 2 (eje Z), seleccionando el camino circular mínimo en dimensiones con configuración toroidal.
+- **Topologías Irregulares / AnyNet (`mesh_4x2.txt`):** Camino mínimo computado mediante búsqueda en anchura (*BFS*) sobre la lista de adyacencia física.
+
+#### Acumulación Vectorizada de Métricas en Enlaces Físicos
+Para cada flujo lógico $(s, d)$ con $N_{\text{pkts}} > 0$, el parser descompone la ruta en saltos $(u, v)$ y proyecta ponderadamente sobre el enlace físico no dirigido $\text{link}(u, v)$:
+1. **Volumen de Tráfico y Cuota:** Suma total de paquetes y flits que atraviesan el canal, calculando su porcentaje respecto al clúster:
+   $$\text{Share}_{\text{link}}\% = \left(\frac{N_{\text{pkts, link}}}{N_{\text{total cluster}}}\right) \times 100$$
+2. **Balance Direccional:** Desglose del tráfico en sentido $u \to v$ versus $v \to u$, revelando asimetrías de inyección y drenaje.
+3. **Retardo Medio en Cola y Latencia de Tránsito Ponderados:**
+   $$\overline{D}_{\text{queue, link}} = \frac{\sum_f D_{\text{queue}, f} \cdot N_{\text{pkts}, f}}{\sum_f N_{\text{pkts}, f}}, \quad \overline{L}_{\text{net, link}} = \frac{\sum_f L_{\text{net}, f} \cdot N_{\text{pkts}, f}}{\sum_f N_{\text{pkts}, f}}$$
+4. **Contención de Barrera (Stalls):** Promedio de los tiempos de bloqueo en barrera BSP de los nodos extremos $\frac{\text{Stall}_u + \text{Stall}_v}{2}$.
+
+#### Evidencia Experimental Validada en Clúster Real
+- **Malla 4x2 AnyNet (`deepseekV3_4x2dev_mesh_bs32`):**
+  - Los **enlaces centrales del corte de bisección** soportan el cuello de botella más severo de la red:
+    - Enlace horizontal superior $1 \leftrightarrow 2$: **$308.168\text{ paquetes}$ ($28,73\%$ del tráfico total)**, con retardo medio en cola de $8.646,0\text{ ciclos}$.
+    - Enlace horizontal inferior $5 \leftrightarrow 6$: **$303.100\text{ paquetes}$ ($28,26\%$ del tráfico total)**, con retardo medio en cola de $11.695,8\text{ ciclos}$.
+  - En contraste, los enlaces periféricos de esquina soportan una carga sustancialmente menor:
+    - Enlace vertical columna 0 ($0 \leftrightarrow 4$): **$153.048\text{ paquetes}$ ($14,27\%$)**.
+    - Enlace vertical columna 3 ($3 \leftrightarrow 7$): **$154.588\text{ paquetes}$ ($14,41\%$)**.
+- **Toro 1D con Skewness MoE (`mixtral_8dev_torus_bs32_skew1.0`):**
+  - Los dos enlaces físicos directamente incidentes en el nodo hotspot (**GPU 0**) concentran la mayor densidad de paquetes de todo el anillo:
+    - Enlace vecino $0 \leftrightarrow 1$: **$20.880\text{ paquetes}$ ($36,27\%$ de cuota)**.
+    - Enlace wrap-around $7 \leftrightarrow 0$: **$19.024\text{ paquetes}$ ($33,05\%$ de cuota)**.
+  - El enlace diametralmente opuesto a la GPU 0 ($4 \leftrightarrow 5$) soporta únicamente **$12.112\text{ paquetes}$ ($21,04\%$)**, evidenciando visual y cuantitativamente la acumulación de tráfico hacia el experto más demandado.
+
+---
+
+### 2. Renderizado Térmico Continuo en Conexiones (`topology_canvas.js`)
+El motor de Canvas extiende la función de interpolación cromática térmica de 4 etapas (`getHeatColor(ratio)`):
+$$\text{Azul Frío (\#0284c7)} \xrightarrow{0.33} \text{Verde Esmeralda (\#10b981)} \xrightarrow{0.66} \text{Ámbar (\#f59e0b)} \xrightarrow{1.0} \text{Rojo Neón (\#ef4444)}$$
+
+1. **Enlaces Físicos:**
+   - Grosor lineal proporcional a la intensidad de la métrica activa: de $2.0\text{ px}$ en enlaces ociosos hasta $7.5\text{ px}$ en enlaces saturados de bisección:
+     $$\text{LineWidth} = 2.0 + 5.5 \cdot \left(\frac{V_{\text{link}}}{V_{\text{max, link}}}\right)$$
+   - Resplandor difuso (*Shadow Blur Glow* con radio de $10\text{ px}$ en rojo carmesí) aplicado en enlaces con $\text{ratio} > 0.70$ para destacar visualmente las rutas estranguladas.
+2. **Flechas de Flujo Dirigido ($Src \to Dst$):**
+   - Trazado de arcos Bézier cuadráticos perpendiculares que evitan colisiones entre sentidos inversos.
+   - Opacidad dinámica adaptativa de $0.25$ a $0.90$ según la cuota de paquetes del flujo, garantizando que los flujos críticos resalten claramente sobre los flujos residuales.
+
+---
+
+### 3. Hit-Testing Geométrico y Tooltips Interactivos en Hover
+El lienzo implementa detección matemática de puntero en tiempo real mediante registro de geometría proyectada en `this.renderedEdges`:
+- **Distancia Punto a Segmento Recto:**
+  $$\text{dist}(P, AB) = \left\| P - \left(A + t \cdot (B - A)\right) \right\|, \quad t = \text{clamp}\left(\frac{(P - A) \cdot (B - A)}{\|B - A\|^2}, 0, 1\right)$$
+- **Distancia Punto a Curva Bézier Cuadrática:** Muestreo poligonal discretizado en 24 subdivisiones con cálculo de distancia mínima euclídea acumulada.
+- **Interacción y Despliegue Contextual:**
+  - Tolerancia de detección de $8.0\text{ px}$ (priorizando los nodos circulares sobre las aristas).
+  - Al posar el cursor sobre un enlace o flujo, se resalta inmediatamente con un trazado blanco/dorado brillante (`#f8fafc`, $+2.5\text{ px}$ de grosor) y se abre el tooltip flotante (`#topology-tooltip`):
+    - **En Enlace Físico ($u \leftrightarrow v$):** Exhibe tipo de enlace, latencia base de conmutación (1c vecino o 2c wrap-around), volumen en paquetes y flits con cuota porcentual, balance direccional ($u \to v$ vs. $v \to u$), retardo medio en cola NIC y latencia media de red.
+    - **En Flujo Lógico ($s \to d$):** Exhibe distancia topológica en saltos mínimos, volumen transmitido, cuota de tráfico, retardo en cola NIC (media y pico máximo registrado) y latencia desglosada (vuelo/contención NoC y latencia total de entrega).
 
 ---
 

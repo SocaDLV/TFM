@@ -21,7 +21,8 @@ from gui.trace_parser import (
     get_simulation_summary,
     get_chronogram_data,
     get_packet_tracking_data,
-    get_packets_in_time_window
+    get_packets_in_time_window,
+    get_topology_traffic_data
 )
 from gui.analysis_gui import list_all_simulations, compare_simulations
 
@@ -256,6 +257,59 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"success": True, "source": source, "folder": target_dir.name, **window_data})
             except Exception as e:
                 self._send_error(500, f"Error al consultar paquetes en ventana temporal: {e}")
+            return
+
+        # ---------------------------------------------------------------------
+        # REST API Routes: Phase 4 (Topology & NoC Architecture Traffic Map)
+        # ---------------------------------------------------------------------
+        if path == "/api/results/topology":
+            source = query.get("source", ["staging"])[0]
+            folder_name = query.get("folder", [None])[0]
+            iteration = query.get("iteration", ["last"])[0]
+            op_filter = query.get("op_filter", ["all"])[0]
+            preview = query.get("preview", ["false"])[0].lower() in ["true", "1"]
+
+            if preview or (not folder_name and source != "staging"):
+                try:
+                    num_gpus = int(query.get("num_gpus", [8])[0])
+                except ValueError:
+                    num_gpus = 8
+                preview_params = {
+                    "topology": query.get("topology", ["torus"])[0],
+                    "net_dims": query.get("net_dims", [str(num_gpus)])[0],
+                    "num_gpus": num_gpus,
+                    "model": query.get("model", ["mixtral"])[0],
+                    "batch_size": int(query.get("batch_size", [32])[0]) if query.get("batch_size", ["32"])[0].isdigit() else 32,
+                    "skewness": float(query.get("skewness", [0.0])[0]) if query.get("skewness") else 0.0,
+                    "tensor_degree": int(query.get("tensor_degree", [1])[0]) if query.get("tensor_degree", ["1"])[0].isdigit() else 1,
+                    "vcs": int(query.get("vcs", [4])[0]) if query.get("vcs", ["4"])[0].isdigit() else 4,
+                    "routing": query.get("routing", ["dim_order"])[0]
+                }
+                data = get_topology_traffic_data(folder_path=None, iteration=iteration, op_filter=op_filter, preview_params=preview_params)
+                self._send_json(200, data)
+                return
+
+            target_dir = self._resolve_simulation_dir(source, folder_name)
+            if not target_dir:
+                try:
+                    num_gpus = int(query.get("num_gpus", [8])[0])
+                except ValueError:
+                    num_gpus = 8
+                preview_params = {
+                    "topology": query.get("topology", ["torus"])[0],
+                    "net_dims": query.get("net_dims", [str(num_gpus)])[0],
+                    "num_gpus": num_gpus,
+                    "model": query.get("model", ["mixtral"])[0]
+                }
+                data = get_topology_traffic_data(folder_path=None, iteration=iteration, op_filter=op_filter, preview_params=preview_params)
+                self._send_json(200, data)
+                return
+
+            try:
+                topo_data = get_topology_traffic_data(target_dir, iteration=iteration, op_filter=op_filter)
+                self._send_json(200, {"source": source, "folder": target_dir.name, **topo_data})
+            except Exception as e:
+                self._send_error(500, f"Error al extraer datos topológicos y tráfico NoC: {e}")
             return
 
         # ---------------------------------------------------------------------

@@ -751,23 +751,276 @@
       </div>
     </section>
 
-    <!-- PESTAÑA 4: TOPOLOGÍA NOC Y ARQUITECTURA (PREPARADA PARA FASE 4) -->
+    <!-- PESTAÑA 4: TOPOLOGÍA NOC Y ARQUITECTURA -->
     <section id="tab-topology" class="tab-pane">
-      <div class="card">
-        <div class="card-header">
-          <div class="card-icon">🗺️</div>
-          <div>
-            <h2>Topología NoC y Mapa de Arquitectura</h2>
-            <p class="card-subtitle">Visor vectorial interactivo de routers y mapa de calor de tráfico por GPU</p>
+      
+      <!-- Barra Superior de Control de la Pestaña 4 -->
+      <div class="card topo-control-card">
+        <div class="topo-toolbar">
+          <div class="topo-toolbar-left">
+            <div class="topo-target-badge">
+              <span class="label">Simulación activa:</span>
+              <strong id="topo-sim-label">(Ninguna cargada - Modo Vista Previa)</strong>
+            </div>
+            <button id="btn-topo-sync-preview" class="btn-secondary btn-sm" title="Proyecta los parámetros seleccionados en la Pestaña 1">
+              🔄 Vista Previa (Config Pestaña 1)
+            </button>
+            <button id="btn-topo-load-active" class="btn-primary btn-sm" title="Carga la simulación activa de la Pestaña 2">
+              📊 Cargar Simulación Activa
+            </button>
           </div>
-        </div>
-        <div class="card-body">
-          <div class="placeholder-box">
-            <p><strong>Estructura lista para la Fase 4:</strong></p>
-            <p>Esta pestaña incorporará un mapa vectorial interactivo (SVG/Canvas) de conmutadores NoC para Toro 1D, Malla 2D 4x2 y Malla 3D, mostrando en tiempo real los puntos calientes y cuellos de botella de in-cast.</p>
+
+          <div class="topo-toolbar-right">
+            <!-- Métrica del Mapa de Calor -->
+            <div class="topo-control-group">
+              <label for="topo-metric-select">Métrica Heatmap:</label>
+              <select id="topo-metric-select" class="form-control form-control-sm">
+                <option value="rx_share" selected>Tráfico Recibido (% RX - In-Cast Hotspots)</option>
+                <option value="tx_share">Tráfico Emitido (% TX)</option>
+                <option value="rx_pkts">Volumen Total RX (Paquetes)</option>
+                <option value="tx_pkts">Volumen Total TX (Paquetes)</option>
+                <option value="queue_delay">Retardo en Cola NIC (ciclos)</option>
+                <option value="latency">Latencia de Red / Contención NoC (ciclos)</option>
+                <option value="stall_time">Tiempo de Bloqueo (Stalls BSP)</option>
+              </select>
+            </div>
+
+            <!-- Filtro de Colectiva -->
+            <div class="topo-control-group">
+              <label for="topo-op-filter">Fase Colectiva:</label>
+              <select id="topo-op-filter" class="form-control form-control-sm">
+                <option value="all" selected>Todas las Colectivas</option>
+                <option value="Scatter">MoE Scatter (Tokens a Expertos)</option>
+                <option value="Gather">MoE Gather (Retorno de Activaciones)</option>
+                <option value="AllReduce">Ring-AllReduce (Capas Densas / TP)</option>
+              </select>
+            </div>
+
+            <!-- Filtro de Iteración -->
+            <div class="topo-control-group">
+              <label for="topo-iter-select">Iteración:</label>
+              <select id="topo-iter-select" class="form-control form-control-sm">
+                <option value="last" selected>Última Iteración (Steady-State)</option>
+                <option value="all">Simulación Completa</option>
+              </select>
+            </div>
+
+            <!-- Checkboxes de Flujos y Etiquetas -->
+            <div class="topo-toggles">
+              <label class="toggle-label" title="Superpone aristas dirigidas ponderadas por volumen">
+                <input type="checkbox" id="topo-toggle-flows" checked>
+                <span>Flujos (Src ➔ Dst)</span>
+              </label>
+              <label class="toggle-label" title="Muestra etiquetas de latencia de enlace (1c, 2c wrap)">
+                <input type="checkbox" id="topo-toggle-labels" checked>
+                <span>Latencias Enlaces</span>
+              </label>
+            </div>
           </div>
         </div>
       </div>
+
+      <!-- Layout Principal: 70% Mapa Topológico / 30% Inspector de Nodo -->
+      <div class="topo-main-grid">
+        
+        <!-- Panel Izquierdo: Lienzo Topológico Vectorial -->
+        <div class="card topo-canvas-card">
+          <div class="card-header topo-canvas-header">
+            <div>
+              <h3 id="topo-graph-title">Grafo de Red NoC y Mapa de Calor</h3>
+              <p id="topo-graph-sub" class="card-subtitle">Estructura física de routers y distribución de carga en tiempo real</p>
+            </div>
+            <div id="topo-meta-tags" class="topo-meta-tags">
+              <!-- Píldoras informativas (Topología, Nodos, VCs, etc.) -->
+            </div>
+          </div>
+          <div class="card-body topo-canvas-body">
+            <div id="topology-canvas-wrapper" class="topology-canvas-wrapper">
+              <canvas id="topology-canvas"></canvas>
+              <div id="topology-tooltip" class="timeline-tooltip hidden"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel Derecho: Inspector Microarquitectural de Nodo -->
+        <div class="card topo-inspector-card">
+          <div class="card-header">
+            <div class="card-icon">🔍</div>
+            <div>
+              <h3 id="inspector-node-title">Inspector de Nodo</h3>
+              <p class="card-subtitle">Ficha microarquitectural y desglose de flujos</p>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="inspector-node-content">
+              <div class="inspector-prompt">
+                <p>Haz clic o pasa el ratón sobre cualquier nodo GPU/Router en el mapa para inspeccionar sus métricas de tráfico, cola NIC y flujos de comunicación.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Sección Inferior: Inspector Comparativo de Arquitecturas Transformer -->
+      <div class="card topo-models-card">
+        <div class="card-header">
+          <div class="card-icon">⚡</div>
+          <div>
+            <h3>Inspector Comparativo de Modelos LLM (Flujo Interno de Capa y Huella en Red)</h3>
+            <p class="card-subtitle">Diferencias clave entre Mixtral 8x7B (Sparse MoE), DeepSeek-V3 (Fine-Grained MoE + MLA) y LLaMA (Denso Baseline)</p>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="transformer-inspector-grid">
+            
+            <!-- Tarjeta 1: Mixtral 8x7B -->
+            <div class="transformer-card">
+              <div class="transformer-header">
+                <span class="badge badge-calc">Mixtral 8x7B</span>
+                <span class="transformer-tag">Sparse MoE (Top-2)</span>
+              </div>
+              <div class="transformer-body">
+                <div class="flow-step">
+                  <span class="step-num">1</span>
+                  <div class="step-info">
+                    <strong>Atención GQA (Grouped-Query)</strong>
+                    <span>32 cabezas Q, 8 pares KV | $d_{\text{model}} = 4096$</span>
+                  </div>
+                </div>
+                <div class="flow-step">
+                  <span class="step-num">2</span>
+                  <div class="step-info">
+                    <strong>Router Softmax Top-2</strong>
+                    <span>Elige 2 de 8 expertos por token | Desbalance si $\text{skew} > 0$</span>
+                  </div>
+                </div>
+                <div class="flow-step network-step">
+                  <span class="step-num">3</span>
+                  <div class="step-info">
+                    <strong>MoE Scatter (Unicast en Red)</strong>
+                    <span>288 Bytes/token (9 flits de 32B) $\rightarrow$ GPU destino</span>
+                  </div>
+                </div>
+                <div class="flow-step">
+                  <span class="step-num">4</span>
+                  <div class="step-info">
+                    <strong>Expert FFN SwiGLU</strong>
+                    <span>1 experto por GPU (en clúster de 8 GPUs) | $176\text{ MB/experto}$</span>
+                  </div>
+                </div>
+                <div class="flow-step network-step">
+                  <span class="step-num">5</span>
+                  <div class="step-info">
+                    <strong>MoE Gather (Retorno Unicast)</strong>
+                    <span>Devuelve activaciones procesadas a la GPU origen</span>
+                  </div>
+                </div>
+                <div class="transformer-kpis">
+                  <div><span>Tokens Activos:</span> <strong>2 de 8 (25%)</strong></div>
+                  <div><span>Carga en Red:</span> <strong>Simétrica en Scatter/Gather</strong></div>
+                  <div><span>TP Support:</span> <strong>AllReduce en Atención ($TP>1$)</strong></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tarjeta 2: DeepSeek-V3 -->
+            <div class="transformer-card highlight-card">
+              <div class="transformer-header">
+                <span class="badge badge-scatter">DeepSeek-V3</span>
+                <span class="transformer-tag">Fine-Grained MoE + MLA</span>
+              </div>
+              <div class="transformer-body">
+                <div class="flow-step">
+                  <span class="step-num">1</span>
+                  <div class="step-info">
+                    <strong>Atención MLA (Multi-Head Latent)</strong>
+                    <span>Compresión latente KV a 512 dim ($576\text{ B/token}$ en KV cache)</span>
+                  </div>
+                </div>
+                <div class="flow-step">
+                  <span class="step-num">2</span>
+                  <div class="step-info">
+                    <strong>Router Top-8 (256 Micro-Expertos)</strong>
+                    <span>Granularidad fina: 8 de 256 expertos enrutados</span>
+                  </div>
+                </div>
+                <div class="flow-step network-step">
+                  <span class="step-num">3</span>
+                  <div class="step-info">
+                    <strong>Scatter en FP8 (Mitad de Ancho de Banda)</strong>
+                    <span>Tokens transmitidos en precisión reducida de 8 bits</span>
+                  </div>
+                </div>
+                <div class="flow-step">
+                  <span class="step-num">4</span>
+                  <div class="step-info">
+                    <strong>32 Micro-Expertos/GPU + 1 Shared Expert</strong>
+                    <span>Shared Expert se evalúa localmente (cero comunicación NoC)</span>
+                  </div>
+                </div>
+                <div class="flow-step network-step">
+                  <span class="step-num">5</span>
+                  <div class="step-info">
+                    <strong>Gather en BF16 (2x Tráfico de Retorno)</strong>
+                    <span>Acumulación en 16 bits para preservar precisión numérica</span>
+                  </div>
+                </div>
+                <div class="transformer-kpis">
+                  <div><span>Tokens Activos:</span> <strong>8 de 256 (3.1%)</strong></div>
+                  <div><span>Asimetría Red:</span> <strong>Gather transmite el doble que Scatter</strong></div>
+                  <div><span>Hibridación:</span> <strong>Capas 0–2 densas, 3–59 MoE</strong></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tarjeta 3: LLaMA (Denso) -->
+            <div class="transformer-card">
+              <div class="transformer-header">
+                <span class="badge badge-neutral">LLaMA 3</span>
+                <span class="transformer-tag">Arquitectura Densa (Baseline)</span>
+              </div>
+              <div class="transformer-body">
+                <div class="flow-step">
+                  <span class="step-num">1</span>
+                  <div class="step-info">
+                    <strong>Atención MHA / GQA Estándar</strong>
+                    <span>Proyecciones densas $Q, K, V$ sin compresión latente</span>
+                  </div>
+                </div>
+                <div class="flow-step">
+                  <span class="step-num">2</span>
+                  <div class="step-info">
+                    <strong>Sin Enrutamiento MoE (Todos los Tokens)</strong>
+                    <span>100% de los parámetros activados en cada paso de inferencia</span>
+                  </div>
+                </div>
+                <div class="flow-step">
+                  <span class="step-num">3</span>
+                  <div class="step-info">
+                    <strong>FFN Denso Monolítico (SwiGLU)</strong>
+                    <span>Capa de alimentación hacia adelante masiva compartida</span>
+                  </div>
+                </div>
+                <div class="flow-step network-step">
+                  <span class="step-num">4</span>
+                  <div class="step-info">
+                    <strong>Comunicación Exclusiva por Tensor Parallelism</strong>
+                    <span>Sin Scatter ni Gather. Solo Ring-AllReduce si $TP > 1$</span>
+                  </div>
+                </div>
+                <div class="transformer-kpis">
+                  <div><span>Tokens Activos:</span> <strong>100% (Parámetros Densos)</strong></div>
+                  <div><span>Tráfico NoC:</span> <strong>0 flits MoE (Tráfico homogéneo TP)</strong></div>
+                  <div><span>Memoria KV:</span> <strong>Lineal completa según contexto</strong></div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
     </section>
 
   </main>
@@ -817,6 +1070,7 @@
   </div>
 
   <script src="timeline_canvas.js"></script>
+  <script src="topology_canvas.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

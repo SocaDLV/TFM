@@ -1269,3 +1269,659 @@ def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", 
             "truncated": False,
             "packets": []
         }
+
+
+def infer_topology_links(topology, net_dims, num_gpus):
+    """
+    Computes physical NoC links (neighbors and wraparound) based on topology and dimensions.
+    Returns: list of dicts {"src": int, "dst": int, "type": "neighbor"|"wraparound", "latency": int}
+    """
+    links = []
+    topo = str(topology).lower().strip()
+    net_dims_str = str(net_dims).strip()
+
+    # 1. Torus 1D / Ring
+    if topo in ["torus", "ring"] and ("x" not in net_dims_str and " " not in net_dims_str):
+        n = num_gpus
+        for i in range(n):
+            nxt = (i + 1) % n
+            is_wrap = (nxt == 0 and i == n - 1)
+            lat = 2 if (is_wrap and topo == "torus") else 1
+            link_type = "wraparound" if is_wrap else "neighbor"
+            links.append({"src": i, "dst": nxt, "type": link_type, "latency": lat})
+        return links
+
+    # Check 3D (e.g. "2 2 2" or "2x2x2")
+    m_dim3 = re.findall(r"\d+", net_dims_str)
+    if len(m_dim3) == 3:
+        kx, ky, kz = int(m_dim3[0]), int(m_dim3[1]), int(m_dim3[2])
+        for z in range(kz):
+            for y in range(ky):
+                for x in range(kx):
+                    node_id = z * (kx * ky) + y * kx + x
+                    if node_id >= num_gpus:
+                        continue
+                    if x + 1 < kx:
+                        r_id = z * (kx * ky) + y * kx + (x + 1)
+                        if r_id < num_gpus:
+                            links.append({"src": node_id, "dst": r_id, "type": "neighbor", "latency": 1})
+                    if y + 1 < ky:
+                        d_id = z * (kx * ky) + (y + 1) * kx + x
+                        if d_id < num_gpus:
+                            links.append({"src": node_id, "dst": d_id, "type": "neighbor", "latency": 1})
+                    if z + 1 < kz:
+                        z_id = (z + 1) * (kx * ky) + y * kx + x
+                        if z_id < num_gpus:
+                            links.append({"src": node_id, "dst": z_id, "type": "neighbor", "latency": 1})
+        return links
+
+    # 2. Mesh 2D / Torus 2D
+    m_dim = re.search(r"(\d+)[x\s](\d+)", net_dims_str)
+    if m_dim:
+        kx = int(m_dim.group(1))
+        ky = int(m_dim.group(2))
+    else:
+        if num_gpus == 8:
+            kx, ky = 4, 2
+        elif num_gpus == 4:
+            kx, ky = 2, 2
+        elif num_gpus == 16:
+            kx, ky = 4, 4
+        else:
+            kx, ky = num_gpus, 1
+
+    if ky == 1:
+        for i in range(num_gpus):
+            if i + 1 < num_gpus:
+                links.append({"src": i, "dst": i + 1, "type": "neighbor", "latency": 1})
+            elif topo == "torus":
+                links.append({"src": i, "dst": 0, "type": "wraparound", "latency": 2})
+        return links
+
+    for y in range(ky):
+        for x in range(kx):
+            node_id = y * kx + x
+            if node_id >= num_gpus:
+                continue
+
+            # Horizontal neighbor (X+1)
+            if x + 1 < kx:
+                right_id = y * kx + (x + 1)
+                if right_id < num_gpus:
+                    links.append({"src": node_id, "dst": right_id, "type": "neighbor", "latency": 1})
+            elif topo == "torus" and kx > 2:
+                wrap_x_id = y * kx + 0
+                if wrap_x_id < num_gpus:
+                    links.append({"src": node_id, "dst": wrap_x_id, "type": "wraparound", "latency": 2})
+
+            # Vertical neighbor (Y+1)
+            if y + 1 < ky:
+                down_id = (y + 1) * kx + x
+                if down_id < num_gpus:
+                    links.append({"src": node_id, "dst": down_id, "type": "neighbor", "latency": 1})
+            elif topo == "torus" and ky > 2:
+                wrap_y_id = 0 * kx + x
+                if wrap_y_id < num_gpus:
+                    links.append({"src": node_id, "dst": wrap_y_id, "type": "wraparound", "latency": 2})
+
+    return links
+
+
+def _compute_routing_path(src, dst, topology, dims_str, num_gpus, adj_list=None):
+    """
+    Computes deterministic routing path (list of node IDs) between src and dst.
+    - Torus/Ring 1D: shortest circular path (wraparound when circular distance < linear).
+    - Torus/Mesh 2D & 3D: Dimension-Order Routing (DOR: dim 0 -> dim 1 -> dim 2).
+    - General / AnyNet: BFS shortest path over adjacency list.
+    """
+    if src == dst:
+        return [src]
+
+    topo = str(topology).lower().strip()
+    dims = str(dims_str).strip()
+
+    # 1. Torus 1D / Ring
+    if topo in ["torus", "ring"] and ("x" not in dims and " " not in dims):
+        n = num_gpus
+        d_fwd = (dst - src) % n
+        d_bwd = (src - dst) % n
+        path = [src]
+        curr = src
+        if d_fwd <= d_bwd:
+            while curr != dst:
+                curr = (curr + 1) % n
+                path.append(curr)
+        else:
+            while curr != dst:
+                curr = (curr - 1) % n
+                path.append(curr)
+        return path
+
+    # 2. Check 3D Mesh / Torus
+    m3 = [int(x) for x in re.findall(r"\d+", dims)]
+    if len(m3) == 3 and m3[0] * m3[1] * m3[2] == num_gpus:
+        kx, ky, kz = m3[0], m3[1], m3[2]
+        x1 = (src % (kx * ky)) % kx
+        y1 = (src % (kx * ky)) // kx
+        z1 = src // (kx * ky)
+
+        x2 = (dst % (kx * ky)) % kx
+        y2 = (dst % (kx * ky)) // kx
+        z2 = dst // (kx * ky)
+
+        cx, cy, cz = x1, y1, z1
+        path = [src]
+
+        # X dim
+        if topo == "torus" and kx > 2:
+            d_fwd = (x2 - cx) % kx
+            d_bwd = (cx - x2) % kx
+            step = 1 if d_fwd <= d_bwd else -1
+            while cx != x2:
+                cx = (cx + step) % kx
+                path.append(cz * (kx * ky) + cy * kx + cx)
+        else:
+            step = 1 if x2 >= cx else -1
+            while cx != x2:
+                cx += step
+                path.append(cz * (kx * ky) + cy * kx + cx)
+
+        # Y dim
+        if topo == "torus" and ky > 2:
+            d_fwd = (y2 - cy) % ky
+            d_bwd = (cy - y2) % ky
+            step = 1 if d_fwd <= d_bwd else -1
+            while cy != y2:
+                cy = (cy + step) % ky
+                path.append(cz * (kx * ky) + cy * kx + cx)
+        else:
+            step = 1 if y2 >= cy else -1
+            while cy != y2:
+                cy += step
+                path.append(cz * (kx * ky) + cy * kx + cx)
+
+        # Z dim
+        if topo == "torus" and kz > 2:
+            d_fwd = (z2 - cz) % kz
+            d_bwd = (cz - z2) % kz
+            step = 1 if d_fwd <= d_bwd else -1
+            while cz != z2:
+                cz = (cz + step) % kz
+                path.append(cz * (kx * ky) + cy * kx + cx)
+        else:
+            step = 1 if z2 >= cz else -1
+            while cz != z2:
+                cz += step
+                path.append(cz * (kx * ky) + cy * kx + cx)
+
+        return path
+
+    # 3. 2D Mesh / Torus
+    m2 = [int(x) for x in re.findall(r"\d+", dims)]
+    if len(m2) >= 2:
+        kx, ky = m2[0], m2[1]
+    else:
+        if num_gpus == 8:
+            kx, ky = 4, 2
+        elif num_gpus == 4:
+            kx, ky = 2, 2
+        elif num_gpus == 16:
+            kx, ky = 4, 4
+        else:
+            kx, ky = num_gpus, 1
+
+    if ky > 1:
+        x1, y1 = src % kx, src // kx
+        x2, y2 = dst % kx, dst // kx
+        cx, cy = x1, y1
+        path = [src]
+
+        # X dim
+        if topo == "torus" and kx > 2:
+            d_fwd = (x2 - cx) % kx
+            d_bwd = (cx - x2) % kx
+            step = 1 if d_fwd <= d_bwd else -1
+            while cx != x2:
+                cx = (cx + step) % kx
+                path.append(cy * kx + cx)
+        else:
+            step = 1 if x2 >= cx else -1
+            while cx != x2:
+                cx += step
+                path.append(cy * kx + cx)
+
+        # Y dim
+        if topo == "torus" and ky > 2:
+            d_fwd = (y2 - cy) % ky
+            d_bwd = (cy - y2) % ky
+            step = 1 if d_fwd <= d_bwd else -1
+            while cy != y2:
+                cy = (cy + step) % ky
+                path.append(cy * kx + cx)
+        else:
+            step = 1 if y2 >= cy else -1
+            while cy != y2:
+                cy += step
+                path.append(cy * kx + cx)
+
+        return path
+
+    # 4. Fallback: BFS over adjacency list
+    if adj_list:
+        from collections import deque
+        q = deque([[src]])
+        visited = {src}
+        while q:
+            p = q.popleft()
+            u = p[-1]
+            if u == dst:
+                return p
+            for v in sorted(adj_list.get(u, [])):
+                if v not in visited:
+                    visited.add(v)
+                    q.append(p + [v])
+
+    return [src, dst]
+
+
+def get_node_expert_label(model_name, node_id, num_gpus):
+    """Returns a descriptive string of expert assignments for node_id."""
+    m = str(model_name).lower()
+    if "deepseek" in m:
+        if num_gpus > 0:
+            exp_per_gpu = max(1, 256 // num_gpus)
+            s_exp = node_id * exp_per_gpu
+            e_exp = min(255, (node_id + 1) * exp_per_gpu - 1)
+            return f"Exp #{s_exp}..#{e_exp} + Shared"
+        return "256 Micro-Exp + Shared"
+    elif "mixtral" in m:
+        if num_gpus == 8:
+            return f"Exp #{node_id}"
+        elif num_gpus == 4:
+            return f"Exp #{node_id * 2}, #{node_id * 2 + 1}"
+        elif num_gpus == 2:
+            return f"Exp #{node_id * 4}..#{node_id * 4 + 3}"
+        elif num_gpus == 1:
+            return "Exp #0..#7"
+        else:
+            return f"Exp #{node_id}"
+    elif "llama" in m:
+        return "Denso (Sin MoE)"
+    return f"GPU {node_id}"
+
+
+def get_topology_traffic_data(folder_path=None, iteration="last", op_filter="all", preview_params=None):
+    """
+    Computes NoC topological graph, per-GPU traffic heatmap, and inter-node communication flows.
+    Supports real simulation folders or interactive preview mode from Tab 1.
+    """
+    if not folder_path and preview_params:
+        topo = str(preview_params.get("topology", "torus")).lower()
+        net_dims = str(preview_params.get("net_dims", "8"))
+        num_gpus = int(preview_params.get("num_gpus", 8))
+        model = str(preview_params.get("model", "mixtral"))
+        links = infer_topology_links(topo, net_dims, num_gpus)
+        for l in links:
+            l["packets"] = 0
+            l["flits"] = 0
+            l["share_pct"] = 0.0
+            l["tx_u_to_v_pkts"] = 0
+            l["tx_v_to_u_pkts"] = 0
+            l["avg_queueing_delay"] = 0.0
+            l["avg_network_latency"] = 0.0
+            l["avg_stall_us"] = 0.0
+
+        nodes = []
+        for d in range(num_gpus):
+            nodes.append({
+                "id": d,
+                "label": f"GPU {d}",
+                "experts": get_node_expert_label(model, d, num_gpus),
+                "tx_packets": 0,
+                "tx_flits": 0,
+                "tx_share_pct": 0.0,
+                "rx_packets": 0,
+                "rx_flits": 0,
+                "rx_share_pct": 0.0,
+                "avg_queueing_delay": 0.0,
+                "avg_total_latency": 0.0,
+                "compute_us": 0.0,
+                "transit_us": 0.0,
+                "stall_us": 0.0
+            })
+        return {
+            "success": True,
+            "preview_mode": True,
+            "has_packet_data": False,
+            "folder_name": "(Vista Previa)",
+            "model": model,
+            "topology": topo,
+            "net_dims": net_dims,
+            "num_gpus": num_gpus,
+            "batch_size": preview_params.get("batch_size", 32),
+            "skewness": preview_params.get("skewness", 0.0),
+            "tensor_degree": preview_params.get("tensor_degree", 1),
+            "vcs": preview_params.get("vcs", 4),
+            "routing": preview_params.get("routing", "dim_order"),
+            "num_iterations": 1,
+            "active_iteration": str(iteration),
+            "active_op_filter": str(op_filter),
+            "total_packets": 0,
+            "total_flits": 0,
+            "nodes": nodes,
+            "flows": [],
+            "links": links
+        }
+
+    folder = Path(folder_path).resolve()
+    if not folder.exists():
+        raise FileNotFoundError(f"Carpeta no encontrada: {folder_path}")
+
+    # 1. Metadatos de la simulación
+    summary = get_simulation_summary(folder, iteration=iteration)
+    meta = summary.get("metadata", {})
+    model = meta.get("model", "mixtral")
+    topo = meta.get("topology", "torus")
+    net_dims = meta.get("net_dims", str(meta.get("num_gpus", 8)))
+    num_gpus = meta.get("num_gpus", 8)
+    num_iters = summary.get("num_iterations", 1)
+
+    # 2. Enlaces físicos
+    links = infer_topology_links(topo, net_dims, num_gpus)
+    adj_list = {}
+    for l in links:
+        u, v = l["src"], l["dst"]
+        if u not in adj_list: adj_list[u] = []
+        if v not in adj_list: adj_list[v] = []
+        adj_list[u].append(v)
+        adj_list[v].append(u)
+
+    link_stats = {}
+    for l in links:
+        lk = tuple(sorted((l["src"], l["dst"])))
+        link_stats[lk] = {
+            "packets": 0,
+            "flits": 0,
+            "tx_u_to_v_pkts": 0,
+            "tx_v_to_u_pkts": 0,
+            "weighted_queue_sum": 0.0,
+            "weighted_net_lat_sum": 0.0,
+        }
+
+    # 3. Tiempos de cómputo, red y stall por GPU desde archivos .trc
+    _, durations, _ = get_cluster_iteration_info(folder)
+    if iteration == "all":
+        target_iter_mode = "all"
+    elif iteration == "last":
+        target_iter_mode = num_iters - 1
+    else:
+        try:
+            val = int(iteration) - 1
+            target_iter_mode = max(0, min(val, num_iters - 1))
+        except ValueError:
+            target_iter_mode = num_iters - 1
+
+    gpu_times = {}
+    for d in range(num_gpus):
+        gpu_times[d] = {"compute_us": 0.0, "transit_us": 0.0, "stall_us": 0.0}
+
+    trc_pattern = str(folder / "*device_*.trc")
+    for tf in glob.glob(trc_pattern):
+        try:
+            basename = os.path.basename(tf)
+            d_id = int(basename.split("_")[-1].split(".")[0])
+            df_t = pd.read_csv(tf, on_bad_lines="skip")
+            df_t.columns = df_t.columns.str.strip()
+            df_t["START_NS"] = pd.to_numeric(df_t["START_NS"], errors="coerce")
+            df_t["DURATION"] = pd.to_numeric(df_t["DURATION"], errors="coerce")
+            df_t = df_t.dropna(subset=["START_NS", "DURATION"])
+            df_t = df_t[df_t["DURATION"] > 0]
+            if df_t.empty:
+                continue
+
+            segs = split_dataframe_by_drops(df_t, "START_NS", -1.0)
+            if target_iter_mode == "all":
+                df_act = pd.concat(segs, ignore_index=True)
+            else:
+                s_idx = min(target_iter_mode, len(segs) - 1)
+                df_act = segs[s_idx]
+
+            df_act["TYPE"] = df_act["TYPE"].astype(str).str.strip().str.lower()
+            scat = df_act[df_act["TYPE"].str.contains("scatter")]["DURATION"].sum()
+            gath = df_act[df_act["TYPE"].str.contains("gather")]["DURATION"].sum()
+            ar = df_act[df_act["TYPE"].str.contains("all_reduce|allreduce")]["DURATION"].sum()
+            trans = scat + gath + ar
+            stl = df_act[df_act["TYPE"].str.contains("stall")]["DURATION"].sum()
+            non_comp = df_act["TYPE"].str.contains("scatter|gather|stall|all_reduce|allreduce")
+            comp = df_act[~non_comp]["DURATION"].sum()
+
+            gpu_times[d_id] = {
+                "compute_us": round(float(comp) / 1000.0, 2),
+                "transit_us": round(float(trans) / 1000.0, 2),
+                "stall_us": round(float(stl) / 1000.0, 2)
+            }
+        except Exception:
+            pass
+
+    # 4. Datos de paquetes NoC desde packet_tracking_debug.csv
+    csv_path = folder / "packet_tracking_debug.csv"
+    has_packet_data = csv_path.exists()
+    flows = []
+    total_slice_packets = 0
+    total_slice_flits = 0
+
+    tx_stats = {d: {"pkts": 0, "flits": 0, "q_avg": 0.0} for d in range(num_gpus)}
+    rx_stats = {d: {"pkts": 0, "flits": 0, "lat_avg": 0.0} for d in range(num_gpus)}
+
+    if has_packet_data:
+        try:
+            # Lectura optimizada seleccionando solo columnas necesarias
+            usecols = ["Source", "Dest", "Num_Flits", "Queueing_Delay", "Total_Latency", "Network_Latency", "Op_Type", "Op_Start_NS"]
+            first_line = pd.read_csv(csv_path, nrows=2)
+            valid_cols = [c.strip() for c in first_line.columns if c.strip() in usecols or c.strip() in ["Latency", "Network_Latency"]]
+            df_p = pd.read_csv(csv_path, usecols=valid_cols, on_bad_lines="skip")
+            if not df_p.empty and "Source" in df_p.columns and "Dest" in df_p.columns:
+                df_p.columns = df_p.columns.str.strip()
+                for c in ["Source", "Dest", "Num_Flits", "Queueing_Delay", "Total_Latency", "Network_Latency", "Op_Start_NS"]:
+                    if c in df_p.columns:
+                        df_p[c] = pd.to_numeric(df_p[c], errors="coerce")
+
+                if "Num_Flits" not in df_p.columns:
+                    df_p["Num_Flits"] = 9
+                if "Queueing_Delay" not in df_p.columns:
+                    df_p["Queueing_Delay"] = 0.0
+                if "Total_Latency" not in df_p.columns:
+                    df_p["Total_Latency"] = df_p.get("Latency", 0.0)
+                if "Network_Latency" not in df_p.columns:
+                    df_p["Network_Latency"] = (df_p["Total_Latency"] - df_p["Queueing_Delay"]).clip(lower=0)
+
+                # Segmentación por iteración
+                segs_p = split_dataframe_by_drops(df_p, "Op_Start_NS", -100.0)
+                if target_iter_mode == "all":
+                    df_slice = pd.concat(segs_p, ignore_index=True)
+                else:
+                    c_idx = min(target_iter_mode, len(segs_p) - 1)
+                    df_slice = segs_p[c_idx]
+
+                df_slice = df_slice.dropna(subset=["Source", "Dest"])
+
+                # Filtro por fase de operación colectiva
+                f_op = op_filter.lower().strip()
+                if f_op in ["scatter", "moe scatter"]:
+                    df_filtered = df_slice[df_slice["Op_Type"].astype(str).str.contains("scatter", case=False, na=False)]
+                elif f_op in ["gather", "moe gather"]:
+                    df_filtered = df_slice[df_slice["Op_Type"].astype(str).str.contains("gather", case=False, na=False)]
+                elif f_op in ["allreduce", "ring-allreduce", "all_reduce"]:
+                    df_filtered = df_slice[df_slice["Op_Type"].astype(str).str.contains("all_reduce|allreduce", case=False, na=False)]
+                else:
+                    df_filtered = df_slice
+
+                total_slice_packets = len(df_filtered)
+                total_slice_flits = int(df_filtered["Num_Flits"].sum()) if total_slice_packets > 0 else 0
+
+                # Agregación vectorizada ultra-rápida por nodo
+                if total_slice_packets > 0:
+                    tx_grp = df_filtered.groupby("Source")
+                    tx_pkts_s = tx_grp.size()
+                    tx_flits_s = tx_grp["Num_Flits"].sum() if "Num_Flits" in df_filtered else tx_pkts_s * 9
+                    tx_q_s = tx_grp["Queueing_Delay"].mean() if "Queueing_Delay" in df_filtered else None
+
+                    rx_grp = df_filtered.groupby("Dest")
+                    rx_pkts_s = rx_grp.size()
+                    rx_flits_s = rx_grp["Num_Flits"].sum() if "Num_Flits" in df_filtered else rx_pkts_s * 9
+                    rx_lat_s = rx_grp["Total_Latency"].mean() if "Total_Latency" in df_filtered else None
+
+                    for d in range(num_gpus):
+                        p_tx = int(tx_pkts_s.get(d, 0))
+                        f_tx = int(tx_flits_s.get(d, 0))
+                        q_tx = float(tx_q_s.get(d, 0.0)) if tx_q_s is not None and d in tx_q_s else 0.0
+
+                        p_rx = int(rx_pkts_s.get(d, 0))
+                        f_rx = int(rx_flits_s.get(d, 0))
+                        l_rx = float(rx_lat_s.get(d, 0.0)) if rx_lat_s is not None and d in rx_lat_s else 0.0
+
+                        tx_stats[d] = {"pkts": p_tx, "flits": f_tx, "q_avg": round(q_tx, 1)}
+                        rx_stats[d] = {"pkts": p_rx, "flits": f_rx, "lat_avg": round(l_rx, 1)}
+
+                    # Agregación vectorizada de flujos (Source -> Dest con s != d)
+                    flow_df = df_filtered[df_filtered["Source"] != df_filtered["Dest"]]
+                    if not flow_df.empty:
+                        flow_grp = flow_df.groupby(["Source", "Dest"]).agg(
+                            packets=("Num_Flits", "count"),
+                            flits=("Num_Flits", "sum"),
+                            avg_latency=("Total_Latency", "mean") if "Total_Latency" in flow_df else ("Num_Flits", lambda _: 0.0),
+                            avg_queue=("Queueing_Delay", "mean") if "Queueing_Delay" in flow_df else ("Num_Flits", lambda _: 0.0),
+                            max_queue=("Queueing_Delay", "max") if "Queueing_Delay" in flow_df else ("Num_Flits", lambda _: 0.0),
+                            avg_net_lat=("Network_Latency", "mean") if "Network_Latency" in flow_df else ("Num_Flits", lambda _: 0.0),
+                        ).reset_index()
+
+                        for _, f_row in flow_grp.iterrows():
+                            s = int(f_row["Source"])
+                            d = int(f_row["Dest"])
+                            cnt = int(f_row["packets"])
+                            f_sum = int(f_row["flits"])
+                            lat_m = float(f_row["avg_latency"]) if pd.notna(f_row["avg_latency"]) else 0.0
+                            q_m = float(f_row["avg_queue"]) if pd.notna(f_row["avg_queue"]) else 0.0
+                            q_max = float(f_row["max_queue"]) if pd.notna(f_row["max_queue"]) else 0.0
+                            net_m = float(f_row["avg_net_lat"]) if pd.notna(f_row["avg_net_lat"]) else max(0.0, lat_m - q_m)
+                            sh_pct = round((cnt / total_slice_packets * 100.0), 2)
+
+                            route_path = _compute_routing_path(s, d, topo, net_dims, num_gpus, adj_list)
+                            hops = max(1, len(route_path) - 1)
+
+                            flows.append({
+                                "src": s,
+                                "dst": d,
+                                "packets": cnt,
+                                "flits": f_sum,
+                                "avg_latency": round(lat_m, 1),
+                                "avg_total_latency": round(lat_m, 1),
+                                "avg_queue": round(q_m, 1),
+                                "avg_queueing_delay": round(q_m, 1),
+                                "max_queueing_delay": round(q_max, 1),
+                                "avg_network_latency": round(net_m, 1),
+                                "hops": hops,
+                                "share_pct": sh_pct,
+                                "path": route_path
+                            })
+
+                            # Proyección sobre enlaces físicos atravesados
+                            for i in range(len(route_path) - 1):
+                                step_u = route_path[i]
+                                step_v = route_path[i + 1]
+                                lk = tuple(sorted((step_u, step_v)))
+                                if lk in link_stats:
+                                    link_stats[lk]["packets"] += cnt
+                                    link_stats[lk]["flits"] += f_sum
+                                    if step_u < step_v:
+                                        link_stats[lk]["tx_u_to_v_pkts"] += cnt
+                                    else:
+                                        link_stats[lk]["tx_v_to_u_pkts"] += cnt
+                                    link_stats[lk]["weighted_queue_sum"] += q_m * cnt
+                                    link_stats[lk]["weighted_net_lat_sum"] += net_m * cnt
+
+                        flows.sort(key=lambda x: x["packets"], reverse=True)
+        except Exception as e:
+            print(f"⚠️ trace_parser: Error en get_topology_traffic_data: {e}")
+
+    # 5. Poblado de métricas en enlaces físicos
+    for l in links:
+        lk = tuple(sorted((l["src"], l["dst"])))
+        st = link_stats.get(lk, {
+            "packets": 0, "flits": 0, "tx_u_to_v_pkts": 0, "tx_v_to_u_pkts": 0,
+            "weighted_queue_sum": 0.0, "weighted_net_lat_sum": 0.0
+        })
+        l_pkts = st["packets"]
+        l_flits = st["flits"]
+        l_sh = round((l_pkts / total_slice_packets * 100.0), 2) if total_slice_packets > 0 else 0.0
+        l_q = round(st["weighted_queue_sum"] / l_pkts, 1) if l_pkts > 0 else 0.0
+        l_net_lat = round(st["weighted_net_lat_sum"] / l_pkts, 1) if l_pkts > 0 else 0.0
+        u_stall = gpu_times.get(lk[0], {}).get("stall_us", 0.0)
+        v_stall = gpu_times.get(lk[1], {}).get("stall_us", 0.0)
+        l_stall = round((u_stall + v_stall) / 2.0, 1)
+
+        l["packets"] = l_pkts
+        l["flits"] = l_flits
+        l["share_pct"] = l_sh
+        l["tx_u_to_v_pkts"] = st["tx_u_to_v_pkts"]
+        l["tx_v_to_u_pkts"] = st["tx_v_to_u_pkts"]
+        l["avg_queueing_delay"] = l_q
+        l["avg_network_latency"] = l_net_lat
+        l["avg_stall_us"] = l_stall
+
+    # 6. Ensamblado de nodos
+    nodes = []
+    for d in range(num_gpus):
+        tx_p = tx_stats[d]["pkts"]
+        tx_f = tx_stats[d]["flits"]
+        rx_p = rx_stats[d]["pkts"]
+        rx_f = rx_stats[d]["flits"]
+
+        tx_pct = round((tx_p / total_slice_packets * 100.0), 2) if total_slice_packets > 0 else 0.0
+        rx_pct = round((rx_p / total_slice_packets * 100.0), 2) if total_slice_packets > 0 else 0.0
+
+        q_avg = tx_stats[d].get("q_avg", 0.0)
+        lat_avg = rx_stats[d].get("lat_avg", 0.0)
+
+        t_info = gpu_times.get(d, {"compute_us": 0.0, "transit_us": 0.0, "stall_us": 0.0})
+
+        nodes.append({
+            "id": d,
+            "label": f"GPU {d}",
+            "experts": get_node_expert_label(model, d, num_gpus),
+            "tx_packets": tx_p,
+            "tx_flits": tx_f,
+            "tx_share_pct": tx_pct,
+            "rx_packets": rx_p,
+            "rx_flits": rx_f,
+            "rx_share_pct": rx_pct,
+            "avg_queueing_delay": q_avg,
+            "avg_total_latency": lat_avg,
+            "compute_us": t_info["compute_us"],
+            "transit_us": t_info["transit_us"],
+            "stall_us": t_info["stall_us"]
+        })
+
+    return {
+        "success": True,
+        "preview_mode": False,
+        "has_packet_data": bool(has_packet_data and total_slice_packets > 0),
+        "folder_name": folder.name,
+        "model": model,
+        "topology": topo,
+        "net_dims": str(net_dims),
+        "num_gpus": num_gpus,
+        "batch_size": meta.get("batch_size", 32),
+        "skewness": meta.get("skewness", 0.0),
+        "tensor_degree": meta.get("tensor_degree", 1),
+        "vcs": meta.get("vcs", 4),
+        "routing": meta.get("routing", "dim_order"),
+        "num_iterations": num_iters,
+        "active_iteration": str(iteration),
+        "active_op_filter": str(op_filter),
+        "total_packets": int(total_slice_packets),
+        "total_flits": int(total_slice_flits),
+        "nodes": nodes,
+        "flows": flows,
+        "links": links
+    }
