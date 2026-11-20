@@ -478,8 +478,31 @@ def get_simulation_summary(folder_path, iteration="last"):
                     total_flits = total_packets * 9
 
                 if total_packets > 0:
-                    dur_cycles = max(1.0, cluster_wall_clock_ns)
-                    lambda_rate = total_flits / (num_gpus * dur_cycles)
+                    if "Total_Latency" not in df_slice.columns and "Latency" in df_slice.columns:
+                        df_slice["Total_Latency"] = df_slice["Latency"]
+                    if "Avg_Flit_Latency" not in df_slice.columns:
+                        df_slice["Avg_Flit_Latency"] = df_slice["Total_Latency"]
+                    if "Num_Flits" not in df_slice.columns:
+                        df_slice["Num_Flits"] = 9
+
+                    op_points = []
+                    if "Op_Type" in df_slice.columns and "Op_Idx" in df_slice.columns:
+                        for (op_t, op_i), grp in df_slice.groupby(["Op_Type", "Op_Idx"]):
+                            f_cnt = grp["Num_Flits"].sum()
+                            dur = max(1.0, float(grp["Receive_Cycle"].max() - grp["Creation_Cycle"].min()))
+                            l_flits = f_cnt / (num_gpus * dur)
+                            op_points.append(l_flits)
+                    else:
+                        f_cnt = df_slice["Num_Flits"].sum()
+                        dur = max(1.0, float(df_slice["Receive_Cycle"].max() - df_slice["Creation_Cycle"].min()))
+                        op_points.append(f_cnt / (num_gpus * dur))
+
+                    if op_points:
+                        lambda_rate = float(np.mean(op_points))
+                    else:
+                        dur_cycles = max(1.0, cluster_wall_clock_ns)
+                        lambda_rate = total_flits / (num_gpus * dur_cycles)
+
                     if "Avg_Flit_Latency" in df_slice.columns:
                         avg_flit_lat = float(df_slice["Avg_Flit_Latency"].mean())
                     if "Total_Latency" in df_slice.columns:
@@ -682,15 +705,27 @@ def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
         macro_op = first_row["MACRO_OP"]
         layer = int(first_row["LAYER"])
 
-        # Fronteras internas de micro-operaciones
+        # Fronteras internas y desglose de micro-operaciones
         sub_ops = []
-        for _, r in grp.iloc[:-1].iterrows():
-            if r["DURATION"] > 0.5:
+        for _, r in grp.iterrows():
+            r_dur = float(r["DURATION"])
+            if r_dur > 0.0:
+                c_ns = float(r["COMP_NS"]) if "COMP_NS" in r else 0.0
+                m_ns = float(r["MEM_NS"]) if "MEM_NS" in r else 0.0
+                if (c_ns + m_ns) > 0.0:
+                    s_mem = round(min(100.0, max(0.0, (m_ns / (c_ns + m_ns)) * 100.0)), 1)
+                else:
+                    s_mem = 0.0
+
                 sub_ops.append({
                     "start_ns": float(r["START_NS"]) + offset_ns,
                     "end_ns": float(r["END_NS"]) + offset_ns,
-                    "duration_ns": float(r["DURATION"]),
-                    "name": str(r["MICRO_OP"])
+                    "duration_ns": r_dur,
+                    "name": str(r["MICRO_OP"]),
+                    "comp_ns": c_ns,
+                    "mem_ns": m_ns,
+                    "mem_pct": s_mem,
+                    "mem_bound_pct": s_mem
                 })
 
         # Secuencia descriptiva
@@ -728,7 +763,7 @@ def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
         tot_mem = float(grp["MEM_NS"].sum())
         mem_bound_pct = None
         if (tot_comp + tot_mem) > 0.0:
-            mem_bound_pct = round((tot_mem / (tot_comp + tot_mem)) * 100.0, 1)
+            mem_bound_pct = round(min(100.0, max(0.0, (tot_mem / (tot_comp + tot_mem)) * 100.0)), 1)
 
         title = f"Layer {layer} | {macro_op}"
         if category == "stall":
@@ -749,6 +784,9 @@ def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
             "end_ns": round(end_ns, 1),
             "duration_ns": round(dur_ns, 1),
             "mem_bound_pct": mem_bound_pct,
+            "mem_pct": mem_bound_pct,
+            "comp_ns": tot_comp,
+            "mem_ns": tot_mem,
             "sub_ops": sub_ops,
             "local_net": None
         })
@@ -843,6 +881,9 @@ def get_chronogram_data(folder_path, iteration="last"):
                 pkts = loc.get("pkts", 0)
                 lat = loc.get("lat", 0.0)
                 flits = loc.get("flits", 0)
+                if pkts > 0 and flits == 0:
+                    flits = pkts * 9
+                    loc["flits"] = flits
                 dur_ns = max(1.0, b["duration_ns"])
                 prod = round(flits / dur_ns, 2)
                 role = loc.get("role", "Red")
@@ -851,6 +892,7 @@ def get_chronogram_data(folder_path, iteration="last"):
                     "op_type": matched_op["type"],
                     "op_idx": matched_op["idx"],
                     "pkts": pkts,
+                    "flits": flits,
                     "avg_lat_cycles": lat,
                     "prod_flits_cycle": prod,
                     "total_pkts_collective": matched_op["total_pkts"],

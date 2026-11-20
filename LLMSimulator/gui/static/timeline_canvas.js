@@ -351,6 +351,17 @@ class ChronogramCanvas {
       typeName = "Stall por Barrera de Sincronización";
     }
 
+    let boundRow = "";
+    if (block.block_type === "calc") {
+      const memVal = block.mem_bound_pct ?? block.mem_pct;
+      if (typeof memVal === "number" && !isNaN(memVal)) {
+        const boundLabel = memVal >= 50.0 
+          ? `<strong style="color: #f59e0b;">${memVal.toFixed(1)}% (Memory-Bound)</strong>` 
+          : `<strong style="color: #10b981;">${(100.0 - memVal).toFixed(1)}% (Compute-Bound)</strong>`;
+        boundRow = `<div class="tooltip-row"><span>Cuello de Botella:</span> ${boundLabel}</div>`;
+      }
+    }
+
     let extraHtml = "";
     if (block.block_type === "calc" && block.sub_ops && block.sub_ops.length > 0) {
       extraHtml += `<div class="tooltip-subtable-title">Desglose de Micro-Operaciones:</div>`;
@@ -358,10 +369,12 @@ class ChronogramCanvas {
         <thead><tr><th>Op</th><th>Duración</th><th>% Mem</th></tr></thead>
         <tbody>`;
       block.sub_ops.forEach(sub => {
+        const subMemVal = sub.mem_pct ?? sub.mem_bound_pct;
+        const subMemStr = typeof subMemVal === "number" && !isNaN(subMemVal) ? `${subMemVal.toFixed(1)}%` : "-";
         extraHtml += `<tr>
           <td><strong>${sub.name}</strong></td>
           <td>${formatSimUnit(sub.duration_ns)}</td>
-          <td>${sub.mem_pct !== undefined ? sub.mem_pct.toFixed(0) + '%' : '-'}</td>
+          <td>${subMemStr}</td>
         </tr>`;
       });
       extraHtml += `</tbody></table>`;
@@ -385,6 +398,7 @@ class ChronogramCanvas {
         <div class="tooltip-row"><span>Título:</span> <strong>${block.title}</strong></div>
         <div class="tooltip-row"><span>Intervalo:</span> <code>${formatSimUnit(block.start_ns)} ➔ ${formatSimUnit(block.end_ns)}</code></div>
         <div class="tooltip-row"><span>Duración Total:</span> <strong class="highlight-val">${formatSimUnit(block.duration_ns)}</strong></div>
+        ${boundRow}
         ${extraHtml}
       </div>
     `;
@@ -643,8 +657,8 @@ class ChronogramCanvas {
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
 
-      let label = b.title || "";
-      if (b.layer !== undefined && b.layer >= 0) {
+      let label = b.macro_op || b.title || "";
+      if (b.layer !== undefined && b.layer >= 0 && !label.startsWith("L" + b.layer) && !label.startsWith("Layer " + b.layer)) {
         label = `L${b.layer} | ${label}`;
       }
 
@@ -926,27 +940,46 @@ class PacketFlightCanvas {
 }
 
 /* ==========================================================================
-   3. HybridPacketCanvas (Panel Inferior Sincronizado en Nanosegundos)
+   3. HybridPacketCanvas (Panel Derecho: Viewport Virtualizado con Cabecera Sticky)
    ========================================================================== */
 class HybridPacketCanvas {
-  constructor(canvasEl, tooltipEl, onHoverPacket) {
+  constructor(canvasEl, headerCanvasEl, scrollContainerEl, spacerEl, visibleInfoEl, tooltipEl, onHoverPacket) {
     this.canvas = canvasEl;
+    this.headerCanvas = headerCanvasEl;
+    this.scrollContainer = scrollContainerEl;
+    this.spacerEl = spacerEl;
+    this.visibleInfoEl = visibleInfoEl;
     this.tooltip = tooltipEl;
-    this.onHoverPacket = onHoverPacket;
+    this.onHoverPacket = onHoverPacket || null;
 
-    this.packetsData = null; // { packets, total_in_window, returned, truncated, start_ns, end_ns }
+    this.packetsData = null; // { packets: [...] }
     this.viewStartNs = 0;
     this.viewEndNs = 20000;
     this.minTimeNs = 0;
     this.maxTimeNs = 20000;
 
+    this.ROW_HEIGHT = 20;
     this.marginLeft = 85;
     this.marginRight = 20;
-    this.headerHeight = 24;
-    this.footerHeight = 8;
+    this.headerHeight = 36;
 
+    this.hoveredRowIdx = -1;
     this.crosshairX = null;
     this.crosshairNs = null;
+
+    this.bindEvents();
+  }
+
+  bindEvents() {
+    if (this.scrollContainer) {
+      this.scrollContainer.addEventListener("scroll", () => {
+        this.drawVisibleSlice();
+      }, { passive: true });
+    }
+
+    window.addEventListener("resize", () => {
+      this.render();
+    });
   }
 
   loadData(packetsResponse, viewStartNs, viewEndNs) {
@@ -957,139 +990,264 @@ class HybridPacketCanvas {
     }
     if (viewStartNs !== undefined) this.viewStartNs = viewStartNs;
     if (viewEndNs !== undefined) this.viewEndNs = viewEndNs;
+
+    const packets = this.packetsData.packets || [];
+    const totalPackets = packets.length;
+    const neededH = Math.max(600, totalPackets * this.ROW_HEIGHT);
+
+    if (this.spacerEl) {
+      this.spacerEl.style.height = `${neededH}px`;
+    }
+
     this.render();
   }
 
   setCrosshair(x, ns) {
     this.crosshairX = x;
     this.crosshairNs = ns;
-    this.render();
+    this.drawHeaderAxis();
+    this.drawVisibleSlice();
   }
 
   clearCrosshair() {
     if (this.crosshairX !== null) {
       this.crosshairX = null;
       this.crosshairNs = null;
-      this.render();
+      this.drawHeaderAxis();
+      this.drawVisibleSlice();
     }
   }
 
-  getRowHeight(numPackets) {
-    if (!numPackets || numPackets <= 0) return 18;
-    const maxCanvasH = 8000;
-    return Math.max(2, Math.min(18, (maxCanvasH - this.headerHeight - this.footerHeight) / numPackets));
+  render() {
+    this.drawHeaderAxis();
+    this.drawVisibleSlice();
   }
 
-  render() {
-    if (!this.canvas) return;
+  drawHeaderAxis() {
+    if (!this.headerCanvas) return;
+    const { width, height, ctx } = setupHiDPICanvas(this.headerCanvas);
 
-    const packets = this.packetsData && this.packetsData.packets ? this.packetsData.packets : [];
-    const rowHeight = this.getRowHeight(packets.length);
-    const neededHeight = Math.max(380, Math.ceil(this.headerHeight + packets.length * rowHeight + this.footerHeight));
-    if (this.canvas.style.height !== `${neededHeight}px`) {
-      this.canvas.style.height = `${neededHeight}px`;
+    // Background
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(0, 0, width, height);
+
+    // Bottom border
+    ctx.strokeStyle = "#334155";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, height - 0.5);
+    ctx.lineTo(width, height - 0.5);
+    ctx.stroke();
+
+    const span = this.viewEndNs - this.viewStartNs;
+    if (span <= 0) return;
+
+    const plotWidth = width - this.marginLeft - this.marginRight;
+    if (plotWidth <= 0) return;
+
+    // Time Ticks
+    const targetTicks = Math.max(4, Math.floor(plotWidth / 90));
+    const rawStep = span / targetTicks;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    let tickStep = magnitude;
+    if (rawStep / magnitude >= 5) tickStep = 5 * magnitude;
+    else if (rawStep / magnitude >= 2) tickStep = 2 * magnitude;
+
+    const firstTick = Math.ceil(this.viewStartNs / tickStep) * tickStep;
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "10px JetBrains Mono, monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    for (let t = firstTick; t <= this.viewEndNs; t += tickStep) {
+      const x = this.marginLeft + ((t - this.viewStartNs) / span) * plotWidth;
+      if (x >= this.marginLeft && x <= width - this.marginRight) {
+        // Tick mark
+        ctx.strokeStyle = "rgba(51, 65, 85, 0.6)";
+        ctx.beginPath();
+        ctx.moveTo(x, height - 6);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+
+        // Label
+        ctx.fillText(formatSimUnit(t), x, 16);
+      }
+    }
+
+    // Crosshair badge in header
+    if (this.crosshairX !== null && this.crosshairX >= this.marginLeft && this.crosshairX <= width - this.marginRight) {
+      ctx.save();
+      ctx.fillStyle = "#38bdf8";
+      ctx.fillRect(this.crosshairX - 32, 8, 64, 18);
+      ctx.fillStyle = "#000";
+      ctx.font = "bold 9px JetBrains Mono, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(formatSimUnit(this.crosshairNs), this.crosshairX, 17);
+      ctx.restore();
+    }
+  }
+
+  drawVisibleSlice() {
+    if (!this.canvas || !this.scrollContainer) return;
+
+    const viewportH = 602;
+    if (this.canvas.style.height !== `${viewportH}px`) {
+      this.canvas.style.height = `${viewportH}px`;
     }
 
     const { width, height, ctx } = setupHiDPICanvas(this.canvas);
     this.canvas.style.cursor = "crosshair";
 
+    // Clear background
     ctx.fillStyle = "#090d16";
     ctx.fillRect(0, 0, width, height);
 
-    const plotWidth = width - this.marginLeft - this.marginRight;
-    const span = this.viewEndNs - this.viewStartNs;
+    const packets = this.packetsData && this.packetsData.packets ? this.packetsData.packets : [];
+    const totalPackets = packets.length;
 
-    if (span <= 0) return;
-
-    // Header axis line
-    ctx.strokeStyle = "#334155";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, this.headerHeight);
-    ctx.lineTo(width, this.headerHeight);
-    ctx.stroke();
-
-    if (packets.length === 0) {
+    if (totalPackets === 0) {
       ctx.fillStyle = "#64748b";
       ctx.font = "12px JetBrains Mono, monospace";
       ctx.textAlign = "center";
-      ctx.fillText("No hay paquetes en tránsito dentro de esta ventana de tiempo.", width / 2, height / 2 + 5);
-      this.drawCrosshairLine(ctx, height, plotWidth);
+      ctx.textBaseline = "middle";
+      ctx.fillText("No hay paquetes en tránsito dentro de esta ventana de tiempo.", width / 2, height / 2);
+      if (this.visibleInfoEl) {
+        this.visibleInfoEl.textContent = "Mostrando paquetes 0 de 0";
+      }
       return;
     }
 
-    const barH = Math.max(1, Math.min(14, rowHeight - 2));
+    const scrollTop = this.scrollContainer.scrollTop;
+    const firstIdx = Math.max(0, Math.floor(scrollTop / this.ROW_HEIGHT));
+    const lastIdx = Math.min(totalPackets - 1, Math.ceil((scrollTop + viewportH) / this.ROW_HEIGHT));
 
-    for (let i = 0; i < packets.length; i++) {
-      const p = packets[i];
-      const y = this.headerHeight + i * rowHeight;
-
-      if (i % 2 === 0) {
-        ctx.fillStyle = "rgba(255, 255, 255, 0.015)";
-        ctx.fillRect(this.marginLeft, y, plotWidth, rowHeight);
-      }
-
-      // Left label (only if row is tall enough)
-      if (rowHeight >= 9) {
-        ctx.fillStyle = "#94a3b8";
-        ctx.font = "9px JetBrains Mono, monospace";
-        ctx.textAlign = "right";
-        ctx.textBaseline = "middle";
-        ctx.fillText(`#${p.pid} G${p.src}➔G${p.dst}`, this.marginLeft - 6, y + rowHeight / 2);
-      }
-
-      // Segment 1: Queueing delay [pkt_start_ns, pkt_inject_ns] in orange
-      const xStart = this.marginLeft + ((p.pkt_start_ns - this.viewStartNs) / span) * plotWidth;
-      const xInject = this.marginLeft + ((p.pkt_inject_ns - this.viewStartNs) / span) * plotWidth;
-      const queueW = Math.max(1, xInject - xStart);
-
-      ctx.fillStyle = "#e67e22"; // orange
-      ctx.fillRect(xStart, y + 2, queueW, barH);
-
-      // Segment 2: NoC flight time [pkt_inject_ns, pkt_end_ns] in blue
-      const xEnd = this.marginLeft + ((p.pkt_end_ns - this.viewStartNs) / span) * plotWidth;
-      const flightW = Math.max(1, xEnd - xInject);
-
-      ctx.fillStyle = "#0284c7"; // blue
-      ctx.fillRect(xInject, y + 2, flightW, barH);
+    if (this.visibleInfoEl) {
+      this.visibleInfoEl.textContent = `Mostrando paquetes ${firstIdx + 1}–${lastIdx + 1} de ${totalPackets.toLocaleString()}`;
     }
 
-    this.drawCrosshairLine(ctx, height, plotWidth);
-  }
+    const plotWidth = width - this.marginLeft - this.marginRight;
+    const span = this.viewEndNs - this.viewStartNs;
+    if (span <= 0 || plotWidth <= 0) return;
 
-  drawCrosshairLine(ctx, height, plotWidth) {
-    if (this.crosshairX !== null && this.crosshairX !== undefined &&
-        this.crosshairX >= this.marginLeft && this.crosshairX <= this.marginLeft + plotWidth) {
+    const barH = 14;
+
+    for (let i = firstIdx; i <= lastIdx; i++) {
+      const p = packets[i];
+      const y = (i * this.ROW_HEIGHT) - scrollTop;
+
+      // Row background
+      if (i === this.hoveredRowIdx) {
+        ctx.fillStyle = "rgba(56, 189, 248, 0.16)";
+        ctx.fillRect(0, y, width, this.ROW_HEIGHT);
+      } else if (i % 2 === 0) {
+        ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+        ctx.fillRect(0, y, width, this.ROW_HEIGHT);
+      }
+
+      // Left label: PID & GPU Nodes
+      ctx.fillStyle = (i === this.hoveredRowIdx) ? "#38bdf8" : "#94a3b8";
+      ctx.font = "9px JetBrains Mono, monospace";
+      ctx.textAlign = "right";
+      ctx.textBaseline = "middle";
+      ctx.fillText(`#${p.pid} G${p.src}➔G${p.dst}`, this.marginLeft - 6, y + this.ROW_HEIGHT / 2);
+
+      // Segment 1: Queueing Delay in orange
+      const xStart = this.marginLeft + ((p.pkt_start_ns - this.viewStartNs) / span) * plotWidth;
+      const xInject = this.marginLeft + ((p.pkt_inject_ns - this.viewStartNs) / span) * plotWidth;
+      const queueW = Math.max(3, xInject - xStart);
+
+      ctx.fillStyle = "#e67e22";
+      ctx.fillRect(xStart, y + 3, queueW, barH);
+
+      // Segment 2: NoC Flight in blue
+      const xEnd = this.marginLeft + ((p.pkt_end_ns - this.viewStartNs) / span) * plotWidth;
+      const flightW = Math.max(3, xEnd - xInject);
+
+      ctx.fillStyle = "#0284c7";
+      ctx.fillRect(xInject, y + 3, flightW, barH);
+    }
+
+    // Vertical crosshair guide
+    if (this.crosshairX !== null && this.crosshairX >= this.marginLeft && this.crosshairX <= width - this.marginRight) {
       ctx.save();
       ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(this.crosshairX, this.headerHeight);
-      ctx.lineTo(this.crosshairX, height - this.footerHeight);
+      ctx.moveTo(this.crosshairX, 0);
+      ctx.lineTo(this.crosshairX, height);
       ctx.stroke();
-
-      if (this.crosshairNs !== null) {
-        ctx.fillStyle = "#38bdf8";
-        ctx.fillRect(this.crosshairX - 32, height - this.footerHeight - 16, 64, 16);
-        ctx.fillStyle = "#000";
-        ctx.font = "bold 9px JetBrains Mono, monospace";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(formatSimUnit(this.crosshairNs), this.crosshairX, height - this.footerHeight - 8);
-      }
       ctx.restore();
     }
   }
 
-  getPacketAt(x, y) {
+  getPacketAt(clientX, clientY) {
     if (!this.packetsData || !this.packetsData.packets || this.packetsData.packets.length === 0) return null;
     const packets = this.packetsData.packets;
-    const rowHeight = this.getRowHeight(packets.length);
-    const rowIdx = Math.floor((y - this.headerHeight) / rowHeight);
-    if (rowIdx >= 0 && rowIdx < packets.length) {
-      return packets[rowIdx];
+    const rect = this.canvas.getBoundingClientRect();
+    const localX = clientX - rect.left;
+    const localY = clientY - rect.top;
+
+    if (localY < 0 || localY > rect.height) return null;
+
+    const virtualY = this.scrollContainer.scrollTop + localY;
+    const idx = Math.floor(virtualY / this.ROW_HEIGHT);
+
+    if (idx >= 0 && idx < packets.length) {
+      return { packet: packets[idx], rowIdx: idx };
     }
     return null;
+  }
+
+  showTooltip(pkt, clientX, clientY) {
+    if (!this.tooltip) return;
+
+    const queueC = pkt.queue_delay_cycles;
+    const flightC = pkt.flight_cycles;
+    const totalC = pkt.total_latency_cycles;
+    const bytes = (pkt.flits || 9) * 16;
+
+    this.tooltip.innerHTML = `
+      <div class="tooltip-header">
+        <span class="badge badge-scatter">PID #${pkt.pid}</span>
+        <span class="tooltip-gpu">GPU ${pkt.src} ➔ GPU ${pkt.dst}</span>
+      </div>
+      <div class="tooltip-body">
+        <div class="tooltip-row"><span>Operación / Tipo:</span> <strong>${pkt.op_type} Nº${pkt.op_idx || 1}</strong></div>
+        <div class="tooltip-row"><span>Carga Útil:</span> <strong>${pkt.flits} flits (${bytes} bytes)</strong></div>
+        <hr class="tooltip-divider">
+        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola NIC:</span> <strong>${Math.round(queueC).toLocaleString()} c (${formatSimUnit(queueC)})</strong></div>
+        <div class="tooltip-row"><span style="color:#38bdf8;">■ Vuelo NoC (Travesía):</span> <strong>${Math.round(flightC).toLocaleString()} c (${formatSimUnit(flightC)})</strong></div>
+        <div class="tooltip-row"><span>Latencia de Paquete:</span> <strong class="highlight-val">${Math.round(totalC).toLocaleString()} c (${formatSimUnit(totalC)})</strong></div>
+        <hr class="tooltip-divider">
+        <div class="tooltip-row"><span>Ciclo / T Creación:</span> <code>${formatSimUnit(pkt.pkt_start_ns)}</code></div>
+        <div class="tooltip-row"><span>Ciclo / T Inyección:</span> <code>${formatSimUnit(pkt.pkt_inject_ns)}</code></div>
+        <div class="tooltip-row"><span>Ciclo / T Recepción:</span> <code>${formatSimUnit(pkt.pkt_end_ns)}</code></div>
+      </div>
+    `;
+
+    this.tooltip.classList.remove("hidden");
+
+    const tipRect = this.tooltip.getBoundingClientRect();
+    let left = clientX + 15;
+    let top = clientY + 15;
+
+    if (left + tipRect.width > window.innerWidth - 10) {
+      left = clientX - tipRect.width - 15;
+    }
+    if (top + tipRect.height > window.innerHeight - 10) {
+      top = window.innerHeight - tipRect.height - 10;
+    }
+
+    this.tooltip.style.left = `${Math.max(10, left)}px`;
+    this.tooltip.style.top = `${Math.max(10, top)}px`;
+  }
+
+  hideTooltip() {
+    if (this.tooltip) {
+      this.tooltip.classList.add("hidden");
+    }
   }
 }
 
@@ -1102,6 +1260,10 @@ class HybridSyncController {
       const opts = optsOrChronoEl;
       this.chronoCanvasEl = opts.chronoCanvasEl;
       this.packetsCanvasEl = opts.packetsCanvasEl;
+      this.packetsHeaderCanvasEl = opts.packetsHeaderCanvasEl;
+      this.packetsScrollContainerEl = opts.packetsScrollContainerEl;
+      this.packetsSpacerEl = opts.packetsSpacerEl;
+      this.packetsVisibleInfoEl = opts.packetsVisibleInfoEl;
       this.tooltipEl = opts.tooltipEl;
       this.scrubberEl = opts.scrubberEl;
       this.scrubberPosEl = opts.scrubberPosEl;
@@ -1112,6 +1274,10 @@ class HybridSyncController {
     } else {
       this.chronoCanvasEl = optsOrChronoEl;
       this.packetsCanvasEl = packetsCanvasEl;
+      this.packetsHeaderCanvasEl = null;
+      this.packetsScrollContainerEl = null;
+      this.packetsSpacerEl = null;
+      this.packetsVisibleInfoEl = null;
       this.tooltipEl = tooltipEl;
       this.fetchPacketsWindowFn = fetchPacketsWindowFn;
       this.onViewportChange = onViewportChange || null;
@@ -1149,8 +1315,11 @@ class HybridSyncController {
 
     this.packetCanvas = new HybridPacketCanvas(
       this.packetsCanvasEl,
-      this.tooltipEl,
-      (pkt) => {}
+      this.packetsHeaderCanvasEl,
+      this.packetsScrollContainerEl,
+      this.packetsSpacerEl,
+      this.packetsVisibleInfoEl,
+      this.tooltipEl
     );
     this.packetCanvas.marginLeft = 85;
 
@@ -1172,17 +1341,31 @@ class HybridSyncController {
         this.packetCanvas.setCrosshair(x, mouseNs);
 
         if (canvasTarget === this.packetsCanvasEl) {
-          const pkt = this.packetCanvas.getPacketAt(x, y);
-          if (pkt) {
+          const res = this.packetCanvas.getPacketAt(e.clientX, e.clientY);
+          if (res) {
             this.chronoCanvas.hideTooltip();
-            this.showPacketTooltip(pkt, e.clientX, e.clientY);
+            const prevRow = this.packetCanvas.hoveredRowIdx;
+            this.packetCanvas.hoveredRowIdx = res.rowIdx;
+            if (prevRow !== res.rowIdx) {
+              this.packetCanvas.drawVisibleSlice();
+            }
+            this.packetCanvas.showTooltip(res.packet, e.clientX, e.clientY);
           } else {
-            this.hideTooltip();
+            if (this.packetCanvas.hoveredRowIdx !== -1) {
+              this.packetCanvas.hoveredRowIdx = -1;
+              this.packetCanvas.drawVisibleSlice();
+            }
+            this.packetCanvas.hideTooltip();
           }
         } else if (canvasTarget === this.chronoCanvasEl) {
+          if (this.packetCanvas.hoveredRowIdx !== -1) {
+            this.packetCanvas.hoveredRowIdx = -1;
+            this.packetCanvas.drawVisibleSlice();
+          }
+          this.packetCanvas.hideTooltip();
+
           const res = this.chronoCanvas.getBlockAt(x, y);
           if (res) {
-            this.hideTooltip();
             this.chronoCanvas.showTooltip(res.block, res.gpuIdx, e.clientX, e.clientY);
           } else {
             this.chronoCanvas.hideTooltip();
@@ -1191,16 +1374,26 @@ class HybridSyncController {
       } else {
         this.chronoCanvas.clearCrosshair();
         this.packetCanvas.clearCrosshair();
+        if (this.packetCanvas.hoveredRowIdx !== -1) {
+          this.packetCanvas.hoveredRowIdx = -1;
+          this.packetCanvas.drawVisibleSlice();
+        }
         this.hideTooltip();
         this.chronoCanvas.hideTooltip();
+        this.packetCanvas.hideTooltip();
       }
     };
 
     const handleLeave = () => {
       this.chronoCanvas.clearCrosshair();
       this.packetCanvas.clearCrosshair();
+      if (this.packetCanvas.hoveredRowIdx !== -1) {
+        this.packetCanvas.hoveredRowIdx = -1;
+        this.packetCanvas.drawVisibleSlice();
+      }
       this.hideTooltip();
       this.chronoCanvas.hideTooltip();
+      this.packetCanvas.hideTooltip();
     };
 
     this.chronoCanvasEl.addEventListener("mousemove", (e) => handleMove(e, this.chronoCanvasEl));
@@ -1209,9 +1402,9 @@ class HybridSyncController {
     this.chronoCanvasEl.addEventListener("mouseleave", handleLeave);
     this.packetsCanvasEl.addEventListener("mouseleave", handleLeave);
 
-    const handleWheel = (e, canvasTarget) => {
+    const handleWheelChrono = (e) => {
       e.preventDefault();
-      const rect = canvasTarget.getBoundingClientRect();
+      const rect = this.chronoCanvasEl.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const plotWidth = rect.width - this.chronoCanvas.marginLeft - this.chronoCanvas.marginRight;
       let ratio = 0.5;
@@ -1222,8 +1415,23 @@ class HybridSyncController {
       this.zoom(factor, ratio);
     };
 
-    this.chronoCanvasEl.addEventListener("wheel", (e) => handleWheel(e, this.chronoCanvasEl), { passive: false });
-    this.packetsCanvasEl.addEventListener("wheel", (e) => handleWheel(e, this.packetsCanvasEl), { passive: false });
+    const handleWheelPackets = (e) => {
+      if (e.ctrlKey || e.shiftKey || e.altKey) {
+        e.preventDefault();
+        const rect = this.packetsCanvasEl.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const plotWidth = rect.width - this.chronoCanvas.marginLeft - this.chronoCanvas.marginRight;
+        let ratio = 0.5;
+        if (x >= this.chronoCanvas.marginLeft && x <= rect.width - this.chronoCanvas.marginRight) {
+          ratio = (x - this.chronoCanvas.marginLeft) / plotWidth;
+        }
+        const factor = e.deltaY > 0 ? 1.15 : 0.85;
+        this.zoom(factor, ratio);
+      }
+    };
+
+    this.chronoCanvasEl.addEventListener("wheel", handleWheelChrono, { passive: false });
+    this.packetsCanvasEl.addEventListener("wheel", handleWheelPackets, { passive: false });
 
     const handleMouseDown = (e, canvasTarget) => {
       const rect = canvasTarget.getBoundingClientRect();
@@ -1235,7 +1443,6 @@ class HybridSyncController {
       this.dragStartViewStart = this.viewStartNs;
       this.dragStartViewEnd = this.viewEndNs;
       this.chronoCanvasEl.style.cursor = "grabbing";
-      this.packetsCanvasEl.style.cursor = "grabbing";
     };
 
     const handleGlobalMouseMove = (e) => {
@@ -1267,12 +1474,10 @@ class HybridSyncController {
       if (this.isDragging) {
         this.isDragging = false;
         this.chronoCanvasEl.style.cursor = "crosshair";
-        this.packetsCanvasEl.style.cursor = "crosshair";
       }
     };
 
     this.chronoCanvasEl.addEventListener("mousedown", (e) => handleMouseDown(e, this.chronoCanvasEl));
-    this.packetsCanvasEl.addEventListener("mousedown", (e) => handleMouseDown(e, this.packetsCanvasEl));
     window.addEventListener("mousemove", handleGlobalMouseMove);
     window.addEventListener("mouseup", handleGlobalMouseUp);
 
@@ -1320,6 +1525,15 @@ class HybridSyncController {
         start = Math.max(this.minTimeNs, end - windowNs);
       }
       this.updateViewport(start, end);
+    }
+  }
+
+  setScrubberRatio(ratio) {
+    const span = this.viewEndNs - this.viewStartNs;
+    const maxStart = this.maxTimeNs - span;
+    if (maxStart > this.minTimeNs) {
+      const newStart = this.minTimeNs + ratio * (maxStart - this.minTimeNs);
+      this.updateViewport(newStart, newStart + span);
     }
   }
 
@@ -1399,44 +1613,11 @@ class HybridSyncController {
           if (this.packetBadgeEl) {
             const count = data.total_in_window || 0;
             const truncText = data.truncated ? ` (${data.returned} mostrados, muestreado)` : "";
-            this.packetBadgeEl.textContent = `${count} paquetes en ventana${truncText}`;
+            this.packetBadgeEl.textContent = `${count.toLocaleString()} paquetes en ventana${truncText}`;
           }
         }
       }
     }, 60);
-  }
-
-  showPacketTooltip(pkt, clientX, clientY) {
-    if (!this.tooltipEl) return;
-    this.tooltipEl.innerHTML = `
-      <div class="tooltip-header">
-        <span class="badge badge-scatter">PID #${pkt.pid}</span>
-        <span class="tooltip-gpu">GPU ${pkt.src} ➔ GPU ${pkt.dst}</span>
-      </div>
-      <div class="tooltip-body">
-        <div class="tooltip-row"><span>Operación:</span> <strong>${pkt.op_type} Nº${pkt.op_idx || 1}</strong></div>
-        <div class="tooltip-row"><span>Flits:</span> <strong>${pkt.flits} flits</strong></div>
-        <hr class="tooltip-divider">
-        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola:</span> <strong>${pkt.queue_delay_cycles} c (${formatSimUnit(pkt.queue_delay_cycles)})</strong></div>
-        <div class="tooltip-row"><span style="color:#38bdf8;">■ Travesía NoC:</span> <strong>${pkt.flight_cycles} c (${formatSimUnit(pkt.flight_cycles)})</strong></div>
-        <div class="tooltip-row"><span>Latencia Paquete:</span> <strong class="highlight-val">${pkt.total_latency_cycles} c (${formatSimUnit(pkt.total_latency_cycles)})</strong></div>
-        <hr class="tooltip-divider">
-        <div class="tooltip-row"><span>Inicio (Creación):</span> <code>${formatSimUnit(pkt.pkt_start_ns)}</code></div>
-        <div class="tooltip-row"><span>Inyección en NoC:</span> <code>${formatSimUnit(pkt.pkt_inject_ns)}</code></div>
-        <div class="tooltip-row"><span>Recepción Destino:</span> <code>${formatSimUnit(pkt.pkt_end_ns)}</code></div>
-      </div>
-    `;
-
-    this.tooltipEl.classList.remove("hidden");
-    const tipRect = this.tooltipEl.getBoundingClientRect();
-    let left = clientX + 15;
-    let top = clientY + 15;
-
-    if (left + tipRect.width > window.innerWidth - 10) left = clientX - tipRect.width - 15;
-    if (top + tipRect.height > window.innerHeight - 10) top = window.innerHeight - tipRect.height - 10;
-
-    this.tooltipEl.style.left = `${Math.max(10, left)}px`;
-    this.tooltipEl.style.top = `${Math.max(10, top)}px`;
   }
 
   hideTooltip() {

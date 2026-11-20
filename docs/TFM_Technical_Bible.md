@@ -3281,5 +3281,120 @@ Se transformó radicalmente la disposición del Visualizador Híbrido (`.split-s
 
 ---
 
+## 10.9. Refinamiento del Visualizador Híbrido: Contenedor Acotado con Scroll Único, Virtual Scrolling y Tooltips Microarquitectónicos (Fases 3.8 y 3.9)
+Al eliminar las restricciones de submuestreo (`max_packets = 0`) para visualizar el 100% de los flits transmitidos en ráfagas densas de colectivas MoE (ej. más de 6.000 paquetes por ventana de $20\text{ }\mu\text{s}$ en DeepSeek-V3 o Mixtral 8x7B), el enfoque inicial colisionaba con dos problemas ergonómicos:
+1. La expansión automática de las filas de CSS Grid estiraba la página entera hacia abajo al crecer el espaciador a decenas de miles de píxeles, eliminando el confinamiento del visor.
+2. Los tooltips flotantes sobre eventos de cómputo GPU mostraban el campo de cuello de botella de memoria (`% Mem.`) vacío (`-`).
+
+Para resolver ambos aspectos con máxima fidelidad visual y rendimiento a 60 FPS, se rediseñó el sistema con las siguientes innovaciones:
+
+### 1. Contenedor Acotado con Scroll Vertical Único Compartido (`#hybrid-unified-scroll`)
+Se encapsularon ambos paneles en **una única caja externa desplazable de altura estrictamente fija** que jamás estira la página web:
+```css
+#hybrid-unified-scroll {
+  height: 640px;
+  max-height: 74vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #0f172a;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: start;
+}
+```
+- **Una Única Barra de Scroll Vertical:** Ubicada en el borde derecho del contenedor `#hybrid-unified-scroll`, gobierna todo el recorrido vertical de la ventana.
+- **Columna Izquierda (50% - Cronograma GPU Sticky):**
+  El contenedor `#hybrid-left-pane` se fija mediante `position: sticky; top: 0; height: 638px; z-index: 5; border-right: 1px solid #334155;`. Al desplazarse el scroll vertical por los paquetes, el Cronograma de Ejecución GPU permanece inamovible a la vista (cabecera de 36 px + lienzo GPU de 602 px = 638 px).
+- **Columna Derecha (50% - Paquetes NoC en Vuelo Virtualizados):**
+  El contenedor `#hybrid-right-pane` delega su desplazamiento vertical directamente a `#hybrid-unified-scroll`. Incorpora:
+  - Cabecera temporal sticky (`#hybrid-packets-sticky-header`, `position: sticky; top: 0; height: 36px; z-index: 15;`) con eje temporal sincronizado y píldora reactiva `Mostrando paquetes X–Y de Z`.
+  - Espaciador virtual `#hybrid-packets-spacer` con altura proporcional al total de paquetes ($H = \max(600, N_{\text{paquetes}} \times 20\text{ px})$). Para 6.328 paquetes, mide $126.560\text{ px}$.
+  - Lienzo flotante `#hybrid-packets-canvas` con `position: sticky; top: 36px; height: 602px; z-index: 10;`. En cada evento `scroll` de `#hybrid-unified-scroll`, renderiza exclusivamente las filas que intersecan $[\text{scrollTop}, \text{scrollTop} + 602\text{ px}]$.
+- **Deslizador Horizontal Unificado:** Un único scrubber temporal en la base desplaza el eje X simultáneamente en ambos paneles.
+
+### 2. Detección Matemática de Hover y Resaltado Reactivo
+- Dado que el lienzo de paquetes está fijado mediante `position: sticky`, el índice del paquete apuntado por el cursor se recupera deterministamente como:
+  $$\text{localY} = e.\text{clientY} - \text{rect}.\text{top}$$
+  $$\text{virtualY} = \text{unifiedScroll}.\text{scrollTop} + \text{localY}$$
+  $$\text{idx} = \left\lfloor \frac{\text{virtualY}}{20} \right\rfloor$$
+- Al posarse el ratón, la fila correspondiente se ilumina con fondo celeste `rgba(56, 189, 248, 0.16)` y etiqueta PID `#38bdf8`.
+- El tooltip `#hybrid-tooltip` (`position: fixed !important; z-index: 99999 !important; pointer-events: none !important;`) evita recortes y muestra la ficha completa: `PID`, `GPU src ➔ dst`, colectiva, carga útil ($N_{\text{flits}} \times 16\text{ B}$), retardo en cola, tiempo de vuelo, latencia total y timestamps en ciclos o tiempo.
+
+### 3. Reparación Integral del Porcentaje de Memoria (`% Mem.`) y Flits en Tooltips
+- **Cálculo de Cuello de Botella (`trace_parser.py`):**
+  Para cada bloque computacional de categoría `calc` (`Attention`, `DenseFFN`, `ExpertFFN`, `SharedExpert`), el analizador acumula `COMP_NS` y `MEM_NS` y calcula:
+  $$\text{mem\_bound\_pct} = \min\left(100.0, \max\left(0.0, \frac{\text{total\_mem\_ns}}{\text{total\_duration\_ns}} \times 100.0\right)\right)$$
+  almacenando tanto `mem_bound_pct` como el alias `mem_pct`.
+- **Desglose de Micro-Operaciones (`sub_ops`):**
+  Se corrigió el bucle de extracción para procesar la totalidad de micro-operaciones (`for _, r in grp.iterrows():`), calculando el porcentaje de memoria individual:
+  $$\text{sub\_mem\_pct} = \frac{\text{r.MEM\_NS}}{\text{r.DURATION}} \times 100.0$$
+  permitiendo que la tabla interna de desglose refleje valores reales (ej. `LN: 100.0%`, `QKV_Proj: 100.0%`, `AttnGen: 0.0% (Compute-Bound)`, `O_Proj: 100.0%`).
+- **Ficha de Bloque GPU en Canvas:**
+  Al posar el cursor sobre cualquier bloque verde en `ChronogramCanvas` o en el panel izquierdo del Visualizador Híbrido, el tooltip despliega la fila distintiva:
+  $$\text{Cuello de Botella: } \mathbf{82.9\% \text{ (Memory-Bound)}} \quad \text{o} \quad \mathbf{42.0\% \text{ (Compute-Bound)}}$$
+  con código de color ámbar (`#f59e0b`) para regímenes acotados por memoria y verde (`#10b981`) para regímenes acotados por cómputo.
+- **Flits Locales en Bloques de Red:**
+  Se garantizó que `local_flits` en bloques de colectivas (`scatter`, `gather`, `all_reduce`) nunca sea 0 cuando `local_packets > 0`, computándose como $N_{\text{pkts}} \times 9\text{ flits}$.
+
+### 4. Desacoplamiento de la Rueda del Ratón
+- La rueda del ratón sobre el panel izquierdo (Cronograma GPU) realiza zoom horizontal sobre el eje temporal.
+- La rueda del ratón sobre el panel derecho (Paquetes NoC) desplaza verticalmente el listado de paquetes en `#hybrid-unified-scroll`. Para realizar zoom horizontal desde el panel derecho, basta con mantener pulsado `Ctrl`, `Shift` o `Alt`.
+
+---
+
+## 10.10. Auditoría Matemática y Paridad Absoluta CLI ↔ GUI (Fase 3.9.1)
+En la arquitectura del co-simulador, **la interfaz gráfica web (Workbench GUI) y los scripts de terminal (`analyze_traces.py`, `plot_cronograma.py`, `plot_packet_tracking.py`) son dos ventanas sobre una misma realidad física subyacente**. En consecuencia, ambos entornos deben arrojar **exactamente los mismos valores numéricos** en cada métrica, sin discrepancias matemáticas ni aproximaciones discordantes.
+
+Durante la auditoría matemática de la Fase 3.9.1, se identificaron y subsanaron dos desviaciones en las fórmulas implementadas en `gui/trace_parser.py`:
+
+### 1. Unificación del Cuello de Botella Roofline (% Mem-Bound y % Compute-Bound)
+- **Diagnóstico del Fallo Previo:**
+  En la Fase 3.9, la GUI calculaba el porcentaje de memoria dividiendo entre la duración de la operación:
+  $$\text{mem\_pct} = \frac{\text{Mem\_ns}}{\text{Duration\_ns}} \times 100.0$$
+  Dado que en el modelo analítico de Roofline la duración temporal de una operación acotada por memoria es $\text{Duration\_ns} = \max(\text{Comp\_ns}, \text{Mem\_ns}) = \text{Mem\_ns}$, el cociente resultaba idénticamente en $100.0\%$ para todos los operadores memory-bound (ocultando el balance real de cómputo frente a ancho de banda).
+- **Fórmula Unificada Canónica (Paridad con `plot_cronograma.py`):**
+  Se alineó la lógica tanto para macro-bloques coalescentes como para cada micro-operación individual de la traza:
+  $$\mathbf{\text{Mem\_Bound \%}} = \begin{cases} \dfrac{\sum \text{Mem\_ns}}{\sum \text{Comp\_ns} + \sum \text{Mem\_ns}} \times 100.0 & \text{si } (\sum \text{Comp\_ns} + \sum \text{Mem\_ns}) > 0 \\ 0.0 & \text{en otro caso} \end{cases}$$
+- **Resultados de Paridad Absoluta:**
+  - Micro-operación `AttnGen` (Compute-bound puro, con $\text{Mem\_ns} = 0.0\text{ ns}$): evalúa a **$0.0\%$** en el desglose de memoria, reportándose en el tooltip como **$100.0\% \text{ (Compute-Bound)}$**.
+  - Micro-operaciones de proyección lineal (`QKV_Proj`, `O_Proj`): evalúan a **$98.2\%$** de memoria.
+  - Normalización de capa (`LN`): evalúa a **$99.6\%$** de memoria.
+  - Macro-bloque coalescente `Attention` (Capa 0 en Mixtral): evalúa con precisión milimétrica a **$97.9\% \text{ (Memory-Bound)}$**, idéntico al rótulo generado por `plot_cronograma.py` en consola y figuras estáticas.
+
+### 2. Unificación de la Tasa de Inyección de Red $\overline{\lambda}$ (flits/ciclo/nodo)
+- **Diagnóstico del Fallo Previo:**
+  La GUI calculaba la tasa $\lambda$ dividiendo los flits totales entre el tiempo global de Wall-Clock del clúster ($\text{Flits} / (N_{\text{GPUs}} \times \text{WallClock})$), arrojando valores diluidos artificialmente ($0.0587\text{ f/c/nodo}$ en Mixtral) al incluir en el denominador las fases de cómputo donde no se inyecta tráfico.
+- **Fórmula Unificada Canónica (Paridad con `analyze_traces.py`):**
+  La tasa media de inyección se calcula promediando la tasa activa durante la ventana temporal efectiva de cada colectiva de comunicación:
+  $$\mathbf{\overline{\lambda}} = \frac{1}{M_{\text{ops}}} \sum_{op=1}^{M_{\text{ops}}} \frac{\sum_{p \in op} \text{Num\_Flits}_p}{N_{\text{GPUs}} \times \Delta\text{Ciclos}_{op}}$$
+  donde la duración activa de la colectiva $op$ viene dada por:
+  $$\Delta\text{Ciclos}_{op} = \max\left(1.0, \max_{p \in op}(\text{Receive\_Cycle}_p) - \min_{p \in op}(\text{Creation\_Cycle}_p)\right)$$
+- **Resultados de Paridad Absoluta:**
+  - En `mixtral_8dev_torus_bs32`: $\mathbf{\lambda = 0.2822\text{ flits/ciclo/nodo}}$, coincidiendo con el valor exacto impreso por `analyze_traces.py`.
+  - En `deepseekV3_4x2dev_mesh_bs32`: $\mathbf{\lambda = 0.2751\text{ flits/ciclo/nodo}}$, coincidiendo con el valor exacto impreso por `analyze_traces.py`.
+
+### 3. Matriz de Validación de Paridad Numérica CLI ↔ GUI
+
+| Métrica Microarquitectural | Mixtral (Toro 1D, 8 GPUs) CLI | Mixtral (Toro 1D, 8 GPUs) GUI | DeepSeek-V3 (Malla 2D, 8 GPUs) CLI | DeepSeek-V3 (Malla 2D, 8 GPUs) GUI | Estado de Paridad |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Tiempo de Cómputo Promedio** | $911.517,0\text{ ns}$ | $911.517,0\text{ ns}$ | $8.340.630,5\text{ ns}$ | $8.340.630,5\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Tránsito en Red (Vuelo NoC)** | $169.257,3\text{ ns}$ | $169.257,3\text{ ns}$ | $3.137.883,8\text{ ns}$ | $3.137.883,8\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Stalls de Sincronización (BSP)** | $19.268,9\text{ ns}$ | $19.268,9\text{ ns}$ | $365.008,0\text{ ns}$ | $365.008,0\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Primitiva MoE Scatter** | $91.479,5\text{ ns}$ | $91.479,5\text{ ns}$ | $1.034.745,5\text{ ns}$ | $1.034.745,5\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Primitiva MoE Gather** | $77.777,8\text{ ns}$ | $77.777,8\text{ ns}$ | $2.103.138,3\text{ ns}$ | $2.103.138,3\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Primitiva Ring-AllReduce** | $0,0\text{ ns}$ | $0,0\text{ ns}$ | $0,0\text{ ns}$ | $0,0\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Tiempo Total Wall-Clock** | $1.100.043,2\text{ ns}$ | $1.100.043,2\text{ ns}$ | $11.843.522,4\text{ ns}$ | $11.843.522,4\text{ ns}$ | **IDÉNTICO (100%)** |
+| **Tasa Media de Inyección $\lambda$** | $\mathbf{0,2822\text{ f/c/n}}$ | $\mathbf{0,2822\text{ f/c/n}}$ | $\mathbf{0,2751\text{ f/c/n}}$ | $\mathbf{0,2751\text{ f/c/n}}$ | **IDÉNTICO (100%)** |
+| **Latencia Media Flit NoC** | $688,1\text{ ciclos}$ | $688,1\text{ ciclos}$ | $6.255,3\text{ ciclos}$ | $6.255,3\text{ ciclos}$ | **IDÉNTICO (100%)** |
+| **Latencia Media Paquete NoC** | $1.321,2\text{ ciclos}$ | $1.321,2\text{ ciclos}$ | $10.269,6\text{ ciclos}$ | $10.269,6\text{ ciclos}$ | **IDÉNTICO (100%)** |
+| **Micro-op AttnGen (% Mem)** | $0,0\%$ (Compute) | $0,0\%$ (Compute) | $0,0\%$ (Compute) | $0,0\%$ (Compute) | **IDÉNTICO (100%)** |
+| **Macro Attention (% Mem)** | $97,9\%$ (Mem-Bound) | $97,9\%$ (Mem-Bound) | -- | -- | **IDÉNTICO (100%)** |
+
+---
+
 *Fin del Documento Maestro - TFM Technical Bible (Noviembre 2026)*
+
 

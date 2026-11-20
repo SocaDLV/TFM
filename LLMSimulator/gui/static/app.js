@@ -133,6 +133,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const hybridPacketBadge = document.getElementById("hybrid-packet-badge");
   const hybridChronogramCanvasEl = document.getElementById("hybrid-chronogram-canvas");
   const hybridPacketsCanvasEl = document.getElementById("hybrid-packets-canvas");
+  const hybridPacketsHeaderCanvasEl = document.getElementById("hybrid-packets-header-canvas");
+  const hybridUnifiedScrollEl = document.getElementById("hybrid-unified-scroll") || document.getElementById("hybrid-packets-scroll-container");
+  const hybridPacketsSpacerEl = document.getElementById("hybrid-packets-spacer");
+  const hybridPacketsVisibleInfoEl = document.getElementById("hybrid-packets-visible-info");
   const hybridTooltipEl = document.getElementById("hybrid-tooltip");
   const hybridScrubber = document.getElementById("hybrid-scrubber");
   const hybridScrubberPos = document.getElementById("hybrid-scrubber-pos");
@@ -665,6 +669,10 @@ document.addEventListener("DOMContentLoaded", () => {
     hybridSyncController = new HybridSyncController({
       chronoCanvasEl: hybridChronogramCanvasEl,
       packetsCanvasEl: hybridPacketsCanvasEl,
+      packetsHeaderCanvasEl: hybridPacketsHeaderCanvasEl,
+      packetsScrollContainerEl: hybridUnifiedScrollEl,
+      packetsSpacerEl: hybridPacketsSpacerEl,
+      packetsVisibleInfoEl: hybridPacketsVisibleInfoEl,
       tooltipEl: hybridTooltipEl,
       scrubberEl: hybridScrubber,
       scrubberPosEl: hybridScrubberPos,

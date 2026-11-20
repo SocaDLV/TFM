@@ -487,33 +487,31 @@
           </div>
         </div>
 
-        <!-- Split-Screen Container: Horizontal 50/50 Split -->
-        <div class="split-screen-container">
+        <!-- Unified Scrollable Hybrid Container: Bounded Height with Single Shared Vertical Scrollbar -->
+        <div id="hybrid-unified-scroll" class="hybrid-unified-scroll">
           <!-- Columna Izquierda: Cronograma GPU (Sticky) -->
-          <div class="split-pane split-pane-top">
+          <div id="hybrid-left-pane" class="hybrid-left-pane">
             <div class="split-pane-header">
               <span class="split-pane-title">📊 Cronograma de Ejecución GPU (0..N-1)</span>
               <span class="split-pane-sub">Cómputo GPU y Colectivas</span>
             </div>
-            <div class="canvas-wrapper hybrid-canvas-wrapper">
-              <canvas id="hybrid-chronogram-canvas" height="380"></canvas>
-            </div>
+            <canvas id="hybrid-chronogram-canvas" class="hybrid-chrono-canvas" height="602"></canvas>
           </div>
 
-          <!-- Columna Derecha: Paquetes en Vuelo (Scrollable) -->
-          <div class="split-pane split-pane-bottom">
-            <div class="split-pane-header">
-              <span class="split-pane-title">🛰️ Flujo de Paquetes NoC en Tránsito</span>
-              <span class="split-pane-sub">Cola NIC (Naranja) + Red NoC (Azul)</span>
+          <!-- Columna Derecha: Paquetes NoC en Vuelo (Virtualizado) -->
+          <div id="hybrid-right-pane" class="hybrid-right-pane">
+            <div id="hybrid-packets-sticky-header" class="hybrid-packets-sticky-header">
+              <canvas id="hybrid-packets-header-canvas" height="36"></canvas>
+              <span id="hybrid-packets-visible-info" class="hybrid-packets-visible-pill">Mostrando paquetes 0 de 0</span>
             </div>
-            <div class="canvas-wrapper hybrid-canvas-wrapper">
-              <canvas id="hybrid-packets-canvas" height="380"></canvas>
+            <div id="hybrid-packets-spacer" class="hybrid-packets-spacer">
+              <canvas id="hybrid-packets-canvas" class="hybrid-packets-viewport-canvas" height="602"></canvas>
             </div>
           </div>
-
-          <!-- Shared Tooltip (Fixed Overlay) -->
-          <div id="hybrid-tooltip" class="timeline-tooltip hidden"></div>
         </div>
+
+        <!-- Shared Tooltip (Fixed Overlay) -->
+        <div id="hybrid-tooltip" class="timeline-tooltip hidden"></div>
 
         <!-- Unified Scrubber Slider -->
         <div class="scrubber-row">
