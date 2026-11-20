@@ -70,10 +70,62 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnJumpResults = document.getElementById("btn-jump-results");
 
   // Tab 2 Elements
+  const stagingBanner = document.getElementById("staging-banner");
+  const stagingBadgePill = document.getElementById("staging-badge-pill");
   const stagingFolderName = document.getElementById("staging-folder-name");
   const stagingSaveStatus = document.getElementById("staging-save-status");
+  const stagingCustomLabel = document.getElementById("staging-custom-label");
   const btnSaveStaging = document.getElementById("btn-save-staging");
   const btnDiscardStaging = document.getElementById("btn-discard-staging");
+
+  // Tab 2 KPIs
+  const kpiWallclock = document.getElementById("kpi-wallclock");
+  const kpiCompute = document.getElementById("kpi-compute");
+  const kpiComputeSub = document.getElementById("kpi-compute-sub");
+  const kpiTransit = document.getElementById("kpi-transit");
+  const kpiTransitSub = document.getElementById("kpi-transit-sub");
+  const kpiStalls = document.getElementById("kpi-stalls");
+  const kpiStallsSub = document.getElementById("kpi-stalls-sub");
+  const kpiLambda = document.getElementById("kpi-lambda");
+  const kpiFlitLat = document.getElementById("kpi-flit-lat");
+  const kpiTotalPkts = document.getElementById("kpi-total-pkts");
+  const kpiTotalFlitsSub = document.getElementById("kpi-total-flits-sub");
+
+  // Tab 2 Subviews & Canvases
+  const btnSubviewChrono = document.getElementById("btn-subview-chrono");
+  const btnSubviewPackets = document.getElementById("btn-subview-packets");
+  const subviewChronoContainer = document.getElementById("subview-chrono-container");
+  const subviewPacketsContainer = document.getElementById("subview-packets-container");
+
+  // Chronogram Controls
+  const presetButtons = document.querySelectorAll(".btn-preset");
+  const btnChronoZoomIn = document.getElementById("btn-chrono-zoom-in");
+  const btnChronoZoomOut = document.getElementById("btn-chrono-zoom-out");
+  const btnChronoZoomReset = document.getElementById("btn-chrono-zoom-reset");
+  const chronoWindowInfo = document.getElementById("chrono-window-info");
+  const chronogramCanvasEl = document.getElementById("chronogram-canvas");
+  const chronogramTooltipEl = document.getElementById("chronogram-tooltip");
+  const chronogramScrubber = document.getElementById("chronogram-scrubber");
+  const chronoScrubberPos = document.getElementById("chrono-scrubber-pos");
+
+  // Packet Flight Controls
+  const btnRegimeFree = document.getElementById("btn-regime-free");
+  const btnRegimeMedium = document.getElementById("btn-regime-medium");
+  const btnRegimeCritical = document.getElementById("btn-regime-critical");
+  const packetsLimitSelect = document.getElementById("packets-limit-select");
+  const packetsPageInfo = document.getElementById("packets-page-info");
+  const packetsCanvasEl = document.getElementById("packets-canvas");
+  const packetsTooltipEl = document.getElementById("packets-tooltip");
+  const packetsScrubber = document.getElementById("packets-scrubber");
+  const packetsScrubberPos = document.getElementById("packets-scrubber-pos");
+
+  // Tab 2 Canvas Controllers
+  let chronoCanvas = null;
+  let packetFlightCanvas = null;
+  let currentResultsSource = "staging";
+  let packetsOffset = 0;
+  let packetsLimit = 100;
+  let packetsTotalCount = 0;
 
   // =========================================================================
   // Model Descriptions Database
@@ -116,6 +168,17 @@ document.addEventListener("DOMContentLoaded", () => {
         pane.classList.remove("active");
       }
     });
+
+    if (targetTabId === "tab-results") {
+      ensureResultsLoaded();
+      setTimeout(() => {
+        if (!subviewChronoContainer.classList.contains("hidden") && chronoCanvas) {
+          chronoCanvas.render();
+        } else if (!subviewPacketsContainer.classList.contains("hidden") && packetFlightCanvas) {
+          packetFlightCanvas.render();
+        }
+      }, 50);
+    }
   }
 
   tabButtons.forEach(btn => {
@@ -514,12 +577,10 @@ document.addEventListener("DOMContentLoaded", () => {
           currentStagingFolder = data.staging_folder_name;
           completionToast.classList.remove("hidden");
           tab2Badge.classList.remove("hidden");
+          tab2Badge.textContent = "Staging";
 
-          // Update staging banner in Tab 2
-          stagingFolderName.textContent = currentStagingFolder || "Carpeta temporal lista";
-          stagingSaveStatus.textContent = "(No guardada)";
-          btnSaveStaging.disabled = false;
-          btnDiscardStaging.disabled = false;
+          // Preload results for Tab 2
+          loadResultsData("staging", currentStagingFolder);
         } else if (data.status === "error") {
           progressDetailText.textContent = data.error_message || "Error en la ejecución";
         }
@@ -533,10 +594,368 @@ document.addEventListener("DOMContentLoaded", () => {
   btnRunSim.addEventListener("click", launchSimulation);
   btnAbortSim.addEventListener("click", abortSimulation);
 
-  // Initial setup call
+  // =========================================================================
+  // Tab 2 Controller: Results, Chronogram & Packet Flight
+  // =========================================================================
+  function initCanvases() {
+    if (typeof ChronogramCanvas !== "undefined" && chronogramCanvasEl) {
+      chronoCanvas = new ChronogramCanvas(
+        chronogramCanvasEl,
+        chronogramTooltipEl,
+        (startNs, endNs, minNs, maxNs) => {
+          const spanUs = (endNs - startNs) / 1000;
+          chronoWindowInfo.textContent = `Ventana: ${(startNs / 1000).toFixed(2)} µs ➔ ${(endNs / 1000).toFixed(2)} µs (${spanUs.toFixed(2)} µs)`;
+          chronoScrubberPos.textContent = `${(startNs / 1000).toFixed(2)} µs`;
+
+          const totalSpan = maxNs - minNs;
+          const currentSpan = endNs - startNs;
+          const maxStart = maxNs - currentSpan;
+          if (maxStart > minNs) {
+            const ratio = (startNs - minNs) / (maxStart - minNs);
+            chronogramScrubber.value = Math.round(ratio * 1000);
+          }
+        }
+      );
+    }
+
+    if (typeof PacketFlightCanvas !== "undefined" && packetsCanvasEl) {
+      packetFlightCanvas = new PacketFlightCanvas(
+        packetsCanvasEl,
+        packetsTooltipEl,
+        (offset, limit) => {
+          loadPacketsData(currentResultsSource, currentStagingFolder, offset, limit);
+        }
+      );
+    }
+  }
+
+  async function ensureResultsLoaded() {
+    if (!currentStagingFolder) {
+      try {
+        const res = await fetch("/api/results/active");
+        if (res.ok) {
+          const act = await res.json();
+          if (act.active) {
+            currentStagingFolder = act.folder_name;
+            currentResultsSource = act.source || "staging";
+            loadResultsData(currentResultsSource, currentStagingFolder);
+          }
+        }
+      } catch (e) {
+        console.error("Error al consultar simulación activa:", e);
+      }
+    } else if (chronoCanvas && !chronoCanvas.data) {
+      loadResultsData(currentResultsSource, currentStagingFolder);
+    }
+  }
+
+  async function loadResultsData(source, folder) {
+    if (!folder) return;
+    currentResultsSource = source;
+    currentStagingFolder = folder;
+
+    // Update banner UI
+    stagingFolderName.textContent = folder;
+    if (source === "saved") {
+      stagingBanner.classList.add("saved-mode");
+      stagingBadgePill.textContent = "Guardada en Historial";
+      stagingBadgePill.className = "staging-badge saved";
+      stagingSaveStatus.textContent = "(Guardada)";
+      stagingSaveStatus.className = "staging-saved-tag";
+      btnSaveStaging.disabled = true;
+      btnSaveStaging.textContent = "✅ Guardada";
+      btnDiscardStaging.disabled = true;
+      stagingCustomLabel.disabled = true;
+      tab2Badge.textContent = "Guardada";
+      tab2Badge.classList.remove("hidden");
+    } else {
+      stagingBanner.classList.remove("saved-mode");
+      stagingBadgePill.textContent = "Área Temporal";
+      stagingBadgePill.className = "staging-badge";
+      stagingSaveStatus.textContent = "(No guardada)";
+      stagingSaveStatus.className = "staging-unsaved";
+      btnSaveStaging.disabled = false;
+      btnSaveStaging.textContent = "💾 Guardar Simulación";
+      btnDiscardStaging.disabled = false;
+      stagingCustomLabel.disabled = false;
+      tab2Badge.textContent = "Staging";
+      tab2Badge.classList.remove("hidden");
+    }
+
+    // 1. Fetch Summary (KPIs)
+    try {
+      const sumRes = await fetch(`/api/results/summary?source=${source}&folder=${folder}`);
+      if (sumRes.ok) {
+        const summary = await sumRes.json();
+        renderSummaryKPIs(summary);
+      }
+    } catch (err) {
+      console.error("Error cargando summary:", err);
+    }
+
+    // 2. Fetch Chronogram
+    try {
+      const chronoRes = await fetch(`/api/results/chronogram?source=${source}&folder=${folder}`);
+      if (chronoRes.ok) {
+        const chronoData = await chronoRes.json();
+        if (chronoCanvas) {
+          chronoCanvas.loadData(chronoData);
+        }
+      }
+    } catch (err) {
+      console.error("Error cargando chronogram:", err);
+    }
+
+    // 3. Fetch Packets
+    loadPacketsData(source, folder, 0, packetsLimit);
+  }
+
+  function renderSummaryKPIs(s) {
+    kpiWallclock.textContent = `${s.wall_clock_us.toFixed(2)} µs`;
+
+    kpiCompute.textContent = formatTimeNs(s.compute_time_ns);
+    kpiComputeSub.textContent = `${s.compute_pct.toFixed(1)}% del tiempo total`;
+
+    kpiTransit.textContent = formatTimeNs(s.network_time_ns);
+    kpiTransitSub.textContent = `${s.network_pct.toFixed(1)}% del tiempo total`;
+
+    kpiStalls.textContent = formatTimeNs(s.stall_time_ns);
+    kpiStallsSub.textContent = `${s.stall_pct.toFixed(1)}% del tiempo total`;
+
+    kpiLambda.textContent = `${s.real_injection_rate_lambda.toFixed(4)} f/c/nodo`;
+    kpiFlitLat.textContent = `${s.avg_flit_lat_cycles.toFixed(2)} ciclos`;
+
+    kpiTotalPkts.textContent = `${s.total_packets.toLocaleString()} pkts`;
+    kpiTotalFlitsSub.textContent = `${s.total_flits.toLocaleString()} flits transmitidos`;
+  }
+
+  async function loadPacketsData(source, folder, offset, limit, regime = null) {
+    let url = `/api/results/packets?source=${source}&folder=${folder}&offset=${offset}&limit=${limit}`;
+    if (regime) {
+      url += `&regime=${regime}`;
+    }
+
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const pData = await res.json();
+        packetsOffset = pData.offset || 0;
+        packetsTotalCount = pData.total_packets || 0;
+
+        if (packetFlightCanvas) {
+          packetFlightCanvas.loadData(pData);
+        }
+
+        const count = pData.packets ? pData.packets.length : 0;
+        const endIdx = packetsOffset + count;
+        packetsPageInfo.textContent = `Mostrando paquetes ${packetsOffset + 1} a ${endIdx} de ${packetsTotalCount.toLocaleString()}`;
+        packetsScrubberPos.textContent = `Offset #${packetsOffset}`;
+
+        if (packetsTotalCount > limit) {
+          const ratio = packetsOffset / (packetsTotalCount - limit);
+          packetsScrubber.value = Math.round(ratio * 1000);
+        } else {
+          packetsScrubber.value = 0;
+        }
+      }
+    } catch (err) {
+      console.error("Error cargando packets:", err);
+    }
+  }
+
+  // Subview Switching
+  btnSubviewChrono.addEventListener("click", () => {
+    btnSubviewChrono.classList.add("active");
+    btnSubviewPackets.classList.remove("active");
+    subviewChronoContainer.classList.remove("hidden");
+    subviewPacketsContainer.classList.add("hidden");
+    if (chronoCanvas) chronoCanvas.render();
+  });
+
+  btnSubviewPackets.addEventListener("click", () => {
+    btnSubviewPackets.classList.add("active");
+    btnSubviewChrono.classList.remove("active");
+    subviewPacketsContainer.classList.remove("hidden");
+    subviewChronoContainer.classList.add("hidden");
+    if (packetFlightCanvas) packetFlightCanvas.render();
+  });
+
+  // Chronogram Preset Buttons
+  presetButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      presetButtons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      const preset = btn.getAttribute("data-preset");
+      if (chronoCanvas) {
+        if (preset === "all") {
+          chronoCanvas.setWindowPreset("all");
+        } else {
+          chronoCanvas.setWindowPreset(parseFloat(preset));
+        }
+      }
+    });
+  });
+
+  // Chronogram Zoom Buttons
+  btnChronoZoomIn.addEventListener("click", () => {
+    if (chronoCanvas) chronoCanvas.zoom(0.8);
+  });
+  btnChronoZoomOut.addEventListener("click", () => {
+    if (chronoCanvas) chronoCanvas.zoom(1.25);
+  });
+  btnChronoZoomReset.addEventListener("click", () => {
+    if (chronoCanvas) chronoCanvas.setWindowPreset(20);
+  });
+
+  // Chronogram Scrubber Slider
+  chronogramScrubber.addEventListener("input", () => {
+    if (chronoCanvas) {
+      const ratio = chronogramScrubber.value / 1000;
+      chronoCanvas.setScrubberRatio(ratio);
+    }
+  });
+
+  // Packet Regime Jump Buttons
+  btnRegimeFree.addEventListener("click", () => {
+    loadPacketsData(currentResultsSource, currentStagingFolder, 0, packetsLimit, "free");
+  });
+  btnRegimeMedium.addEventListener("click", () => {
+    loadPacketsData(currentResultsSource, currentStagingFolder, 0, packetsLimit, "medium");
+  });
+  btnRegimeCritical.addEventListener("click", () => {
+    loadPacketsData(currentResultsSource, currentStagingFolder, 0, packetsLimit, "critical");
+  });
+
+  // Packets Limit Selector
+  packetsLimitSelect.addEventListener("change", () => {
+    packetsLimit = parseInt(packetsLimitSelect.value, 10) || 100;
+    loadPacketsData(currentResultsSource, currentStagingFolder, packetsOffset, packetsLimit);
+  });
+
+  // Packets Scrubber Slider
+  packetsScrubber.addEventListener("input", () => {
+    if (packetsTotalCount > packetsLimit) {
+      const ratio = packetsScrubber.value / 1000;
+      const targetOffset = Math.round(ratio * (packetsTotalCount - packetsLimit));
+      loadPacketsData(currentResultsSource, currentStagingFolder, targetOffset, packetsLimit);
+    }
+  });
+
+  // Save Simulation Button
+  btnSaveStaging.addEventListener("click", async () => {
+    if (!currentStagingFolder || currentResultsSource === "saved") return;
+
+    const label = stagingCustomLabel.value.trim();
+    btnSaveStaging.disabled = true;
+    btnSaveStaging.textContent = "Guardando...";
+
+    try {
+      const res = await fetch("/api/results/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          folder_name: currentStagingFolder,
+          label: label
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      // Successfully saved!
+      currentResultsSource = "saved";
+      currentStagingFolder = data.saved_folder_name;
+
+      stagingBanner.classList.add("saved-mode");
+      stagingBadgePill.textContent = "Guardada en Historial";
+      stagingBadgePill.className = "staging-badge saved";
+      stagingFolderName.textContent = currentStagingFolder;
+      stagingSaveStatus.textContent = "(Guardada)";
+      stagingSaveStatus.className = "staging-saved-tag";
+
+      btnSaveStaging.textContent = "✅ Guardada";
+      btnSaveStaging.disabled = true;
+      btnDiscardStaging.disabled = true;
+      stagingCustomLabel.disabled = true;
+
+      tab2Badge.textContent = "Guardada";
+      alert(`¡Simulación guardada con éxito en el historial!\nRuta: build/results/${currentStagingFolder}`);
+
+    } catch (err) {
+      alert(`Error al guardar la simulación:\n${err.message}`);
+      btnSaveStaging.disabled = false;
+      btnSaveStaging.textContent = "💾 Guardar Simulación";
+    }
+  });
+
+  // Discard Simulation Button
+  btnDiscardStaging.addEventListener("click", async () => {
+    if (!currentStagingFolder || currentResultsSource === "saved") return;
+
+    const confirmDiscard = confirm(
+      `¿Estás seguro de que deseas descartar y eliminar la simulación temporal "${currentStagingFolder}"?\nEsta acción no se puede deshacer.`
+    );
+    if (!confirmDiscard) return;
+
+    btnDiscardStaging.disabled = true;
+    btnDiscardStaging.textContent = "Descartando...";
+
+    try {
+      const res = await fetch("/api/results/discard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_name: currentStagingFolder })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      // Reset state and switch to tab 1
+      currentStagingFolder = null;
+      stagingFolderName.textContent = "Ninguna simulación activa";
+      stagingSaveStatus.textContent = "(No guardada)";
+      btnSaveStaging.disabled = true;
+      btnDiscardStaging.disabled = true;
+      btnDiscardStaging.textContent = "🗑️ Descartar";
+      stagingCustomLabel.value = "";
+      tab2Badge.classList.add("hidden");
+
+      if (chronoCanvas) chronoCanvas.loadData({ num_gpus: 0, tracks: [] });
+      if (packetFlightCanvas) packetFlightCanvas.loadData({ packets: [] });
+
+      alert("Simulación temporal descartada correctamente.");
+      switchTab("tab-config");
+
+    } catch (err) {
+      alert(`Error al descartar simulación:\n${err.message}`);
+      btnDiscardStaging.disabled = false;
+      btnDiscardStaging.textContent = "🗑️ Descartar";
+    }
+  });
+
+  // =========================================================================
+  // Initialization
+  // =========================================================================
+  initCanvases();
   updateDynamicControls();
 
   // Initial check on page load to see if staging exists
+  fetch("/api/results/active")
+    .then(r => r.json())
+    .then(data => {
+      if (data.active && data.folder_name) {
+        currentStagingFolder = data.folder_name;
+        currentResultsSource = data.source || "staging";
+        loadResultsData(currentResultsSource, currentStagingFolder);
+      }
+    })
+    .catch(() => {});
+
   fetch("/api/status")
     .then(r => r.json())
     .then(data => {
@@ -547,13 +966,6 @@ document.addEventListener("DOMContentLoaded", () => {
         updateLiveStatus("running");
         startTimer();
         startPolling();
-      } else if (data.status === "completed" && data.staging_folder_name) {
-        currentStagingFolder = data.staging_folder_name;
-        tab2Badge.classList.remove("hidden");
-        stagingFolderName.textContent = currentStagingFolder;
-        stagingSaveStatus.textContent = "(No guardada)";
-        btnSaveStaging.disabled = false;
-        btnDiscardStaging.disabled = false;
       }
     })
     .catch(() => {});

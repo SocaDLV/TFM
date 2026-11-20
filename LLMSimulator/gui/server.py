@@ -2,17 +2,26 @@
 """
 HTTP Server and REST API for LLM-NoC Co-Simulation Workbench.
 Uses Python's standard library ThreadingHTTPServer.
+Handles simulation lifecycle, live status polling, and Phase 2 on-the-fly
+analysis endpoints (summary KPIs, GPU chronogram, packet tracking, save/discard).
 """
 
 import json
 import os
 import sys
+import shutil
 import mimetypes
+from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 from gui.sim_runner import runner_instance
+from gui.trace_parser import (
+    get_simulation_summary,
+    get_chronogram_data,
+    get_packet_tracking_data
+)
 
 
 class WorkbenchAPIHandler(BaseHTTPRequestHandler):
@@ -20,7 +29,10 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         self.gui_dir = Path(__file__).resolve().parent
+        self.base_dir = self.gui_dir.parent
         self.static_dir = self.gui_dir / "static"
+        self.staging_root = self.base_dir / "build" / "tmp_staging"
+        self.results_root = self.base_dir / "build" / "results"
         super().__init__(*args, **kwargs)
 
     def log_message(self, format, *args):
@@ -59,13 +71,45 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
         """Routes GET requests to API or static files."""
         self._handle_get(send_body=True)
 
+    def _resolve_simulation_dir(self, source, folder_name):
+        """Resolves the physical directory for a simulation in staging or results."""
+        if source == "staging":
+            if not self.staging_root.exists():
+                return None
+            if not folder_name:
+                subdirs = [p for p in self.staging_root.iterdir() if p.is_dir()]
+                return subdirs[0] if subdirs else None
+            target = self.staging_root / folder_name
+            return target if target.exists() else None
+        elif source == "saved":
+            if not self.results_root.exists() or not folder_name:
+                return None
+            target = self.results_root / folder_name
+            return target if target.exists() else None
+        else:
+            # Auto-detect: check staging first, then results
+            if self.staging_root.exists():
+                if folder_name and (self.staging_root / folder_name).exists():
+                    return self.staging_root / folder_name
+                subdirs = [p for p in self.staging_root.iterdir() if p.is_dir()]
+                if subdirs and not folder_name:
+                    return subdirs[0]
+
+            if self.results_root.exists() and folder_name:
+                target = self.results_root / folder_name
+                if target.exists():
+                    return target
+            return None
+
     def _handle_get(self, send_body=True):
         parsed = urlparse(self.path)
         path = parsed.path
+        query = parse_qs(parsed.query)
 
-        # REST API Routes
+        # ---------------------------------------------------------------------
+        # REST API Routes: Phase 1
+        # ---------------------------------------------------------------------
         if path == "/api/status":
-            query = parse_qs(parsed.query)
             offset = 0
             if "offset" in query:
                 try:
@@ -85,7 +129,94 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 self.wfile.write(data)
             return
 
+        # ---------------------------------------------------------------------
+        # REST API Routes: Phase 2 (Results & Timelines)
+        # ---------------------------------------------------------------------
+        if path == "/api/results/active":
+            has_active = False
+            folder_name = None
+            staging_path = None
+            if self.staging_root.exists():
+                subdirs = [p for p in self.staging_root.iterdir() if p.is_dir()]
+                if subdirs:
+                    has_active = True
+                    folder_name = subdirs[0].name
+                    staging_path = str(subdirs[0])
+
+            self._send_json(200, {
+                "active": has_active,
+                "has_active": has_active,
+                "source": "staging" if has_active else None,
+                "status": "unsaved" if has_active else "none",
+                "folder": folder_name,
+                "folder_name": folder_name,
+                "staging_path": staging_path
+            })
+            return
+
+        if path == "/api/results/summary":
+            source = query.get("source", ["staging"])[0]
+            folder_name = query.get("folder", [None])[0]
+            target_dir = self._resolve_simulation_dir(source, folder_name)
+
+            if not target_dir:
+                self._send_error(404, f"Simulación no encontrada en {source}: {folder_name or '(activa)'}")
+                return
+
+            try:
+                summary = get_simulation_summary(target_dir)
+                self._send_json(200, {"success": True, "source": source, **summary})
+            except Exception as e:
+                self._send_error(500, f"Error al generar resumen de simulación: {e}")
+            return
+
+        if path == "/api/results/chronogram":
+            source = query.get("source", ["staging"])[0]
+            folder_name = query.get("folder", [None])[0]
+            target_dir = self._resolve_simulation_dir(source, folder_name)
+
+            if not target_dir:
+                self._send_error(404, f"Simulación no encontrada en {source}: {folder_name or '(activa)'}")
+                return
+
+            try:
+                chrono_data = get_chronogram_data(target_dir)
+                self._send_json(200, {"success": True, "source": source, "folder": target_dir.name, **chrono_data})
+            except Exception as e:
+                self._send_error(500, f"Error al generar cronograma de simulación: {e}")
+            return
+
+        if path == "/api/results/packets":
+            source = query.get("source", ["staging"])[0]
+            folder_name = query.get("folder", [None])[0]
+            target_dir = self._resolve_simulation_dir(source, folder_name)
+
+            if not target_dir:
+                self._send_error(404, f"Simulación no encontrada en {source}: {folder_name or '(activa)'}")
+                return
+
+            try:
+                offset = int(query.get("offset", [0])[0])
+            except ValueError:
+                offset = 0
+
+            try:
+                limit = int(query.get("limit", [150])[0])
+            except ValueError:
+                limit = 150
+
+            regime = query.get("regime", ["custom"])[0]
+
+            try:
+                packet_data = get_packet_tracking_data(target_dir, offset=offset, limit=limit, regime=regime)
+                self._send_json(200, {"success": True, "source": source, "folder": target_dir.name, **packet_data})
+            except Exception as e:
+                self._send_error(500, f"Error al parsear seguimiento de paquetes: {e}")
+            return
+
+        # ---------------------------------------------------------------------
         # Static Assets Serving
+        # ---------------------------------------------------------------------
         if path in ["/", "/index.html"]:
             file_path = self.static_dir / "index.html"
         elif path.startswith("/static/"):
@@ -132,6 +263,9 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        # ---------------------------------------------------------------------
+        # POST: Phase 1 Lifecycle
+        # ---------------------------------------------------------------------
         if path == "/api/run":
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length == 0:
@@ -162,6 +296,94 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 self._send_json(200, {"success": True, **res})
             except Exception as e:
                 self._send_error(500, f"Error al abortar simulación: {e}")
+            return
+
+        # ---------------------------------------------------------------------
+        # POST: Phase 2 Save and Discard
+        # ---------------------------------------------------------------------
+        elif path == "/api/results/save":
+            content_length = int(self.headers.get("Content-Length", 0))
+            payload = {}
+            if content_length > 0:
+                try:
+                    payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+
+            folder_name = payload.get("folder") or payload.get("folder_name")
+            label = payload.get("label", "").strip()
+
+            target_staging = self._resolve_simulation_dir("staging", folder_name)
+            if not target_staging or not target_staging.exists():
+                self._send_error(404, f"No se encontró carpeta en staging para guardar: {folder_name or '(activa)'}")
+                return
+
+            try:
+                # Escribir gui_metadata.json dentro de la carpeta
+                meta_file = target_staging / "gui_metadata.json"
+                metadata = {
+                    "folder_name": target_staging.name,
+                    "label": label,
+                    "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                with open(meta_file, "w", encoding="utf-8") as f:
+                    json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+                # Mover carpeta de tmp_staging a results
+                self.results_root.mkdir(parents=True, exist_ok=True)
+                dest = self.results_root / target_staging.name
+                if dest.exists():
+                    shutil.rmtree(dest)
+
+                shutil.move(str(target_staging), str(dest))
+
+                self._send_json(200, {
+                    "success": True,
+                    "status": "saved",
+                    "folder": dest.name,
+                    "saved_folder_name": dest.name,
+                    "folder_name": dest.name,
+                    "saved_path": str(dest),
+                    "label": label
+                })
+            except Exception as e:
+                self._send_error(500, f"Error al guardar simulación en resultados: {e}")
+            return
+
+        elif path == "/api/results/discard":
+            content_length = int(self.headers.get("Content-Length", 0))
+            payload = {}
+            if content_length > 0:
+                try:
+                    payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                except Exception:
+                    pass
+
+            folder_name = payload.get("folder") or payload.get("folder_name")
+
+            try:
+                if self.staging_root.exists():
+                    if folder_name:
+                        target = self.staging_root / folder_name
+                        if target.exists():
+                            if target.is_dir():
+                                shutil.rmtree(target)
+                            else:
+                                target.unlink()
+                    else:
+                        for item in self.staging_root.iterdir():
+                            if item.is_dir():
+                                shutil.rmtree(item)
+                            else:
+                                item.unlink()
+
+                self._send_json(200, {
+                    "success": True,
+                    "status": "discarded",
+                    "message": "Simulación descartada con éxito."
+                })
+            except Exception as e:
+                self._send_error(500, f"Error al descartar simulación en staging: {e}")
             return
 
         else:

@@ -289,22 +289,23 @@
       </div>
     </section>
 
-    <!-- PESTAÑA 2: RESULTADOS Y LÍNEAS DE TIEMPO (PREPARADA PARA FASE 2) -->
+    <!-- PESTAÑA 2: RESULTADOS Y LÍNEAS DE TIEMPO (FASE 2) -->
     <section id="tab-results" class="tab-pane">
-      <!-- Banner Contextual de Staging -->
+      <!-- Banner Contextual de Guardado Selectivo -->
       <div id="staging-banner" class="staging-banner">
         <div class="staging-info">
-          <span class="staging-badge">Área Temporal</span>
-          <span id="staging-folder-name" class="staging-name">Ninguna simulación activa en staging</span>
+          <span id="staging-badge-pill" class="staging-badge">Área Temporal</span>
+          <span id="staging-folder-name" class="staging-name">Ninguna simulación activa</span>
           <span id="staging-save-status" class="staging-unsaved">(No guardada)</span>
         </div>
         <div class="staging-actions">
-          <button id="btn-save-staging" class="btn-sm btn-success" disabled>💾 Guardar en Resultados</button>
+          <input type="text" id="staging-custom-label" class="form-control staging-label-input" placeholder="Etiqueta opcional (ej: Torus TP=2 Baseline)">
+          <button id="btn-save-staging" class="btn-sm btn-success" disabled>💾 Guardar Simulación</button>
           <button id="btn-discard-staging" class="btn-sm btn-outline-danger" disabled>🗑️ Descartar</button>
         </div>
       </div>
 
-      <!-- Tarjetas KPI Resumen -->
+      <!-- Tarjetas KPI Resumen (7 Métricas Arquitectónicas) -->
       <div class="kpi-grid">
         <div class="kpi-card">
           <div class="kpi-label">Tiempo de Muro (Wall-Clock)</div>
@@ -312,56 +313,141 @@
           <div class="kpi-sub">Duración total de inferencia</div>
         </div>
         <div class="kpi-card">
+          <div class="kpi-label">Cómputo GPU</div>
+          <div id="kpi-compute" class="kpi-value">-- ns</div>
+          <div id="kpi-compute-sub" class="kpi-sub">-- % del tiempo total</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Tránsito NoC Puro</div>
+          <div id="kpi-transit" class="kpi-value">-- ns</div>
+          <div id="kpi-transit-sub" class="kpi-sub">-- % del tiempo total</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Stalls de Barrera</div>
+          <div id="kpi-stalls" class="kpi-value">-- ns</div>
+          <div id="kpi-stalls-sub" class="kpi-sub">-- % del tiempo total</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">Tasa Inyección Real (&lambda;)</div>
+          <div id="kpi-lambda" class="kpi-value">-- f/c/nodo</div>
+          <div class="kpi-sub">Tráfico efectivo inyectado</div>
+        </div>
+        <div class="kpi-card">
           <div class="kpi-label">Latencia Media de Flit</div>
           <div id="kpi-flit-lat" class="kpi-value">-- ciclos</div>
           <div class="kpi-sub">BookSim2 NoC average</div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Total Paquetes Transmitidos</div>
+          <div class="kpi-label">Total Paquetes / Flits</div>
           <div id="kpi-total-pkts" class="kpi-value">-- pkts</div>
-          <div class="kpi-sub">Inyecciones colectivas MoE/TP</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Retardo Medio en Colas NIC</div>
-          <div id="kpi-queue-delay" class="kpi-value">-- ciclos</div>
-          <div class="kpi-sub">Contención por créditos / in-cast</div>
+          <div id="kpi-total-flits-sub" class="kpi-sub">-- flits transmitidos</div>
         </div>
       </div>
 
-      <!-- Placeholder para Líneas de Tiempo Interactivas Canvas (Fase 2) -->
-      <div class="timeline-container-card">
-        <div class="timeline-card-header">
-          <div class="card-icon">⏱️</div>
-          <div>
-            <h3>Cronograma Causal GPU Ciclo a Ciclo (HTML5 Canvas)</h3>
-            <p class="card-subtitle">Renderizado interactivo de barras con zoom, pan y tooltip (Fase 2)</p>
+      <!-- Selector de Sub-vistas Interactivas -->
+      <div class="subviews-nav">
+        <button id="btn-subview-chrono" class="subview-btn active">
+          <span>📊</span>
+          <span>Cronograma GPU Ciclo a Ciclo</span>
+        </button>
+        <button id="btn-subview-packets" class="subview-btn">
+          <span>🛰️</span>
+          <span>Visualizador de Paquetes NoC en Vuelo</span>
+        </button>
+      </div>
+
+      <!-- Sub-vista A: Cronograma GPU Ciclo a Ciclo -->
+      <div id="subview-chrono-container" class="timeline-container-card">
+        <div class="timeline-toolbar">
+          <div class="toolbar-left">
+            <span class="toolbar-label">Ventana:</span>
+            <div class="btn-group">
+              <button class="btn-preset btn-sm" data-preset="10">10 µs</button>
+              <button class="btn-preset btn-sm active" data-preset="20">20 µs</button>
+              <button class="btn-preset btn-sm" data-preset="50">50 µs</button>
+              <button class="btn-preset btn-sm" data-preset="100">100 µs</button>
+              <button class="btn-preset btn-sm" data-preset="250">250 µs</button>
+              <button class="btn-preset btn-sm" data-preset="all">Total</button>
+            </div>
+            <div class="btn-group zoom-group">
+              <button id="btn-chrono-zoom-in" class="btn-sm" title="Acercar (Zoom In)">➕</button>
+              <button id="btn-chrono-zoom-out" class="btn-sm" title="Alejar (Zoom Out)">➖</button>
+              <button id="btn-chrono-zoom-reset" class="btn-sm" title="Restablecer">↺</button>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="chrono-window-info" class="window-info-text">Ventana: -- µs</span>
           </div>
         </div>
-        <div class="canvas-placeholder">
-          <div class="placeholder-content">
-            <div class="placeholder-icon">📊</div>
-            <p><strong>Lienzo interactivo preparado para la Fase 2</strong></p>
-            <p class="placeholder-hint">Visualizará Atención (verde), Scatter/Gather (azul), AllReduce (morado) y Stalls (rojo) renderizados directamente en el navegador.</p>
-          </div>
+
+        <!-- Canvas Wrapper & Tooltip -->
+        <div class="canvas-wrapper">
+          <canvas id="chronogram-canvas" height="420"></canvas>
+          <div id="chronogram-tooltip" class="timeline-tooltip hidden"></div>
+        </div>
+
+        <!-- Scrubber Slider -->
+        <div class="scrubber-row">
+          <span class="scrubber-label">Navegación Temporal:</span>
+          <input type="range" id="chronogram-scrubber" min="0" max="1000" value="0" class="slider-control">
+          <span id="chrono-scrubber-pos" class="scrubber-pos-text">0.00 µs</span>
+        </div>
+
+        <div class="canvas-legend">
+          <span class="legend-item"><span class="legend-dot dot-calc"></span> Cómputo / Atención (verde)</span>
+          <span class="legend-item"><span class="legend-dot dot-scatter"></span> MoE Scatter (azul)</span>
+          <span class="legend-item"><span class="legend-dot dot-gather"></span> MoE Gather (azul oscuro)</span>
+          <span class="legend-item"><span class="legend-dot dot-allreduce"></span> Ring-AllReduce (morado)</span>
+          <span class="legend-item"><span class="legend-dot dot-stall"></span> Stall de Sincronización (rojo)</span>
+          <span class="legend-hint">💡 Rueda de ratón para Zoom | Arrastra para Panorámica horizontal | Pasa el cursor para detalles</span>
         </div>
       </div>
 
-      <div class="timeline-container-card">
-        <div class="timeline-card-header">
-          <div class="card-icon">📦</div>
-          <div>
-            <h3>Visualizador de Paquetes NoC en Vuelo (BookSim2 Canvas)</h3>
-            <p class="card-subtitle">Seguimiento de colas, retardo de vuelo y flits ciclo a ciclo (Fase 2)</p>
+      <!-- Sub-vista B: Visualizador de Paquetes NoC en Vuelo -->
+      <div id="subview-packets-container" class="timeline-container-card hidden">
+        <div class="timeline-toolbar">
+          <div class="toolbar-left">
+            <span class="toolbar-label">Régimen Congestión:</span>
+            <div class="btn-group">
+              <button id="btn-regime-free" class="btn-sm">Fase Libre</button>
+              <button id="btn-regime-medium" class="btn-sm">Congestión Media (P50)</button>
+              <button id="btn-regime-critical" class="btn-sm">Congestión Crítica (Pico)</button>
+            </div>
+            <div class="limit-selector">
+              <label for="packets-limit-select">Paquetes:</label>
+              <select id="packets-limit-select" class="form-control select-sm">
+                <option value="50">50</option>
+                <option value="100" selected>100</option>
+                <option value="150">150</option>
+                <option value="250">250</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <span id="packets-page-info" class="window-info-text">Mostrando paquetes --</span>
           </div>
         </div>
-        <div class="canvas-placeholder">
-          <div class="placeholder-content">
-            <div class="placeholder-icon">🛰️</div>
-            <p><strong>Visualizador de paquetes preparado para la Fase 2</strong></p>
-            <p class="placeholder-hint">Inspección temporal flit a flit de `packet_tracking_debug.csv` con control de reproducción y filtrado por nodo.</p>
-          </div>
+
+        <!-- Canvas Wrapper & Tooltip -->
+        <div class="canvas-wrapper">
+          <canvas id="packets-canvas" height="480"></canvas>
+          <div id="packets-tooltip" class="timeline-tooltip hidden"></div>
+        </div>
+
+        <!-- Scrubber Slider -->
+        <div class="scrubber-row">
+          <span class="scrubber-label">Desplazamiento PID:</span>
+          <input type="range" id="packets-scrubber" min="0" max="1000" value="0" class="slider-control">
+          <span id="packets-scrubber-pos" class="scrubber-pos-text">PID #0</span>
+        </div>
+
+        <div class="canvas-legend">
+          <span class="legend-item"><span class="legend-dot dot-queue"></span> Retardo en Cola NIC (naranja)</span>
+          <span class="legend-item"><span class="legend-dot dot-flight"></span> Travesía NoC / Vuelo (azul)</span>
+          <span class="legend-hint">💡 Cada barra representa el ciclo de vida completo de un paquete (Creación ➔ Inyección ➔ Recepción)</span>
         </div>
       </div>
+
     </section>
 
     <!-- PESTAÑA 3: HISTORIAL Y COMPARATIVA (PREPARADA PARA FASE 3) -->
@@ -448,6 +534,7 @@
     </div>
   </div>
 
+  <script src="timeline_canvas.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
