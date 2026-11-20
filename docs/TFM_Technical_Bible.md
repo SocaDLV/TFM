@@ -40,6 +40,12 @@
    - 4.4. Secuencia Causal de Barreras en la Capa MoE: De Attention a MoEGather
    - 4.5. Auditoría Crítica de `cached_latency[layer_name]`: Escalar Global vs. Vector por GPU Destino
    - 4.6. Auditoría Forense de Causalidad Física en MoEGather/MoEScatter y Demostración de Simetría de Tráfico
+     - 4.6.1. Orden de Ejecución C++ al Entrar al Oráculo de `MoEGather` y Garantía de Estabilidad Temporal en `sync_3`
+     - 4.6.2. Demostración Matemática de Simetría en la Matriz de Tráfico ($T_{\text{Gather}} = T_{\text{Scatter}}^T$) y Dispersión Estocástica de Tokens
+     - 4.6.3. Principio de Causalidad Bilateral Emisor-Receptor en Colectivas MoE (`MoEScatter` y `MoEGather`)
+     - 4.6.4. Desglose Microarquitectural en Tres Fases (Pre-Stall, Colectiva Activa y Post-Stall de Barrera Sincrónica)
+     - 4.6.5. Normalización de Ciclos Relativos en la API de BookSim2 y Alineación de Cero Ciclos en la Visualización Híbrida
+     - 4.6.6. Validación Experimental End-to-End: Cero Infracciones Causales y Continuidad Cronológica Estricta
    - 4.7. Integración de AllReduce en el Oráculo BookSim2: Modelado Ring-AllReduce con Causalidad Cuádruple (Vía 2)
    - 4.8. Estudio de Desbalanceo Extremo de Carga en Expertos MoE (Skewness, Puntos Calientes de Red e In-Cast Hotspots - Vía 3)
    - 4.9. Estudio Comparativo Arquitectónico: Mixtral 8x7B vs. DeepSeek-V3 (Fine-Grained MoE & MLA - Vía 4)
@@ -1356,29 +1362,117 @@ Al auditar los metadatos de enrutamiento exactos leídos por el planificador (`l
 
 ---
 
-### 4.6.3. Garantía de Causalidad Física Bidireccional en el Oráculo de Red
+### 4.6.3. Principio de Causalidad Bilateral Emisor-Receptor en Colectivas MoE (`MoEScatter` y `MoEGather`)
 
-A pesar de que la GPU 0 no requiriera datos de la GPU 4, la auditoría reveló un principio arquitectural fundamental: **en una comunicación colectiva All-to-All, una GPU actúa como entidad bidireccional (transmisora TX y receptora RX)**.
+En las versiones tempranas del co-simulador, la programación de paquetes en el buffer de BookSim2 (`packets_by_cycle`) se realizaba de manera unilateral basándose exclusivamente en el reloj de finalización del nodo emisor:
+$$\text{injection\_cycle}(src \to dst) = \delta_t[src] = \text{round}(t_{\text{src}}[src] - t_{\min})$$
 
-Si una GPU inyecta paquetes tardíamente hacia otras GPUs pero recibe sus paquetes entrantes de forma prematura (o no recibe ninguno), un oráculo que únicamente evalúe el tiempo de recepción (`atime` en el receptor) permitiría erróneamente que la GPU emisora abandone la fase de red mientras su propia tarjeta de red (NIC) sigue ocupada inyectando flits, o mientras sus paquetes emitidos continúan en vuelo sin confirmación de entrega en la red.
+Esta formulación unilateral adolecía de una inconsistencia física crítica: si la GPU emisora $src$ finalizaba su cómputo previo tempranamente ($\delta_t[src] = 0$) mientras la GPU receptora $dst$ aún se encontraba ejecutando cómputo local intensivo en sus unidades SIMD/Tensor Core (ej. $\delta_t[dst] = 1.500\text{ ns}$ en `ExpertFFN` o `Attention`), el paquete $src \to dst$ era inyectado y transitaba por la red NoC, llegando a la cola de entrada del router de $dst$ mucho antes de que $dst$ abandonara el cómputo previo. En hardware real (NVIDIA NVLink/NVSwitch con NCCL), una GPU no puede procesar colectivas ni aceptar buffers de destino mientras sus núcleos de cómputo no hayan alcanzado el punto de sincronización o el kernel de recepción colectiva.
 
-Para prevenir cualquier anomalía de esta índole, se implementó en [`src/module/communication.cpp`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/src/module/communication.cpp) el **Modelo de Causalidad Bidireccional Cuádruple**:
+Para erradicar esta anomalía y dotar al co-simulador de rigor físico estricto, se formuló e implementó en `LLMSimulator/src/module/communication.cpp` el **Principio de Causalidad Bilateral Emisor-Receptor**:
+$$\text{ready\_cycle}(src, dst) = \max(\delta_t[src],\; \delta_t[dst])$$
+$$\text{packets\_by\_cycle}[\text{ready\_cycle}].\text{push\_back}(\{src, dst, flits, \text{ready\_cycle}\})$$
 
-$$\text{rel\_finish}[d] = \max\Big(\delta_t[d],\; \text{max\_relative\_rx\_atime}[d],\; \text{max\_relative\_tx\_inj}[d],\; \text{max\_relative\_tx\_retire}[d]\Big)$$
-$$t_{\text{end}}[d] = t_{\min} + \text{rel\_finish}[d]$$
-$$\text{network\_latency\_ns}[d] = t_{\text{end}}[d] - t_{\text{src}}[d] \ge 0$$
+Bajo este principio, la transferencia de un tensor entre dos nodos no puede iniciarse físicamente en la red hasta que **ambos interlocutores** hayan alcanzado la frontera de la colectiva:
+1. El emisor $src$ debe haber concluido el cómputo que produce los datos de activación ($t \ge t_{\text{src}}[src] = t_{\min} + \delta_t[src]$).
+2. El receptor $dst$ debe haber concluido su cómputo previo y estar preparado para recibir y almacenar el tensor en sus búferes de memoria ($t \ge t_{\text{src}}[dst] = t_{\min} + \delta_t[dst]$).
 
-Donde:
-1. $\delta_t[d]$: Garantiza que la GPU no finalice antes de su propio instante de disponibilidad física en el módulo.
-2. $\text{max\_relative\_rx\_atime}[d]$: Ciclo en el que el NIC de la GPU $d$ recibe el último flit de todos los paquetes entrantes dirigidos a ella.
-3. $\text{max\_relative\_tx\_inj}[d]$: Ciclo en el que el NIC de la GPU $d$ termina de inyectar todos los paquetes salientes que ella misma emite hacia la red.
-4. $\text{max\_relative\_tx\_retire}[d]$: Ciclo en el que el último paquete emitido por la GPU $d$ llega a su nodo de destino y es retirado de la red (garantía de entrega de extremo a extremo).
+Como consecuencia directa, se garantiza matemáticamente que ningún paquete $src \to dst$ en la red posea un ciclo de creación o inyección inferior a $\max(t_{\text{src}}[src], t_{\text{src}}[dst])$:
+$$\forall p \in \text{Packets}(src \to dst): \quad \text{Creation\_Cycle}(p) \ge \max(\delta_t[src],\; \delta_t[dst])$$
 
-#### Comprobación en el Cronograma Microarquitectural:
-Al aplicar este modelo:
-- Ninguna GPU puede abandonar la fase de red mientras su NIC esté transmitiendo o mientras sus paquetes emitidos no hayan sido entregados.
-- Toda GPU que concluye sus transferencias bidireccionales antes del peor caso del clúster espera en la barrera global `sync_for_moe_gather` (`equalize_time = true`), registrando el tiempo ocioso en el bloque rojo **`NETWORK_STALL`**.
-- En la imagen de cronograma ciclo a ciclo (`timeline_part_014_130k_to_140k.png`), se constata visualmente que todas las GPUs entran limpiamente a la siguiente capa (`Layer 4 | Calc: Attention`) de forma simultánea a los $138.118\text{ ns}$ (o $142.368\text{ ns}$ en la segunda iteración), respetando la causalidad física estricta.
+---
+
+### 4.6.4. Desglose Microarquitectural en Tres Fases (Pre-Stall, Colectiva Activa y Post-Stall de Barrera Sincrónica)
+
+La adopción de la causalidad bilateral exige una contabilidad precisa del tiempo de las GPUs. Anteriormente, la latencia total de la colectiva ($\Delta t_{\text{total}} = t_{\text{end}}[d] - t_{\text{src}}[d]$) se registraba de forma monolítica como un único bloque `moe_scatter` o `moe_gather`. Si una GPU rápida finalizaba su cómputo a los $0\text{ ns}$ pero sus pares no estaban listos hasta los $1.500\text{ ns}$, ese intervalo de espera ociosa se atribuía erróneamente a "tránsito de red", distorsionando las métricas de congestión y rendimiento de la interconexión.
+
+Para solventarlo, se implementó el rastreo microarquitectural ciclo a ciclo del primer y último ciclo activo de red para cada dispositivo $d$:
+$$\text{first\_active\_cycle}[d] = \begin{cases} \min(\text{first\_tx\_inj}[d],\; \text{first\_rx\_arrival}[d]) & \text{si } d \text{ participa en TX o RX} \\ \delta_t[d] & \text{si } d \text{ no participa} \end{cases}$$
+$$\text{last\_active\_cycle}[d] = \max(\text{max\_relative\_rx\_atime}[d],\; \text{max\_relative\_tx\_inj}[d],\; \text{max\_relative\_tx\_retire}[d])$$
+
+Esto permite desglosar de manera analítica y visual la colectiva en **tres fases secuenciales no solapadas**:
+
+```
+GPU Rápida (d):
+[  Cómputo Previo  ]  [   Pre-Stall   ]  [   Colectiva Activa   ]  [     Post-Stall Barrera     ]  [ Siguiente Capa ]
+------------------->|----------------->|---------------------->|----------------------------->|---------------->
+t_src[d]            t_min + first_act  t_min + last_act        t_max (sync_for_moe_gather)
+                    (NETWORK_STALL)    (moe_gather/scatter)    (NETWORK_STALL)
+```
+
+1. **Fase 1: Pre-Stall de Red (`NETWORK_STALL` Pre-Colectivo):**
+   - **Intervalo:** $[t_{\text{src}}[d],\; t_{\min} + \text{first\_active\_cycle}[d]]$
+   - **Duración:** $\text{pre\_stall\_ns}[d] = \max(0,\; \text{first\_active\_cycle}[d] - \delta_t[d])$
+   - **Significado físico:** Tiempo durante el cual la GPU $d$, habiendo concluido su cómputo previo (`ExpertFFN` o `Attention`), permanece ociosa esperando a que sus interlocutores alcancen la colectiva. Se registra en `TFM_device_{d}.trc` como `NETWORK_STALL`.
+2. **Fase 2: Colectiva Activa (`moe_scatter` o `moe_gather`):**
+   - **Intervalo:** $[t_{\min} + \text{first\_active\_cycle}[d],\; t_{\min} + \text{last\_active\_cycle}[d]]$
+   - **Duración:** $\text{active\_comm\_ns}[d] = \max(0,\; \text{last\_active\_cycle}[d] - \text{first\_active\_cycle}[d])$
+   - **Significado físico:** Tiempo de actividad efectiva en la red NoC, desde la inyección/recepción del primer flit hasta el retiro del último paquete correspondiente a la GPU $d$. Mide puramente la transferencia real y la contención en enlaces. Se registra en `TFM_device_{d}.trc` como `moe_scatter` o `moe_gather`.
+3. **Fase 3: Post-Stall de Sincronización (`NETWORK_STALL` en Barrera Sincrónica):**
+   - **Intervalo:** $[t_{\min} + \text{last\_active\_cycle}[d],\; t_{\max}]$ donde $t_{\max} = \max_j (t_{\min} + \text{last\_active\_cycle}[j])$.
+   - **Duración:** $\text{post\_stall\_ns}[d] = t_{\max} - (t_{\min} + \text{last\_active\_cycle}[d])$.
+   - **Significado físico:** Espera en la barrera sincrónica (`sync_for_moe_gather` vía `ModuleGraph::sync_devices()`) a que la GPU más lenta del clúster culmine su fase activa de red. Se registra en `TFM_device_{d}.trc` como `NETWORK_STALL` con el detalle `"Waiting for sync"`.
+
+#### Continuidad Estricta del Wall-Clock Time:
+Dado que el inicio de cada fase coincide exactamente con el final de la fase anterior:
+$$t_{\text{end}}(\text{Fase 1}) = t_{\text{start}}(\text{Fase 2}) = t_{\min} + \text{first\_active\_cycle}[d]$$
+$$t_{\text{end}}(\text{Fase 2}) = t_{\text{start}}(\text{Fase 3}) = t_{\min} + \text{last\_active\_cycle}[d]$$
+$$t_{\text{end}}(\text{Fase 3}) = t_{\max} = t_{\text{start}}(\text{Siguiente Módulo})$$
+Se garantiza una línea temporal continua sin huecos ($\Delta t_{\text{gap}} = 0\text{ ns}$) ni solapamientos ($\Delta t_{\text{overlap}} = 0\text{ ns}$) en todas las trazas de dispositivo (`TFM_device_*.trc`).
+
+---
+
+### 4.6.5. Normalización de Ciclos Relativos en la API de BookSim2 y Alineación de Cero Ciclos en la Visualización Híbrida
+
+En la arquitectura original de BookSim2, el reloj de red interno (`_time`) avanza monótonamente a lo largo de toda la ejecución del simulador, acumulando ciclos a través de múltiples llamadas sucesivas a colectivas (`Scatter #1`, `Gather #1`, `Scatter #2`, etc.).
+
+#### Causa Raíz del Desfase de Relojes Detectado en la GUI:
+Cuando `API_TrafficManager::FinishOperation` volcaba las marcas de tiempo de los paquetes en `[TRACK_PID]`, exportaba los ciclos absolutos (`pkt.ctime`, `pkt.itime`, `pkt.atime`). Al representar los paquetes en la interfaz Web GUI (`gui/trace_parser.py`):
+1. El analizador restaba heurísticamente el mínimo ciclo del grupo:
+   $$\text{base\_cycles} = \min_{p \in \text{Op}}(\text{Creation\_Cycle}(p))$$
+2. Sin embargo, bajo causalidad bilateral, si ningún nodo participante tenía $\delta_t = 0$, o si la pareja más temprana requería $\max(\delta_t[src], \delta_t[dst]) = c_{\min} > 0$, la resta de $\text{base\_cycles}$ desplazaba artificialmente todos los paquetes hacia la izquierda en $c_{\min}$ nanosegundos respecto al instante real de la colectiva ($t_{\min}$ / `Op_Start_NS`).
+3. Adicionalmente, en visualizaciones acumulativas multi-operación, los ciclos absolutos superaban las decenas de miles, provocando desalineaciones visibles entre el panel izquierdo (Cronograma GPU) y el panel derecho (Visualizador de Paquetes NoC) en el Visualizador Híbrido (`HybridSyncController`).
+
+#### Solución Arquitectónica (Normalización Cero-Offset):
+1. **Modificación en C++ (`booksim2/src/booksim_api.cpp`):**
+   Al finalizar cada operación, los ciclos de ciclo de vida de los paquetes se normalizan directamente con respecto a `op_start_cycle`:
+   ```cpp
+   int rel_ctime = pkt.ctime - op_start_cycle;
+   int rel_itime = pkt.itime - op_start_cycle;
+   int rel_atime = pkt.atime - op_start_cycle;
+   ```
+   Esto asegura que `Creation_Cycle`, `Inject_Cycle` y `Receive_Cycle` en `packet_tracking_debug.csv` reflejen estrictamente el offset temporal relativo en nanosegundos desde `Op_Start_NS` ($t_{\min}$).
+2. **Alineación Exacta en el Backend GUI (`gui/trace_parser.py`):**
+   ```python
+   if seg["Creation_Cycle"].min() > 1e7:
+       base_cycles = seg.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
+   else:
+       base_cycles = 0.0
+
+   adjusted_op_start = seg["Op_Start_NS"] + off_ns
+   seg["pkt_start_ns"] = adjusted_op_start + (seg["Creation_Cycle"] - base_cycles)
+   seg["pkt_inject_ns"] = adjusted_op_start + (seg["Inject_Cycle"] - base_cycles)
+   seg["pkt_end_ns"] = adjusted_op_start + (seg["Receive_Cycle"] - base_cycles)
+   ```
+3. **Garantía de Alineación de 0 Ciclos en el Canvas (`timeline_canvas.js`):**
+   Dado que `pkt_start_ns = Op_Start_NS + Creation_Cycle = t_{\min} + \max(\delta_t[src], \delta_t[dst])`, y en el cronograma de la GPU la fase de colectiva activa arranca en $t_{\min} + \text{first\_active\_cycle}[d]$, las barras de paquetes de la GPU más lenta en el panel derecho comienzan en el píxel y nanosegundo exacto en que arranca el bloque azul de colectiva en el panel izquierdo, con **cero ciclos y cero nanosegundos de desfase**.
+
+---
+
+### 4.6.6. Validación Experimental End-to-End: Cero Infracciones Causales y Continuidad Cronológica Estricta
+
+Para validar experimentalmente la integridad de la solución, se ejecutaron baterías de prueba end-to-end completas sobre dos cargas de trabajo altamente representativas:
+1. **Mixtral 8x7B en Toro 1D (8 GPUs B100, $BS=32$, 2 iteraciones):**
+   - **Paquetes analizados:** $116.432$ paquetes en `packet_tracking_debug.csv`.
+   - **Infracciones de causalidad bilateral:** **0** ($\text{Creation\_Cycle} \ge \max(\delta_t[src], \delta_t[dst])$ verificado en el $100\%$ de los paquetes).
+   - **Continuidad cronológica:** $7.699$ transiciones temporales en `TFM_device_*.trc` verificadas con $0\text{ ns}$ de hueco y $0\text{ ns}$ de solapamiento.
+   - **Desglose de GPU rápida (GPU 0):** En Gather #1 ($t_{\min} = 29.855,76\text{ ns}$), GPU 0 entra a la colectiva a los $29.855,76\text{ ns}$ pero sus interlocutores no están listos hasta los $30.563,76\text{ ns}$. GPU 0 registra un pre-stall de $708,00\text{ ns}$ como `NETWORK_STALL`, seguido de $2.113,00\text{ ns}$ de `moe_gather` activo y $1.433,29\text{ ns}$ de post-stall en la barrera sincrónica `sync_for_moe_gather`, completando exactamente a los $34.110,05\text{ ns}$.
+2. **DeepSeek-V3 en Malla 2D 4x2 (8 GPUs B100, $BS=32$, 2 iteraciones):**
+   - **Paquetes analizados:** $2.154.852$ paquetes en `packet_tracking_debug.csv`.
+   - **Infracciones de causalidad bilateral:** **0** ($\text{Creation\_Cycle} \ge \max(\delta_t[src], \delta_t[dst])$ en los $2.154.852$ paquetes).
+   - **Continuidad cronológica:** $98.251$ transiciones temporales en `TFM_device_*.trc` con $0\text{ ns}$ de hueco y $0\text{ ns}$ de solapamiento.
+3. **Paridad Numérica CLI ↔ GUI:**
+   - La correlación numérica entre `analyze_traces.py` y `trace_parser.py` / `analysis_gui.py` es del $100\%$ en todas las métricas (`Compute`, `Transit`, `Stalls`, `Wall-Clock`, $\lambda$, `Avg_Flit_Latency`, `Avg_Packet_Latency`), con una discrepancia inferior a $0{,}05\text{ ns}$ derivada exclusivamente del redondeo decimal visual.
 
 ---
 

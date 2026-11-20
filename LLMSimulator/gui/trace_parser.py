@@ -1025,6 +1025,13 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", 
             "packets": []
         }
 
+    # Normalización para compatibilidad con trazas legacy con Creation_Cycle absoluto (> 1e7)
+    if not df_active.empty and df_active["Creation_Cycle"].min() > 1e7:
+        base_cycles = df_active.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
+        df_active["Creation_Cycle"] = df_active["Creation_Cycle"] - base_cycles
+        df_active["Inject_Cycle"] = df_active["Inject_Cycle"] - base_cycles
+        df_active["Receive_Cycle"] = df_active["Receive_Cycle"] - base_cycles
+
     # Selección de régimen
     regime = str(regime).lower().strip()
     effective_offset = offset
@@ -1178,8 +1185,13 @@ def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", 
             if seg.empty:
                 continue
 
-            # Calcular ciclo base por colectiva
-            base_cycles = seg.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
+            # Calcular ciclo base por colectiva: si Creation_Cycle ya está normalizado (FinishOperation normalizado),
+            # base_cycles es 0.0 para no desplazar artificialmente los paquetes.
+            # En trazas legacy con ciclos absolutos acumulados (> 1e7), se resta el mínimo.
+            if seg["Creation_Cycle"].min() > 1e7:
+                base_cycles = seg.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
+            else:
+                base_cycles = 0.0
             adjusted_op_start = seg["Op_Start_NS"] + off_ns
 
             seg["pkt_start_ns"] = adjusted_op_start + (seg["Creation_Cycle"] - base_cycles)

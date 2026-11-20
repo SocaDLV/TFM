@@ -348,7 +348,7 @@ class ChronogramCanvas {
       typeName = "Red: Ring-AllReduce";
     } else if (block.block_type === "stall") {
       badgeClass = "badge-stall";
-      typeName = "Stall por Barrera de Sincronización";
+      typeName = "Stall de Red (Espera Causal / Sincronización)";
     }
 
     let boundRow = "";

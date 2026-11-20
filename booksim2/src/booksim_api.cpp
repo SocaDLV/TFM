@@ -61,9 +61,12 @@ public:
         if (debug_pids) {
             for (auto& pkt : current_op_packets) {
                 pkt.op_end_ns = op_end_ns;
+                int rel_ctime = pkt.ctime - op_start_cycle;
+                int rel_itime = pkt.itime - op_start_cycle;
+                int rel_atime = pkt.atime - op_start_cycle;
                 // Formato de exportación: PID,Source,Dest,Creation_Cycle,Inject_Cycle,Receive_Cycle,Total_Latency,Network_Latency,Queueing_Delay,Num_Flits,Size_Bytes,Avg_Flit_Latency,Throughput,Op_Type,Op_Idx,Op_Start_NS,Op_End_NS
                 std::cout << "[TRACK_PID] " << pkt.pid << "," << pkt.src << "," << pkt.dst << "," 
-                          << pkt.ctime << "," << pkt.itime << "," << pkt.atime << "," 
+                          << rel_ctime << "," << rel_itime << "," << rel_atime << "," 
                           << pkt.total_latency << "," << pkt.network_latency << "," << pkt.queueing_delay << ","
                           << pkt.num_flits << "," << pkt.size_bytes << ","
                           << std::fixed << std::setprecision(4)

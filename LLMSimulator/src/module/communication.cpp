@@ -23,6 +23,8 @@ public:
     static std::map<std::string, int> calls_per_module;
     static std::map<std::string, double> cached_latency;
     static std::map<std::string, std::map<int, double>> cached_latency_per_gpu;
+    static std::map<std::string, std::map<int, double>> cached_pre_stall_per_gpu;
+    static std::map<std::string, std::map<int, double>> cached_active_comm_per_gpu;
     static int total_injected;
     static int total_received;
     static bool initialized;
@@ -48,6 +50,8 @@ public:
 std::map<std::string, int> BookSimCoSimManager::calls_per_module;
 std::map<std::string, double> BookSimCoSimManager::cached_latency;
 std::map<std::string, std::map<int, double>> BookSimCoSimManager::cached_latency_per_gpu;
+std::map<std::string, std::map<int, double>> BookSimCoSimManager::cached_pre_stall_per_gpu;
+std::map<std::string, std::map<int, double>> BookSimCoSimManager::cached_active_comm_per_gpu;
 int BookSimCoSimManager::total_injected = 0;
 int BookSimCoSimManager::total_received = 0;
 bool BookSimCoSimManager::initialized = false;
@@ -385,7 +389,8 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
                           if (payload == 0) payload = MTU;
                           int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
                           
-                          packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
+                          int ready_cycle = std::max(delta_t[src], delta_t[dst]);
+                          packets_by_cycle[ready_cycle].push_back({src, dst, flits, ready_cycle});
                           total_packets_to_inject++;
                       }
                   }
@@ -405,14 +410,11 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       int cycles = 0;
       int total_injected = 0;
       int total_received = 0;
-      std::vector<int> max_relative_rx_atime(total_num_device, 0);
-      std::vector<int> max_relative_tx_inj(total_num_device, 0);
-      std::vector<int> max_relative_tx_retire(total_num_device, 0);
-      for (int d = 0; d < total_num_device; d++) {
-          max_relative_rx_atime[d] = delta_t[d];
-          max_relative_tx_inj[d] = delta_t[d];
-          max_relative_tx_retire[d] = delta_t[d];
-      }
+      std::vector<int> first_tx_inj(total_num_device, -1);
+      std::vector<int> max_relative_tx_inj(total_num_device, -1);
+      std::vector<int> first_rx_arrival(total_num_device, -1);
+      std::vector<int> max_relative_rx_atime(total_num_device, -1);
+      std::vector<int> max_relative_tx_retire(total_num_device, -1);
 
       BookSimPacketInfo pkt_info;
       while (total_received < total_packets_to_inject || total_injected < total_packets_to_inject) {
@@ -421,6 +423,9 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
               for (const auto& pkt : it->second) {
                   BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
                   total_injected++;
+                  if (first_tx_inj[pkt.src] < 0) {
+                      first_tx_inj[pkt.src] = cycles;
+                  }
                   if (cycles > max_relative_tx_inj[pkt.src]) {
                       max_relative_tx_inj[pkt.src] = cycles;
                   }
@@ -433,6 +438,9 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
           while (BookSim_CheckReceived(pkt_info)) { 
               total_received++;
               int rel_atime = cycles;
+              if (first_rx_arrival[pkt_info.dst] < 0) {
+                  first_rx_arrival[pkt_info.dst] = rel_atime;
+              }
               if (rel_atime > max_relative_rx_atime[pkt_info.dst]) {
                   max_relative_rx_atime[pkt_info.dst] = rel_atime;
               }
@@ -453,23 +461,45 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       double op_end_ns = t_min + op_latency_ns;
       BookSim_FinishOperation(op_end_ns);
 
-      // Calcular la latencia individual por GPU: max(recepcion, inyeccion saliente, entrega de paquetes enviados)
+      // Calcular para cada GPU: primer ciclo activo, ultimo ciclo activo, pre_stall y active_comm
       for (int d = 0; d < total_num_device; d++) {
-          int rel_finish = delta_t[d];
-          if (max_relative_rx_atime[d] > rel_finish) rel_finish = max_relative_rx_atime[d];
-          if (max_relative_tx_inj[d] > rel_finish) rel_finish = max_relative_tx_inj[d];
-          if (max_relative_tx_retire[d] > rel_finish) rel_finish = max_relative_tx_retire[d];
+          int first_active = delta_t[d];
+          if (first_tx_inj[d] >= 0 && first_rx_arrival[d] >= 0) {
+              first_active = std::min(first_tx_inj[d], first_rx_arrival[d]);
+          } else if (first_tx_inj[d] >= 0) {
+              first_active = first_tx_inj[d];
+          } else if (first_rx_arrival[d] >= 0) {
+              first_active = first_rx_arrival[d];
+          }
 
-          double t_end_d = t_min + (double)rel_finish;
-          double lat = t_end_d - t_src[d];
-          if (lat < 0.0) lat = 0.0;
-          BookSimCoSimManager::cached_latency_per_gpu[layer_name][d] = lat;
+          int last_active = delta_t[d];
+          if (max_relative_rx_atime[d] > last_active) last_active = max_relative_rx_atime[d];
+          if (max_relative_tx_inj[d] > last_active) last_active = max_relative_tx_inj[d];
+          if (max_relative_tx_retire[d] > last_active) last_active = max_relative_tx_retire[d];
+
+          if (last_active < first_active) {
+              last_active = first_active;
+          }
+
+          double pre_stall_ns = 0.0;
+          if (first_active > delta_t[d]) {
+              pre_stall_ns = (double)(first_active - delta_t[d]);
+          }
+          double active_comm_ns = (double)(last_active - first_active);
+          if (active_comm_ns < 0.0) active_comm_ns = 0.0;
+          double total_lat_ns = pre_stall_ns + active_comm_ns;
+
+          BookSimCoSimManager::cached_latency_per_gpu[layer_name][d] = total_lat_ns;
+          BookSimCoSimManager::cached_pre_stall_per_gpu[layer_name][d] = pre_stall_ns;
+          BookSimCoSimManager::cached_active_comm_per_gpu[layer_name][d] = active_comm_ns;
       }
   }
 
   // Cada GPU lee su latencia individualizada
   int my_rank = device->device_total_rank;
-  network_latency_ns = BookSimCoSimManager::cached_latency_per_gpu[layer_name][my_rank];
+  double pre_stall_ns = BookSimCoSimManager::cached_pre_stall_per_gpu[layer_name][my_rank];
+  double active_comm_ns = BookSimCoSimManager::cached_active_comm_per_gpu[layer_name][my_rank];
+  network_latency_ns = pre_stall_ns + active_comm_ns;
 
   // Aplicar latencia al reloj. Esto se guardará de forma NATIVA en el .trc
   if (input->parallel_execution && !device->config.communication_hiding) {
@@ -479,14 +509,26 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       device->status.low_time += network_latency_ns;
     }
   }
-  time_ns start_time = device->status.device_time;
-  device->status.device_time += network_latency_ns;
-  time_ns end_time = device->status.device_time;
 
-  // --- INICIO AÑADIDO PARA LOGGER ---
-  std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
-  device->log_tfm_event(start_time, end_time, layer_name, details);
-  // --- FIN AÑADIDO PARA LOGGER ---
+  time_ns curr_time = device->status.device_time;
+
+  // 1. Registrar NETWORK_STALL pre-colectivo si la GPU esperó a sus interlocutores
+  if (pre_stall_ns > 0.0) {
+    time_ns stall_end = curr_time + pre_stall_ns;
+    std::string stall_details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(pre_stall_ns);
+    device->log_tfm_event(curr_time, stall_end, "NETWORK_STALL", stall_details);
+    curr_time = stall_end;
+  }
+
+  // 2. Registrar colectiva activa (moe_scatter)
+  if (active_comm_ns > 0.0) {
+    time_ns comm_end = curr_time + active_comm_ns;
+    std::string comm_details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(active_comm_ns);
+    device->log_tfm_event(curr_time, comm_end, layer_name, comm_details);
+    curr_time = comm_end;
+  }
+
+  device->status.device_time = curr_time;
 
   // Gestionar el ciclo de vida del Oráculo
   BookSimCoSimManager::calls_per_module[layer_name]++;
@@ -494,6 +536,8 @@ Tensor::Ptr MoEScatter::forward(const Tensor::Ptr input,
       BookSimCoSimManager::calls_per_module[layer_name] = 0;
       BookSimCoSimManager::cached_latency.erase(layer_name);
       BookSimCoSimManager::cached_latency_per_gpu.erase(layer_name);
+      BookSimCoSimManager::cached_pre_stall_per_gpu.erase(layer_name);
+      BookSimCoSimManager::cached_active_comm_per_gpu.erase(layer_name);
       BookSimCoSimManager::total_injected = 0;
       BookSimCoSimManager::total_received = 0;
   }
@@ -595,7 +639,8 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
                           if (payload == 0) payload = MTU;
                           int flits = (payload + HEADER_SIZE + FLIT_SIZE - 1) / FLIT_SIZE;
                           
-                          packets_by_cycle[delta_t[src]].push_back({src, dst, flits, delta_t[src]});
+                          int ready_cycle = std::max(delta_t[src], delta_t[dst]);
+                          packets_by_cycle[ready_cycle].push_back({src, dst, flits, ready_cycle});
                           total_packets_to_inject++;
                       }
                   }
@@ -615,14 +660,11 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       int cycles = 0;
       int total_injected = 0;
       int total_received = 0;
-      std::vector<int> max_relative_rx_atime(total_num_device, 0);
-      std::vector<int> max_relative_tx_inj(total_num_device, 0);
-      std::vector<int> max_relative_tx_retire(total_num_device, 0);
-      for (int d = 0; d < total_num_device; d++) {
-          max_relative_rx_atime[d] = delta_t[d];
-          max_relative_tx_inj[d] = delta_t[d];
-          max_relative_tx_retire[d] = delta_t[d];
-      }
+      std::vector<int> first_tx_inj(total_num_device, -1);
+      std::vector<int> max_relative_tx_inj(total_num_device, -1);
+      std::vector<int> first_rx_arrival(total_num_device, -1);
+      std::vector<int> max_relative_rx_atime(total_num_device, -1);
+      std::vector<int> max_relative_tx_retire(total_num_device, -1);
 
       BookSimPacketInfo pkt_info;
       while (total_received < total_packets_to_inject || total_injected < total_packets_to_inject) {
@@ -631,6 +673,9 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
               for (const auto& pkt : it->second) {
                   BookSim_InjectPacket(pkt.src, pkt.dst, pkt.flits);
                   total_injected++;
+                  if (first_tx_inj[pkt.src] < 0) {
+                      first_tx_inj[pkt.src] = cycles;
+                  }
                   if (cycles > max_relative_tx_inj[pkt.src]) {
                       max_relative_tx_inj[pkt.src] = cycles;
                   }
@@ -643,6 +688,9 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
           while (BookSim_CheckReceived(pkt_info)) {
               total_received++;
               int rel_atime = cycles;
+              if (first_rx_arrival[pkt_info.dst] < 0) {
+                  first_rx_arrival[pkt_info.dst] = rel_atime;
+              }
               if (rel_atime > max_relative_rx_atime[pkt_info.dst]) {
                   max_relative_rx_atime[pkt_info.dst] = rel_atime;
               }
@@ -663,23 +711,45 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       double op_end_ns = t_min + op_latency_ns;
       BookSim_FinishOperation(op_end_ns);
 
-      // Calcular la latencia individual por GPU: max(recepcion, inyeccion saliente, entrega de paquetes enviados)
+      // Calcular para cada GPU: primer ciclo activo, ultimo ciclo activo, pre_stall y active_comm
       for (int d = 0; d < total_num_device; d++) {
-          int rel_finish = delta_t[d];
-          if (max_relative_rx_atime[d] > rel_finish) rel_finish = max_relative_rx_atime[d];
-          if (max_relative_tx_inj[d] > rel_finish) rel_finish = max_relative_tx_inj[d];
-          if (max_relative_tx_retire[d] > rel_finish) rel_finish = max_relative_tx_retire[d];
+          int first_active = delta_t[d];
+          if (first_tx_inj[d] >= 0 && first_rx_arrival[d] >= 0) {
+              first_active = std::min(first_tx_inj[d], first_rx_arrival[d]);
+          } else if (first_tx_inj[d] >= 0) {
+              first_active = first_tx_inj[d];
+          } else if (first_rx_arrival[d] >= 0) {
+              first_active = first_rx_arrival[d];
+          }
 
-          double t_end_d = t_min + (double)rel_finish;
-          double lat = t_end_d - t_src[d];
-          if (lat < 0.0) lat = 0.0;
-          BookSimCoSimManager::cached_latency_per_gpu[layer_name][d] = lat;
+          int last_active = delta_t[d];
+          if (max_relative_rx_atime[d] > last_active) last_active = max_relative_rx_atime[d];
+          if (max_relative_tx_inj[d] > last_active) last_active = max_relative_tx_inj[d];
+          if (max_relative_tx_retire[d] > last_active) last_active = max_relative_tx_retire[d];
+
+          if (last_active < first_active) {
+              last_active = first_active;
+          }
+
+          double pre_stall_ns = 0.0;
+          if (first_active > delta_t[d]) {
+              pre_stall_ns = (double)(first_active - delta_t[d]);
+          }
+          double active_comm_ns = (double)(last_active - first_active);
+          if (active_comm_ns < 0.0) active_comm_ns = 0.0;
+          double total_lat_ns = pre_stall_ns + active_comm_ns;
+
+          BookSimCoSimManager::cached_latency_per_gpu[layer_name][d] = total_lat_ns;
+          BookSimCoSimManager::cached_pre_stall_per_gpu[layer_name][d] = pre_stall_ns;
+          BookSimCoSimManager::cached_active_comm_per_gpu[layer_name][d] = active_comm_ns;
       }
   }
 
   // Cada GPU lee su latencia individualizada
   int my_rank = device->device_total_rank;
-  network_latency_ns = BookSimCoSimManager::cached_latency_per_gpu[layer_name][my_rank];
+  double pre_stall_ns = BookSimCoSimManager::cached_pre_stall_per_gpu[layer_name][my_rank];
+  double active_comm_ns = BookSimCoSimManager::cached_active_comm_per_gpu[layer_name][my_rank];
+  network_latency_ns = pre_stall_ns + active_comm_ns;
 
   if (input->parallel_execution && !device->config.communication_hiding) {
     if (input->isPerformHigh()) {
@@ -688,20 +758,34 @@ TensorVec MoEGather::forward(const TensorVec input_vec,
       device->status.low_time += network_latency_ns;
     }
   }
-  time_ns start_time = device->status.device_time;
-  device->status.device_time += network_latency_ns;
-  time_ns end_time = device->status.device_time;
 
-  // --- INICIO AÑADIDO PARA LOGGER ---
-  std::string details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(network_latency_ns);
-  device->log_tfm_event(start_time, end_time, layer_name, details);
-  // --- FIN AÑADIDO PARA LOGGER ---
+  time_ns curr_time = device->status.device_time;
+
+  // 1. Registrar NETWORK_STALL pre-colectivo si la GPU esperó a sus interlocutores
+  if (pre_stall_ns > 0.0) {
+    time_ns stall_end = curr_time + pre_stall_ns;
+    std::string stall_details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(pre_stall_ns);
+    device->log_tfm_event(curr_time, stall_end, "NETWORK_STALL", stall_details);
+    curr_time = stall_end;
+  }
+
+  // 2. Registrar colectiva activa (moe_gather)
+  if (active_comm_ns > 0.0) {
+    time_ns comm_end = curr_time + active_comm_ns;
+    std::string comm_details = "ProcType:3|Comp_ns:0.000000|Mem_ns:" + std::to_string(active_comm_ns);
+    device->log_tfm_event(curr_time, comm_end, layer_name, comm_details);
+    curr_time = comm_end;
+  }
+
+  device->status.device_time = curr_time;
 
   BookSimCoSimManager::calls_per_module[layer_name]++;
   if (BookSimCoSimManager::calls_per_module[layer_name] == total_num_device) {
       BookSimCoSimManager::calls_per_module[layer_name] = 0;
       BookSimCoSimManager::cached_latency.erase(layer_name);
       BookSimCoSimManager::cached_latency_per_gpu.erase(layer_name);
+      BookSimCoSimManager::cached_pre_stall_per_gpu.erase(layer_name);
+      BookSimCoSimManager::cached_active_comm_per_gpu.erase(layer_name);
       BookSimCoSimManager::total_injected = 0;
       BookSimCoSimManager::total_received = 0;
   }

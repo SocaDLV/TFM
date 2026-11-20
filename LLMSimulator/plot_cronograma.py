@@ -1,4 +1,11 @@
 import os
+import sys
+
+# Asegurar configuración y caché de matplotlib en directorio con permisos de escritura
+os.environ.setdefault('MPLCONFIGDIR', '/tmp/matplotlib_tfm')
+import matplotlib
+matplotlib.use('Agg')
+
 import argparse
 import glob
 import re

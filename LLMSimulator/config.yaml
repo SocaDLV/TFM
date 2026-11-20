@@ -1,5 +1,5 @@
 model:
-  model_name: mixtral
+  model_name: deepseekV3
 
 system:
   gpu_gen: B100
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_4x2dev_mesh_tp2_bs32_20261120_201137/
-  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_4x2dev_mesh_tp2_bs32_20261120_201137/gantt/
+  output_directory: build/results/deepseekV3_4x2dev_mesh_bs32_20261120_212952/
+  gantt_directory: build/results/deepseekV3_4x2dev_mesh_bs32_20261120_212952/gantt/

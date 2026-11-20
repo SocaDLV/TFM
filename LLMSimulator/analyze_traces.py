@@ -129,14 +129,14 @@ def analyze_folder(folder_path, folder_name):
         # 1. Network Transit (Tiempo de vuelo de paquetes flit en BookSim2)
         scatter = df[df['TYPE'].str.contains('scatter', case=False, na=False)]['DURATION'].sum()
         gather = df[df['TYPE'].str.contains('gather', case=False, na=False)]['DURATION'].sum()
-        all_reduce = df[df['TYPE'].str.contains('all_reduce', case=False, na=False)]['DURATION'].sum()
+        all_reduce = df[df['TYPE'].str.contains('all_reduce|allreduce', case=False, na=False)]['DURATION'].sum()
         transit = scatter + gather + all_reduce
 
         # 2. Synchronization Stalls (Espera activa en barreras de sincronización BSP)
         stall = df[df['TYPE'].str.contains('stall', case=False, na=False)]['DURATION'].sum()
 
         # 3. Compute Time (Operaciones matemáticas en la GPU)
-        non_compute_mask = df['TYPE'].str.contains('scatter|gather|stall|all_reduce', case=False, na=False)
+        non_compute_mask = df['TYPE'].str.contains('scatter|gather|stall|all_reduce|allreduce', case=False, na=False)
         compute = df[~non_compute_mask]['DURATION'].sum()
 
         compute_total += compute
