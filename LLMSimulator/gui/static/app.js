@@ -75,6 +75,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const stagingFolderName = document.getElementById("staging-folder-name");
   const stagingSaveStatus = document.getElementById("staging-save-status");
   const iterationSelector = document.getElementById("iteration-selector");
+  const btnUnitCycles = document.getElementById("btn-unit-cycles");
+  const btnUnitTime = document.getElementById("btn-unit-time");
   const stagingCustomLabel = document.getElementById("staging-custom-label");
   const btnSaveStaging = document.getElementById("btn-save-staging");
   const btnDiscardStaging = document.getElementById("btn-discard-staging");
@@ -146,6 +148,9 @@ document.addEventListener("DOMContentLoaded", () => {
   let activeIteration = "last";
   let activeSubview = "chrono";
   let lastChronoData = null;
+  let lastSummaryData = null;
+  let currentSimUnit = "cycles";
+  window.activeSimUnit = "cycles";
 
   // =========================================================================
   // Model Descriptions Database
@@ -627,9 +632,9 @@ document.addEventListener("DOMContentLoaded", () => {
         chronogramCanvasEl,
         chronogramTooltipEl,
         (startNs, endNs, minNs, maxNs) => {
-          const spanUs = (endNs - startNs) / 1000;
-          chronoWindowInfo.textContent = `Ventana: ${(startNs / 1000).toFixed(2)} µs ➔ ${(endNs / 1000).toFixed(2)} µs (${spanUs.toFixed(2)} µs)`;
-          chronoScrubberPos.textContent = `${(startNs / 1000).toFixed(2)} µs`;
+          const span = endNs - startNs;
+          chronoWindowInfo.textContent = `Ventana: ${formatSimUnit(startNs)} ➔ ${formatSimUnit(endNs)} (${formatSimUnit(span, true)})`;
+          chronoScrubberPos.textContent = formatSimUnit(startNs);
 
           const totalSpan = maxNs - minNs;
           const currentSpan = endNs - startNs;
@@ -669,7 +674,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!currentStagingFolder) return { packets: [], total_in_window: 0 };
         const it = iter || activeIteration;
         try {
-          const res = await fetch(`/api/results/packets_window?source=${currentResultsSource}&folder=${currentStagingFolder}&start_ns=${startNs}&end_ns=${endNs}&iteration=${it}&max_packets=450`);
+          const res = await fetch(`/api/results/packets_window?source=${currentResultsSource}&folder=${currentStagingFolder}&start_ns=${startNs}&end_ns=${endNs}&iteration=${it}&max_packets=0`);
           if (!res.ok) return { packets: [], total_in_window: 0 };
           const data = await res.json();
           if (hybridPacketBadge) {
@@ -684,12 +689,12 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       },
       onViewportChange: (startNs, endNs, minNs, maxNs) => {
-        const spanUs = (endNs - startNs) / 1000;
+        const span = endNs - startNs;
         if (hybridWindowInfo) {
-          hybridWindowInfo.textContent = `Ventana: ${(startNs / 1000).toFixed(2)} µs ➔ ${(endNs / 1000).toFixed(2)} µs (${spanUs.toFixed(2)} µs)`;
+          hybridWindowInfo.textContent = `Ventana: ${formatSimUnit(startNs)} ➔ ${formatSimUnit(endNs)} (${formatSimUnit(span, true)})`;
         }
         if (hybridScrubberPos) {
-          hybridScrubberPos.textContent = `${(startNs / 1000).toFixed(2)} µs`;
+          hybridScrubberPos.textContent = formatSimUnit(startNs);
         }
         const currentSpan = endNs - startNs;
         const maxStart = maxNs - currentSpan;
@@ -833,16 +838,93 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function updatePresetLabels() {
+    presetButtons.forEach(btn => {
+      const p = btn.getAttribute("data-preset");
+      if (p === "all") {
+        btn.textContent = "Total";
+      } else {
+        btn.textContent = currentSimUnit === "cycles" ? `${p}k c` : `${p} µs`;
+      }
+    });
+
+    hybridPresetButtons.forEach(btn => {
+      const p = btn.getAttribute("data-preset");
+      if (p === "all") {
+        btn.textContent = "Total";
+      } else {
+        btn.textContent = currentSimUnit === "cycles" ? `${p}k c` : `${p} µs`;
+      }
+    });
+  }
+
+  function setSimUnit(unit) {
+    currentSimUnit = unit;
+    window.activeSimUnit = unit;
+    if (btnUnitCycles && btnUnitTime) {
+      if (unit === "cycles") {
+        btnUnitCycles.classList.add("active");
+        btnUnitTime.classList.remove("active");
+      } else {
+        btnUnitTime.classList.add("active");
+        btnUnitCycles.classList.remove("active");
+      }
+    }
+    updatePresetLabels();
+    if (lastSummaryData) {
+      renderSummaryKPIs(lastSummaryData);
+    }
+    if (chronoCanvas) {
+      if (chronoCanvas.data) {
+        const span = chronoCanvas.viewEndNs - chronoCanvas.viewStartNs;
+        if (chronoWindowInfo) {
+          chronoWindowInfo.textContent = `Ventana: ${formatSimUnit(chronoCanvas.viewStartNs)} ➔ ${formatSimUnit(chronoCanvas.viewEndNs)} (${formatSimUnit(span, true)})`;
+        }
+        if (chronoScrubberPos) {
+          chronoScrubberPos.textContent = formatSimUnit(chronoCanvas.viewStartNs);
+        }
+      }
+      chronoCanvas.render();
+    }
+    if (packetFlightCanvas) {
+      packetFlightCanvas.render();
+    }
+    if (hybridSyncController) {
+      const span = hybridSyncController.viewEndNs - hybridSyncController.viewStartNs;
+      if (hybridWindowInfo) {
+        hybridWindowInfo.textContent = `Ventana: ${formatSimUnit(hybridSyncController.viewStartNs)} ➔ ${formatSimUnit(hybridSyncController.viewEndNs)} (${formatSimUnit(span, true)})`;
+      }
+      if (hybridScrubberPos) {
+        hybridScrubberPos.textContent = formatSimUnit(hybridSyncController.viewStartNs);
+      }
+      hybridSyncController.render();
+    }
+  }
+
+  if (btnUnitCycles) {
+    btnUnitCycles.addEventListener("click", () => setSimUnit("cycles"));
+  }
+  if (btnUnitTime) {
+    btnUnitTime.addEventListener("click", () => setSimUnit("time"));
+  }
+
   function renderSummaryKPIs(s) {
-    kpiWallclock.textContent = `${s.wall_clock_us.toFixed(2)} µs`;
+    lastSummaryData = s;
+    if (currentSimUnit === "cycles") {
+      const wcVal = s.wall_clock_ns != null ? s.wall_clock_ns : (s.wall_clock_us * 1000);
+      kpiWallclock.textContent = `${Math.round(wcVal).toLocaleString()} c`;
+      kpiCompute.textContent = `${Math.round(s.compute_ns != null ? s.compute_ns : s.compute_time_ns).toLocaleString()} c`;
+      kpiTransit.textContent = `${Math.round(s.transit_ns != null ? s.transit_ns : s.network_time_ns).toLocaleString()} c`;
+      kpiStalls.textContent = `${Math.round(s.stall_ns != null ? s.stall_ns : s.stall_time_ns).toLocaleString()} c`;
+    } else {
+      kpiWallclock.textContent = `${s.wall_clock_us.toFixed(2)} µs`;
+      kpiCompute.textContent = formatTimeNs(s.compute_time_ns);
+      kpiTransit.textContent = formatTimeNs(s.network_time_ns);
+      kpiStalls.textContent = formatTimeNs(s.stall_time_ns);
+    }
 
-    kpiCompute.textContent = formatTimeNs(s.compute_time_ns);
     kpiComputeSub.textContent = `${s.compute_pct.toFixed(1)}% del tiempo total`;
-
-    kpiTransit.textContent = formatTimeNs(s.network_time_ns);
     kpiTransitSub.textContent = `${s.network_pct.toFixed(1)}% del tiempo total`;
-
-    kpiStalls.textContent = formatTimeNs(s.stall_time_ns);
     kpiStallsSub.textContent = `${s.stall_pct.toFixed(1)}% del tiempo total`;
 
     kpiLambda.textContent = `${s.real_injection_rate_lambda.toFixed(4)} f/c/nodo`;
@@ -1633,6 +1715,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Initialization
   // =========================================================================
   initCanvases();
+  updatePresetLabels();
   updateDynamicControls();
   loadHistoryList();
 

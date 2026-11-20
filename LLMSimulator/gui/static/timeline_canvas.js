@@ -5,6 +5,9 @@
  * 2. PacketFlightCanvas: BookSim2 in-flight packet Gantt chart (Queue + Flight)
  */
 
+// Global simulation unit state (default: 'cycles')
+window.activeSimUnit = window.activeSimUnit || "cycles";
+
 // Helper to format nanoseconds into clean human-readable units (ns, µs, ms)
 function formatTimeNs(ns) {
   if (ns === undefined || ns === null || isNaN(ns)) return "0 ns";
@@ -16,6 +19,34 @@ function formatTimeNs(ns) {
     return `${Math.round(ns)} ns`;
   }
 }
+
+// Global helper to format time / cycle values based on activeSimUnit (1 GHz = 1 cycle per ns)
+function formatSimUnit(nsValue, isDuration = false, unit = null) {
+  const activeUnit = unit || window.activeSimUnit || "cycles";
+  if (nsValue === undefined || nsValue === null || isNaN(nsValue)) {
+    return activeUnit === "cycles" ? "0 c" : "0 ns";
+  }
+
+  const val = Number(nsValue);
+
+  if (activeUnit === "cycles") {
+    // 1 GHz clock model: 1 ns = 1 cycle
+    if (isDuration) {
+      if (Math.abs(val) >= 1e6) {
+        return `${(val / 1e6).toFixed(2)}M c`;
+      } else if (Math.abs(val) >= 1e3) {
+        return `${(val / 1e3).toFixed(1)}k c`;
+      } else {
+        return `${Math.round(val).toLocaleString()} c`;
+      }
+    } else {
+      return `${Math.round(val).toLocaleString()} c`;
+    }
+  } else {
+    return formatTimeNs(val);
+  }
+}
+window.formatSimUnit = formatSimUnit;
 
 // Helper to setup HiDPI canvas
 function setupHiDPICanvas(canvas) {
@@ -240,38 +271,38 @@ class ChronogramCanvas {
       return;
     }
 
+    const found = this.getBlockAt(mouseX, mouseY);
+    if (found) {
+      this.showTooltip(found.block, found.gpuIdx, e.clientX, e.clientY);
+    } else {
+      this.hideTooltip();
+    }
+  }
+
+  getBlockAt(x, y) {
+    if (!this.data) return null;
+    const rect = this.canvas.getBoundingClientRect();
     const plotWidth = rect.width - this.marginLeft - this.marginRight;
     const plotHeight = rect.height - this.headerHeight - this.footerHeight;
     const numGpus = this.data.num_gpus || 1;
     const trackHeight = plotHeight / numGpus;
 
-    const gpuIdx = Math.floor((mouseY - this.headerHeight) / trackHeight);
-    if (gpuIdx < 0 || gpuIdx >= numGpus) {
-      this.hideTooltip();
-      return;
-    }
+    const gpuIdx = Math.floor((y - this.headerHeight) / trackHeight);
+    if (gpuIdx < 0 || gpuIdx >= numGpus) return null;
 
     const span = this.viewEndNs - this.viewStartNs;
-    const mouseNs = this.viewStartNs + ((mouseX - this.marginLeft) / plotWidth) * span;
+    if (span <= 0) return null;
+    const mouseNs = this.viewStartNs + ((x - this.marginLeft) / plotWidth) * span;
 
-    // Find block on this GPU
     const trackBlocks = this.data.tracks[gpuIdx] || [];
-    let foundBlock = null;
-
     for (let i = 0; i < trackBlocks.length; i++) {
       const b = trackBlocks[i];
       if (mouseNs >= b.start_ns && mouseNs <= b.end_ns) {
-        foundBlock = b;
-        break;
+        return { block: b, gpuIdx };
       }
-      if (b.start_ns > mouseNs) break; // Blocks are sorted chronologically
+      if (b.start_ns > mouseNs) break;
     }
-
-    if (foundBlock) {
-      this.showTooltip(foundBlock, gpuIdx, e.clientX, e.clientY);
-    } else {
-      this.hideTooltip();
-    }
+    return null;
   }
 
   handleMouseUp() {
@@ -329,7 +360,7 @@ class ChronogramCanvas {
       block.sub_ops.forEach(sub => {
         extraHtml += `<tr>
           <td><strong>${sub.name}</strong></td>
-          <td>${formatTimeNs(sub.duration_ns)}</td>
+          <td>${formatSimUnit(sub.duration_ns)}</td>
           <td>${sub.mem_pct !== undefined ? sub.mem_pct.toFixed(0) + '%' : '-'}</td>
         </tr>`;
       });
@@ -352,8 +383,8 @@ class ChronogramCanvas {
       </div>
       <div class="tooltip-body">
         <div class="tooltip-row"><span>Título:</span> <strong>${block.title}</strong></div>
-        <div class="tooltip-row"><span>Intervalo:</span> <code>${formatTimeNs(block.start_ns)} ➔ ${formatTimeNs(block.end_ns)}</code></div>
-        <div class="tooltip-row"><span>Duración Total:</span> <strong class="highlight-val">${formatTimeNs(block.duration_ns)}</strong></div>
+        <div class="tooltip-row"><span>Intervalo:</span> <code>${formatSimUnit(block.start_ns)} ➔ ${formatSimUnit(block.end_ns)}</code></div>
+        <div class="tooltip-row"><span>Duración Total:</span> <strong class="highlight-val">${formatSimUnit(block.duration_ns)}</strong></div>
         ${extraHtml}
       </div>
     `;
@@ -496,7 +527,7 @@ class ChronogramCanvas {
         ctx.font = "bold 9px JetBrains Mono, monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(formatTimeNs(this.crosshairNs), this.crosshairX, this.headerHeight - 12);
+        ctx.fillText(formatSimUnit(this.crosshairNs), this.crosshairX, this.headerHeight - 12);
       }
       ctx.restore();
     }
@@ -545,7 +576,7 @@ class ChronogramCanvas {
       ctx.stroke();
 
       // Tick label
-      ctx.fillText(formatTimeNs(t), x, this.headerHeight - 8);
+      ctx.fillText(formatSimUnit(t, true), x, this.headerHeight - 8);
     }
   }
 
@@ -621,7 +652,7 @@ class ChronogramCanvas {
         // Two lines
         ctx.fillText(label, x + 4, y + h / 2 - 5);
         ctx.font = "9px JetBrains Mono, monospace";
-        ctx.fillText(formatTimeNs(b.duration_ns), x + 4, y + h / 2 + 6);
+        ctx.fillText(formatSimUnit(b.duration_ns, true), x + 4, y + h / 2 + 6);
       } else {
         // Single line
         ctx.fillText(label, x + 4, y + h / 2);
@@ -943,8 +974,22 @@ class HybridPacketCanvas {
     }
   }
 
+  getRowHeight(numPackets) {
+    if (!numPackets || numPackets <= 0) return 18;
+    const maxCanvasH = 8000;
+    return Math.max(2, Math.min(18, (maxCanvasH - this.headerHeight - this.footerHeight) / numPackets));
+  }
+
   render() {
     if (!this.canvas) return;
+
+    const packets = this.packetsData && this.packetsData.packets ? this.packetsData.packets : [];
+    const rowHeight = this.getRowHeight(packets.length);
+    const neededHeight = Math.max(380, Math.ceil(this.headerHeight + packets.length * rowHeight + this.footerHeight));
+    if (this.canvas.style.height !== `${neededHeight}px`) {
+      this.canvas.style.height = `${neededHeight}px`;
+    }
+
     const { width, height, ctx } = setupHiDPICanvas(this.canvas);
     this.canvas.style.cursor = "crosshair";
 
@@ -952,7 +997,6 @@ class HybridPacketCanvas {
     ctx.fillRect(0, 0, width, height);
 
     const plotWidth = width - this.marginLeft - this.marginRight;
-    const plotHeight = height - this.headerHeight - this.footerHeight;
     const span = this.viewEndNs - this.viewStartNs;
 
     if (span <= 0) return;
@@ -965,7 +1009,7 @@ class HybridPacketCanvas {
     ctx.lineTo(width, this.headerHeight);
     ctx.stroke();
 
-    if (!this.packetsData || !this.packetsData.packets || this.packetsData.packets.length === 0) {
+    if (packets.length === 0) {
       ctx.fillStyle = "#64748b";
       ctx.font = "12px JetBrains Mono, monospace";
       ctx.textAlign = "center";
@@ -974,9 +1018,7 @@ class HybridPacketCanvas {
       return;
     }
 
-    const packets = this.packetsData.packets;
-    const rowHeight = Math.max(5, Math.min(22, plotHeight / packets.length));
-    const barH = Math.max(3, rowHeight - 2);
+    const barH = Math.max(1, Math.min(14, rowHeight - 2));
 
     for (let i = 0; i < packets.length; i++) {
       const p = packets[i];
@@ -987,8 +1029,8 @@ class HybridPacketCanvas {
         ctx.fillRect(this.marginLeft, y, plotWidth, rowHeight);
       }
 
-      // Left label
-      if (rowHeight >= 10) {
+      // Left label (only if row is tall enough)
+      if (rowHeight >= 9) {
         ctx.fillStyle = "#94a3b8";
         ctx.font = "9px JetBrains Mono, monospace";
         ctx.textAlign = "right";
@@ -1002,14 +1044,14 @@ class HybridPacketCanvas {
       const queueW = Math.max(1, xInject - xStart);
 
       ctx.fillStyle = "#e67e22"; // orange
-      ctx.fillRect(xStart, y + 1, queueW, barH);
+      ctx.fillRect(xStart, y + 2, queueW, barH);
 
       // Segment 2: NoC flight time [pkt_inject_ns, pkt_end_ns] in blue
       const xEnd = this.marginLeft + ((p.pkt_end_ns - this.viewStartNs) / span) * plotWidth;
       const flightW = Math.max(1, xEnd - xInject);
 
       ctx.fillStyle = "#0284c7"; // blue
-      ctx.fillRect(xInject, y + 1, flightW, barH);
+      ctx.fillRect(xInject, y + 2, flightW, barH);
     }
 
     this.drawCrosshairLine(ctx, height, plotWidth);
@@ -1033,7 +1075,7 @@ class HybridPacketCanvas {
         ctx.font = "bold 9px JetBrains Mono, monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(formatTimeNs(this.crosshairNs), this.crosshairX, height - this.footerHeight - 8);
+        ctx.fillText(formatSimUnit(this.crosshairNs), this.crosshairX, height - this.footerHeight - 8);
       }
       ctx.restore();
     }
@@ -1041,11 +1083,8 @@ class HybridPacketCanvas {
 
   getPacketAt(x, y) {
     if (!this.packetsData || !this.packetsData.packets || this.packetsData.packets.length === 0) return null;
-    const rect = this.canvas.getBoundingClientRect();
-    const plotHeight = rect.height - this.headerHeight - this.footerHeight;
     const packets = this.packetsData.packets;
-    const rowHeight = plotHeight / packets.length;
-
+    const rowHeight = this.getRowHeight(packets.length);
     const rowIdx = Math.floor((y - this.headerHeight) / rowHeight);
     if (rowIdx >= 0 && rowIdx < packets.length) {
       return packets[rowIdx];
@@ -1135,15 +1174,25 @@ class HybridSyncController {
         if (canvasTarget === this.packetsCanvasEl) {
           const pkt = this.packetCanvas.getPacketAt(x, y);
           if (pkt) {
+            this.chronoCanvas.hideTooltip();
             this.showPacketTooltip(pkt, e.clientX, e.clientY);
           } else {
             this.hideTooltip();
+          }
+        } else if (canvasTarget === this.chronoCanvasEl) {
+          const res = this.chronoCanvas.getBlockAt(x, y);
+          if (res) {
+            this.hideTooltip();
+            this.chronoCanvas.showTooltip(res.block, res.gpuIdx, e.clientX, e.clientY);
+          } else {
+            this.chronoCanvas.hideTooltip();
           }
         }
       } else {
         this.chronoCanvas.clearCrosshair();
         this.packetCanvas.clearCrosshair();
         this.hideTooltip();
+        this.chronoCanvas.hideTooltip();
       }
     };
 
@@ -1151,6 +1200,7 @@ class HybridSyncController {
       this.chronoCanvas.clearCrosshair();
       this.packetCanvas.clearCrosshair();
       this.hideTooltip();
+      this.chronoCanvas.hideTooltip();
     };
 
     this.chronoCanvasEl.addEventListener("mousemove", (e) => handleMove(e, this.chronoCanvasEl));
@@ -1306,12 +1356,12 @@ class HybridSyncController {
     this.packetCanvas.viewEndNs = newEnd;
     this.packetCanvas.render();
 
-    const spanUs = (newEnd - newStart) / 1000;
+    const span = newEnd - newStart;
     if (this.windowInfoEl) {
-      this.windowInfoEl.textContent = `Ventana: ${(newStart / 1000).toFixed(2)} µs ➔ ${(newEnd / 1000).toFixed(2)} µs (${spanUs.toFixed(2)} µs)`;
+      this.windowInfoEl.textContent = `Ventana: ${formatSimUnit(newStart)} ➔ ${formatSimUnit(newEnd)} (${formatSimUnit(span, true)})`;
     }
     if (this.scrubberPosEl) {
-      this.scrubberPosEl.textContent = `${(newStart / 1000).toFixed(2)} µs`;
+      this.scrubberPosEl.textContent = formatSimUnit(newStart);
     }
 
     const currentSpan = newEnd - newStart;
@@ -1367,13 +1417,13 @@ class HybridSyncController {
         <div class="tooltip-row"><span>Operación:</span> <strong>${pkt.op_type} Nº${pkt.op_idx || 1}</strong></div>
         <div class="tooltip-row"><span>Flits:</span> <strong>${pkt.flits} flits</strong></div>
         <hr class="tooltip-divider">
-        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola:</span> <strong>${pkt.queue_delay_cycles} c</strong></div>
-        <div class="tooltip-row"><span style="color:#38bdf8;">■ Travesía NoC:</span> <strong>${pkt.flight_cycles} c</strong></div>
-        <div class="tooltip-row"><span>Latencia Paquete:</span> <strong class="highlight-val">${pkt.total_latency_cycles} c</strong></div>
+        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola:</span> <strong>${pkt.queue_delay_cycles} c (${formatSimUnit(pkt.queue_delay_cycles)})</strong></div>
+        <div class="tooltip-row"><span style="color:#38bdf8;">■ Travesía NoC:</span> <strong>${pkt.flight_cycles} c (${formatSimUnit(pkt.flight_cycles)})</strong></div>
+        <div class="tooltip-row"><span>Latencia Paquete:</span> <strong class="highlight-val">${pkt.total_latency_cycles} c (${formatSimUnit(pkt.total_latency_cycles)})</strong></div>
         <hr class="tooltip-divider">
-        <div class="tooltip-row"><span>Inicio (Creación):</span> <code>${formatTimeNs(pkt.pkt_start_ns)}</code></div>
-        <div class="tooltip-row"><span>Inyección en NoC:</span> <code>${formatTimeNs(pkt.pkt_inject_ns)}</code></div>
-        <div class="tooltip-row"><span>Recepción Destino:</span> <code>${formatTimeNs(pkt.pkt_end_ns)}</code></div>
+        <div class="tooltip-row"><span>Inicio (Creación):</span> <code>${formatSimUnit(pkt.pkt_start_ns)}</code></div>
+        <div class="tooltip-row"><span>Inyección en NoC:</span> <code>${formatSimUnit(pkt.pkt_inject_ns)}</code></div>
+        <div class="tooltip-row"><span>Recepción Destino:</span> <code>${formatSimUnit(pkt.pkt_end_ns)}</code></div>
       </div>
     `;
 

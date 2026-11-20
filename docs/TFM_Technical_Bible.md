@@ -3250,5 +3250,36 @@ La Pestaña 3 del Workbench resuelve la necesidad crítica de auditar, comparar 
 
 ---
 
+## 10.8. Pulido y Mejoras de Usabilidad Científica (Fase 3.5)
+Durante la validación experimental intensiva de las Pestañas 2 y 3, se identificaron y subsanaron áreas de mejora ergonómica y arquitectónica, consolidando las siguientes cuatro capacidades de vanguardia en el Workbench:
+
+### 1. Selector Global de Unidades (Ciclos [c] vs. Tiempo [µs / ns])
+En sintonía con las convenciones rigurosas de la arquitectura de computadores, donde el rendimiento de procesadores y redes de interconexión se razona fundamentalmente en ciclos de reloj de máquina, se incorporó un selector de unidades segmentado en la cabecera de la Pestaña 2:
+$$\mathbf{[\text{ ⏱️ Ciclos (1 GHz) } \mid \text{ 🕒 Tiempo (µs / ns) }]}$$
+- **Equivalencia Física:** En nuestro modelo microarquitectónico con frecuencia de reloj de $1\text{ GHz}$, un ciclo BookSim2/GPU equivale exactamente a $1\text{ ns}$ ($1\text{ c} = 1\text{ ns}$).
+- **Modo Predeterminado (Ciclos):** Al cargar cualquier simulación, la interfaz presenta todas las magnitudes en ciclos:
+  - **Tarjetas KPI:** Tiempo de muro, cómputo GPU, tránsito NoC y stalls de barrera se presentan como enteros formateados con separador de millares (ej. $1.096.353\text{ c}$).
+  - **Botones de Preajuste de Ventana:** Se reetiquetan automáticamente a `10k c`, `20k c`, `50k c`, `100k c`, `250k c` y `Total`.
+  - **Líneas de Tiempo y Ejes:** Las marcas de graduación temporal del Cronograma GPU y del Visualizador de Paquetes proyectan la escala en ciclos (`formatSimUnit(nsValue, isDuration)`).
+  - **Tooltips Flotantes:** Los intervalos temporales y desgloses de duración reflejan simultáneamente la cantidad exacta en ciclos y su equivalencia en microsegundos o nanosegundos.
+
+### 2. Rediseño Horizontal 50/50 del Visualizador Híbrido Sincronizado
+Se transformó radicalmente la disposición del Visualizador Híbrido (`.split-screen-container`), transitando de un apilamiento vertical que obligaba a un scroll excesivo a una elegante disposición en **rejilla horizontal 50% Izquierda / 50% Derecha**:
+- **Columna Izquierda (50% - Cronograma GPU):** Despliega las pistas de ejecución de las GPUs ($0 \dots N-1$). Incorpora la regla CSS `position: sticky; top: 12px; z-index: 5;`, permitiendo que el cronograma de ejecución permanezca fijado en pantalla como marco de referencia inamovible mientras se examina el tráfico de red.
+- **Columna Derecha (50% - Paquetes NoC en Vuelo):** Aloja el visualizador de paquetes en tránsito en un lienzo interactivo encapsulado en un contenedor con scroll vertical autónomo (`max-height: 75vh; overflow-y: auto; overflow-x: hidden;`).
+- **Scrubber Común Inferior:** En la base del visor, un único slider de control temporal sincronizado desplaza el rango de observación $[\text{viewStartNs}, \text{viewEndNs}]$ de forma instantánea en ambos paneles.
+- **Diseño Responsivo:** En pantallas de resolución estrecha ($< 992\text{ px}$), una *media query* conmuta suavemente a la disposición vertical apilada para preservar la legibilidad en ordenadores portátiles compactos.
+
+### 3. Cero Truncamiento de Paquetes en el Visor Híbrido
+- **Desactivación del Submuestreo Artificial:** En `gui/server.py` y `gui/trace_parser.py`, el endpoint `/api/results/packets_window` adopta por defecto `max_packets = 0`. Esto garantiza que el backend transfiera el 100% de los paquetes que solapan con la ventana temporal solicitada (`truncated: False`), permitiendo la inspección exhaustiva de ráfagas densas de flits.
+- **Escalabilidad Gráfica Adaptativa:** El componente `HybridPacketCanvas` calcula la altura requerida del lienzo en píxeles ($H = \text{header} + N_{\text{paquetes}} \times \text{rowHeight} + \text{footer}$) acotándola de forma segura ante las restricciones de textura de la GPU del navegador ($\text{maxCanvasH} = 8.000\text{ px}$), acomodando miles de paquetes sin distorsión ni colapso de memoria.
+
+### 4. Reparación de Tooltips Interactivos en Hover y Metadatos Locales
+- **Desacoplamiento de Coordenadas de Hover:** El controlador `HybridSyncController` detecta de forma diferenciada el objetivo del puntero. Al posarse sobre el Cronograma GPU, `getBlockAt(x, y)` recupera el bloque computacional o de comunicación; al posarse sobre el panel de paquetes, `getPacketAt(x, y)` computa con precisión matemática la fila de paquete compensando la posición del scroll vertical interno y el `devicePixelRatio`.
+- **Capa Flotante Fija:** El elemento `#hybrid-tooltip` se configuró con `position: fixed; z-index: 9999; pointer-events: none;`, asegurando que los tooltips nunca se corten contra los márgenes de los paneles y se posicionen suavemente junto al puntero.
+- **Consistencia de Metadatos y Desglose MoE en Pestaña 3:** Se eliminó cualquier lectura de ficheros globales de fallback en `gui/analysis_gui.py`. El analizador inspecciona estrictamente los ficheros locales de cada simulación (`config.yaml`, `test.cfg` y el conteo de trazas `*device_*.trc`). Esto garantiza que configuraciones asimétricas de Malla 2D como `deepseekV3_4x2dev_mesh` se cataloguen con precisión como `Mesh (4x2)` y 8 GPUs (en lugar de Torus u 8 GPUs por defecto), y que `mixtral_2x2dev_mesh` se identifique como `Mesh (2x2)` y 4 GPUs. Asimismo, se armonizó la extracción de las claves de métricas (`scatter_us`, `gather_us`, `allreduce_us`, `avg_pkt_lat_cycles`), asegurando que las columnas y la gráfica comparativa de primitivas colectivas reflejen fielmente el desglose temporal sin columnas vacías a $0.00\text{ }\mu\text{s}$.
+
+---
+
 *Fin del Documento Maestro - TFM Technical Bible (Noviembre 2026)*
 

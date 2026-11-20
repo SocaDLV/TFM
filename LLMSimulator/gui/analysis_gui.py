@@ -90,16 +90,38 @@ def _extract_lightweight_meta(folder_path, is_staging=False, date_display="N/A",
     folder = Path(folder_path)
     name = folder.name
     parts = name.split("_")
+    fname = name.lower()
+
+    default_model = "mixtral"
+    if "deepseek" in fname:
+        default_model = "deepseekV3"
+    elif "llama" in fname:
+        default_model = "llama"
+
+    local_trc = list(folder.glob("*device_*.trc"))
+    gpu_count = len(local_trc) if local_trc else 8
+
+    default_topo = "torus"
+    if "mesh" in fname:
+        default_topo = "mesh"
+
+    net_dims = str(gpu_count)
+    m_dim = re.search(r"(\d+)x(\d+)dev", name)
+    if m_dim:
+        net_dims = f"{m_dim.group(1)} {m_dim.group(2)}"
+        default_topo = "mesh"
+    elif re.search(r"(\d+)dev", name):
+        net_dims = re.search(r"(\d+)dev", name).group(1)
 
     meta = {
         "folder": name,
         "label": "",
         "saved_at": date_display,
         "timestamp_sort": ts,
-        "model": "mixtral",
-        "topology": "torus",
-        "net_dims": "8",
-        "num_gpus": 8,
+        "model": default_model,
+        "topology": default_topo,
+        "net_dims": net_dims,
+        "num_gpus": gpu_count,
         "vcs": 4,
         "routing": "dim_order",
         "batch_size": 32,
@@ -107,16 +129,6 @@ def _extract_lightweight_meta(folder_path, is_staging=False, date_display="N/A",
         "skewness": 0.0,
         "has_packet_csv": (folder / "packet_tracking_debug.csv").exists()
     }
-
-    # Extract model from folder name prefix
-    if parts:
-        prefix = parts[0].lower()
-        if "deepseek" in prefix:
-            meta["model"] = "deepseekV3"
-        elif "mixtral" in prefix:
-            meta["model"] = "mixtral"
-        elif "llama" in prefix:
-            meta["model"] = "llama"
 
     # Read gui_metadata.json if available
     gui_meta_file = folder / "gui_metadata.json"
@@ -155,21 +167,44 @@ def _extract_lightweight_meta(folder_path, is_staging=False, date_display="N/A",
     test_cfg = folder / "test.cfg"
     if test_cfg.exists():
         try:
+            k_val = None
+            n_val = None
+            net_file = ""
             with open(test_cfg, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith("topology"):
-                        meta["topology"] = line.split("=")[1].replace(";", "").strip()
+                        raw_topo = line.split("=")[1].replace(";", "").strip().lower()
+                        if raw_topo in ["mesh", "torus", "ring"]:
+                            meta["topology"] = raw_topo
+                        elif raw_topo == "anynet":
+                            meta["topology"] = "mesh"
+                    elif line.startswith("network_file"):
+                        net_file = line.split("=")[1].replace(";", "").strip()
                     elif line.startswith("routing_function"):
                         meta["routing"] = line.split("=")[1].replace(";", "").strip()
                     elif line.startswith("num_vcs"):
                         meta["vcs"] = int(line.split("=")[1].replace(";", "").strip())
+                    elif line.startswith("k =") or line.startswith("k="):
+                        k_val = line.split("=")[1].replace(";", "").strip()
+                    elif line.startswith("n =") or line.startswith("n="):
+                        n_val = line.split("=")[1].replace(";", "").strip()
+
+            if "mesh_4x2" in net_file or "4x2" in name:
+                meta["topology"] = "mesh"
+                meta["net_dims"] = "4 2"
+            elif k_val and n_val and k_val == "2" and n_val == "2":
+                meta["topology"] = "mesh"
+                meta["net_dims"] = "2 2"
+            elif k_val and n_val and k_val == "4" and n_val == "4":
+                meta["topology"] = "mesh"
+                meta["net_dims"] = "4 4"
         except Exception:
             pass
 
     # Fallback heuristics from folder name
     for p in parts:
-        if p.endswith("dev"):
+        if p.endswith("dev") and not m_dim:
             meta["net_dims"] = p[:-3]
         elif p.startswith("bs") and p[2:].isdigit():
             meta["batch_size"] = int(p[2:])
@@ -180,8 +215,9 @@ def _extract_lightweight_meta(folder_path, is_staging=False, date_display="N/A",
                 meta["skewness"] = float(p[4:])
             except Exception:
                 pass
-        elif p in ["torus", "mesh", "ring"]:
-            meta["topology"] = p
+
+    if local_trc:
+        meta["num_gpus"] = len(local_trc)
 
     return meta
 
@@ -289,33 +325,40 @@ def compare_simulations(sim_specs, semilog=False, base_results_dir=None, base_st
             continue
 
         wall_clock_us = summary.get("wall_clock_us", 0.0)
-        compute_us = summary.get("compute_time_ns", 0.0) / 1000.0
-        transit_us = summary.get("network_time_ns", 0.0) / 1000.0
-        stall_us = summary.get("stall_time_ns", 0.0) / 1000.0
+        compute_us = summary.get("compute_us", summary.get("compute_time_ns", 0.0) / 1000.0)
+        transit_us = summary.get("transit_us", summary.get("network_time_ns", 0.0) / 1000.0)
+        stall_us = summary.get("stall_us", summary.get("stall_time_ns", 0.0) / 1000.0)
 
-        scatter_us = summary.get("moe_scatter_ns", 0.0) / 1000.0
-        gather_us = summary.get("moe_gather_ns", 0.0) / 1000.0
-        allreduce_us = summary.get("all_reduce_ns", 0.0) / 1000.0
+        scatter_us = summary.get("scatter_us", summary.get("moe_scatter_ns", 0.0) / 1000.0)
+        gather_us = summary.get("gather_us", summary.get("moe_gather_ns", 0.0) / 1000.0)
+        allreduce_us = summary.get("allreduce_us", summary.get("all_reduce_ns", 0.0) / 1000.0)
 
         has_csv = summary.get("has_packet_csv", False)
         lambda_flits = summary.get("real_injection_rate_lambda", 0.0)
-        flit_lat = summary.get("avg_flit_lat_cycles", 0.0)
-        pkt_lat = summary.get("avg_pkt_lat_cycles", 0.0)
+        flit_lat = summary.get("avg_flit_lat_cycles", summary.get("avg_flit_latency", 0.0))
+        pkt_lat = summary.get("avg_pkt_lat_cycles", summary.get("avg_packet_latency", 0.0))
 
         # Human readable display label
-        custom_label = summary.get("label", "").strip()
+        meta = summary.get("metadata", {})
+        custom_label = summary.get("label", meta.get("label", "")).strip()
         display_label = custom_label if custom_label else folder_name
-        model_name = summary.get("model", "mixtral")
-        topo = summary.get("topology", "torus")
-        gpus = summary.get("num_gpus", 8)
-        bs = summary.get("batch_size", 32)
-        vcs = summary.get("vcs", 4)
-        tp = summary.get("tensor_degree", 1)
-        skew = summary.get("skewness", 0.0)
+        model_name = summary.get("model", meta.get("model", "mixtral"))
+        topo = summary.get("topology", meta.get("topology", "torus"))
+        gpus = summary.get("num_gpus", meta.get("num_gpus", 8))
+        bs = summary.get("batch_size", meta.get("batch_size", 32))
+        vcs = summary.get("vcs", meta.get("vcs", 4))
+        tp = summary.get("tensor_degree", meta.get("tensor_degree", 1))
+        skew = summary.get("skewness", meta.get("skewness", 0.0))
+        net_dims = str(summary.get("net_dims", meta.get("net_dims", str(gpus))))
 
         tp_str = f", TP={tp}" if tp > 1 else ""
         skew_str = f", Skew={skew}" if skew > 0.0 else ""
-        compact_label = f"{model_name} {gpus}dev {topo.capitalize()} (BS={bs}{tp_str}{skew_str})"
+        topo_label = topo.capitalize()
+        if " " in net_dims:
+            topo_label = f"{topo.capitalize()} ({net_dims.replace(' ', 'x')})"
+        elif "x" in net_dims:
+            topo_label = f"{topo.capitalize()} ({net_dims})"
+        compact_label = f"{model_name} {gpus}dev {topo_label} (BS={bs}{tp_str}{skew_str})"
         if custom_label:
             compact_label = f"{custom_label}\n[{compact_label}]"
 

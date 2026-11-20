@@ -299,6 +299,10 @@
           <span id="staging-save-status" class="staging-unsaved">(No guardada)</span>
         </div>
         <div class="staging-actions">
+          <div class="unit-control-group" title="Selector de Unidad Global (1 GHz = 1 ciclo / ns)">
+            <button id="btn-unit-cycles" class="btn-unit-toggle active" data-unit="cycles">⏱️ Ciclos (1 GHz)</button>
+            <button id="btn-unit-time" class="btn-unit-toggle" data-unit="time">🕒 Tiempo (µs / ns)</button>
+          </div>
           <div class="iteration-control-group">
             <label for="iteration-selector">Ámbito / Iteración:</label>
             <select id="iteration-selector" class="form-control select-sm">
@@ -483,38 +487,31 @@
           </div>
         </div>
 
-        <!-- Split-Screen Container -->
+        <!-- Split-Screen Container: Horizontal 50/50 Split -->
         <div class="split-screen-container">
-          <!-- Split Top: Cronograma GPU -->
+          <!-- Columna Izquierda: Cronograma GPU (Sticky) -->
           <div class="split-pane split-pane-top">
             <div class="split-pane-header">
               <span class="split-pane-title">📊 Cronograma de Ejecución GPU (0..N-1)</span>
-              <span class="split-pane-sub">Operaciones de Cómputo y Colectivas de Red</span>
+              <span class="split-pane-sub">Cómputo GPU y Colectivas</span>
             </div>
             <div class="canvas-wrapper hybrid-canvas-wrapper">
-              <canvas id="hybrid-chronogram-canvas" height="260"></canvas>
+              <canvas id="hybrid-chronogram-canvas" height="380"></canvas>
             </div>
           </div>
 
-          <!-- Split Divider Line -->
-          <div class="split-divider">
-            <div class="split-divider-line"></div>
-            <span class="split-divider-badge">⏱️ Eje Temporal X Sincronizado (ns)</span>
-            <div class="split-divider-line"></div>
-          </div>
-
-          <!-- Split Bottom: Paquetes en Vuelo -->
+          <!-- Columna Derecha: Paquetes en Vuelo (Scrollable) -->
           <div class="split-pane split-pane-bottom">
             <div class="split-pane-header">
               <span class="split-pane-title">🛰️ Flujo de Paquetes NoC en Tránsito</span>
-              <span class="split-pane-sub">NIC Queue Delay (Naranja) + Red NoC Flight (Azul)</span>
+              <span class="split-pane-sub">Cola NIC (Naranja) + Red NoC (Azul)</span>
             </div>
             <div class="canvas-wrapper hybrid-canvas-wrapper">
-              <canvas id="hybrid-packets-canvas" height="260"></canvas>
+              <canvas id="hybrid-packets-canvas" height="380"></canvas>
             </div>
           </div>
 
-          <!-- Shared Tooltip -->
+          <!-- Shared Tooltip (Fixed Overlay) -->
           <div id="hybrid-tooltip" class="timeline-tooltip hidden"></div>
         </div>
 

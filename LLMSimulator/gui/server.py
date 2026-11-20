@@ -241,9 +241,9 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
             iteration = query.get("iteration", ["last"])[0]
 
             try:
-                max_packets = int(query.get("max_packets", [450])[0])
+                max_packets = int(query.get("max_packets", [0])[0])
             except ValueError:
-                max_packets = 450
+                max_packets = 0
 
             try:
                 window_data = get_packets_in_time_window(

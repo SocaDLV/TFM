@@ -27,7 +27,7 @@ system:
     decode_mode: on
 
 serving:
-  max_batch_size: 32
+  max_batch_size: 64
   max_process_token: 0
 
 simulation:
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261120_130847/
-  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261120_130847/gantt/
+  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs64_20261120_141506/
+  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs64_20261120_141506/gantt/

@@ -242,13 +242,37 @@ def get_simulation_summary(folder_path, iteration="last"):
     if not folder.exists():
         raise FileNotFoundError(f"Carpeta no encontrada: {folder_path}")
 
-    # 1. Metadatos de config.yaml, test.cfg y gui_metadata.json
+    # 1. Metadatos de config.yaml, test.cfg, .trc y gui_metadata.json
+    fname = folder.name.lower()
+    default_model = "mixtral"
+    if "deepseek" in fname:
+        default_model = "deepseekV3"
+    elif "llama" in fname:
+        default_model = "llama"
+
+    default_topo = "torus"
+    if "mesh" in fname:
+        default_topo = "mesh"
+
+    # Conteo real de dispositivos a partir de archivos .trc locales
+    local_trc = sorted(glob.glob(str(folder / "*device_*.trc")))
+    gpu_count = len(local_trc) if local_trc else 8
+
+    # Heurística de dimensiones de red
+    net_dims = str(gpu_count)
+    m_dim = re.search(r"(\d+)x(\d+)dev", folder.name)
+    if m_dim:
+        net_dims = f"{m_dim.group(1)} {m_dim.group(2)}"
+        default_topo = "mesh"
+    elif re.search(r"(\d+)dev", folder.name):
+        net_dims = re.search(r"(\d+)dev", folder.name).group(1)
+
     metadata = {
         "folder_name": folder.name,
-        "model": "mixtral",
-        "topology": "torus",
-        "net_dims": "8",
-        "num_gpus": 8,
+        "model": default_model,
+        "topology": default_topo,
+        "net_dims": net_dims,
+        "num_gpus": gpu_count,
         "vcs": 4,
         "routing": "dim_order",
         "batch_size": 32,
@@ -304,17 +328,44 @@ def get_simulation_summary(folder_path, iteration="last"):
     test_cfg = folder / "test.cfg"
     if test_cfg.exists():
         try:
+            k_val = None
+            n_val = None
+            net_file = ""
             with open(test_cfg, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line.startswith("topology"):
-                        metadata["topology"] = line.split("=")[1].replace(";", "").strip()
+                        raw_topo = line.split("=")[1].replace(";", "").strip().lower()
+                        if raw_topo in ["mesh", "torus", "ring"]:
+                            metadata["topology"] = raw_topo
+                        elif raw_topo == "anynet":
+                            metadata["topology"] = "mesh"  # Default anynet to mesh if custom
+                    elif line.startswith("network_file"):
+                        net_file = line.split("=")[1].replace(";", "").strip()
                     elif line.startswith("routing_function"):
                         metadata["routing"] = line.split("=")[1].replace(";", "").strip()
                     elif line.startswith("num_vcs"):
                         metadata["vcs"] = int(line.split("=")[1].replace(";", "").strip())
+                    elif line.startswith("k =") or line.startswith("k="):
+                        k_val = line.split("=")[1].replace(";", "").strip()
+                    elif line.startswith("n =") or line.startswith("n="):
+                        n_val = line.split("=")[1].replace(";", "").strip()
+
+            if "mesh_4x2" in net_file or "4x2" in folder.name:
+                metadata["topology"] = "mesh"
+                metadata["net_dims"] = "4 2"
+            elif k_val and n_val and k_val == "2" and n_val == "2":
+                metadata["topology"] = "mesh"
+                metadata["net_dims"] = "2 2"
+            elif k_val and n_val and k_val == "4" and n_val == "4":
+                metadata["topology"] = "mesh"
+                metadata["net_dims"] = "4 4"
         except Exception:
             pass
+
+    # Asegurar num_gpus = len(local_trc) si existen archivos .trc
+    if local_trc:
+        metadata["num_gpus"] = len(local_trc)
 
     # 2. Análisis multi-iteración de los archivos .trc
     num_iters, durations, offsets = get_cluster_iteration_info(folder)
@@ -462,13 +513,20 @@ def get_simulation_summary(folder_path, iteration="last"):
         "stall_ns": round(float(s_avg_ns), 1),
         "stall_us": round(float(s_avg_ns) / 1000.0, 2),
         "stall_pct": round(float(s_pct), 1),
+        "scatter_ns": round(float(scat_avg_ns), 1),
+        "moe_scatter_ns": round(float(scat_avg_ns), 1),
         "scatter_us": round(float(scat_avg_ns) / 1000.0, 2),
+        "gather_ns": round(float(gath_avg_ns), 1),
+        "moe_gather_ns": round(float(gath_avg_ns), 1),
         "gather_us": round(float(gath_avg_ns) / 1000.0, 2),
+        "allreduce_ns": round(float(ar_avg_ns), 1),
+        "all_reduce_ns": round(float(ar_avg_ns), 1),
         "allreduce_us": round(float(ar_avg_ns) / 1000.0, 2),
         "real_injection_rate_lambda": round(float(lambda_rate), 4),
         "lambda_rate": round(float(lambda_rate), 4),
         "avg_flit_lat_cycles": round(float(avg_flit_lat), 1),
         "avg_flit_latency": round(float(avg_flit_lat), 1),
+        "avg_pkt_lat_cycles": round(float(avg_pkt_lat), 1),
         "avg_packet_latency": round(float(avg_pkt_lat), 1),
         "avg_queueing_delay": round(float(avg_queue_delay), 1),
         "total_packets": int(total_packets),
@@ -480,6 +538,7 @@ def get_simulation_summary(folder_path, iteration="last"):
     return {
         "metadata": metadata,
         "kpis": kpis_data,
+        **metadata,
         **kpis_data
     }
 
@@ -1011,11 +1070,12 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", 
     }
 
 
-def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", max_packets=450):
+def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", max_packets=0):
     """
     Returns all in-flight packets whose lifecycle [pkt_start_ns, pkt_end_ns]
     overlaps with the visible time window [start_ns, end_ns] in global nanoseconds.
-    If the number of packets exceeds max_packets, applies uniform deterministic sampling.
+    If max_packets <= 0, returns 100% of packets without subsampling (zero truncation).
+    If max_packets > 0 and packets exceed limit, applies uniform deterministic sampling.
     """
     folder = Path(folder_path).resolve()
     csv_path = folder / "packet_tracking_debug.csv"
@@ -1106,9 +1166,10 @@ def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", 
         all_matching = all_matching.sort_values(by=["pkt_start_ns", "PID"], ascending=[True, True]).reset_index(drop=True)
         total_in_window = len(all_matching)
 
-        max_pkts = max(10, min(int(max_packets), 1000))
-        if total_in_window > max_pkts:
-            indices = np.linspace(0, total_in_window - 1, max_pkts, dtype=int)
+        max_pkts = int(max_packets) if max_packets is not None else 0
+        if max_pkts > 0 and total_in_window > max_pkts:
+            limit_p = max(10, min(max_pkts, 5000))
+            indices = np.linspace(0, total_in_window - 1, limit_p, dtype=int)
             sampled_df = all_matching.iloc[indices]
             truncated = True
         else:
