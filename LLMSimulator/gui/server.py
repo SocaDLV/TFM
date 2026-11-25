@@ -22,7 +22,9 @@ from gui.trace_parser import (
     get_chronogram_data,
     get_packet_tracking_data,
     get_packets_in_time_window,
-    get_topology_traffic_data
+    get_topology_traffic_data,
+    invalidate_simulation_cache,
+    SAFE_MAX_PACKETS
 )
 from gui.analysis_gui import list_all_simulations, compare_simulations
 
@@ -74,13 +76,22 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
         """Routes GET requests to API or static files."""
         self._handle_get(send_body=True)
 
+    def _list_valid_staging_dirs(self):
+        """Returns staging subdirectories that contain trace files, preserving pending runs."""
+        if not self.staging_root.exists():
+            return []
+        valid = [p for p in sorted(self.staging_root.iterdir()) if p.is_dir() and any(p.glob("*device_*.trc"))]
+        if valid:
+            return valid
+        return [p for p in sorted(self.staging_root.iterdir()) if p.is_dir() and any(p.iterdir())]
+
     def _resolve_simulation_dir(self, source, folder_name):
         """Resolves the physical directory for a simulation in staging or results."""
         if source == "staging":
             if not self.staging_root.exists():
                 return None
             if not folder_name:
-                subdirs = [p for p in self.staging_root.iterdir() if p.is_dir()]
+                subdirs = self._list_valid_staging_dirs()
                 return subdirs[0] if subdirs else None
             target = self.staging_root / folder_name
             return target if target.exists() else None
@@ -94,7 +105,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
             if self.staging_root.exists():
                 if folder_name and (self.staging_root / folder_name).exists():
                     return self.staging_root / folder_name
-                subdirs = [p for p in self.staging_root.iterdir() if p.is_dir()]
+                subdirs = self._list_valid_staging_dirs()
                 if subdirs and not folder_name:
                     return subdirs[0]
 
@@ -139,12 +150,11 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
             has_active = False
             folder_name = None
             staging_path = None
-            if self.staging_root.exists():
-                subdirs = [p for p in self.staging_root.iterdir() if p.is_dir()]
-                if subdirs:
-                    has_active = True
-                    folder_name = subdirs[0].name
-                    staging_path = str(subdirs[0])
+            subdirs = self._list_valid_staging_dirs()
+            if subdirs:
+                has_active = True
+                folder_name = subdirs[0].name
+                staging_path = str(subdirs[0])
 
             self._send_json(200, {
                 "active": has_active,
@@ -242,9 +252,11 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
             iteration = query.get("iteration", ["last"])[0]
 
             try:
-                max_packets = int(query.get("max_packets", [0])[0])
+                raw_max = int(query.get("max_packets", [SAFE_MAX_PACKETS])[0])
             except ValueError:
-                max_packets = 0
+                raw_max = SAFE_MAX_PACKETS
+
+            max_packets = SAFE_MAX_PACKETS if raw_max <= 0 else min(raw_max, SAFE_MAX_PACKETS)
 
             try:
                 window_data = get_packets_in_time_window(
@@ -442,8 +454,10 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 self.results_root.mkdir(parents=True, exist_ok=True)
                 dest = self.results_root / target_staging.name
                 if dest.exists():
+                    invalidate_simulation_cache(dest)
                     shutil.rmtree(dest)
 
+                invalidate_simulation_cache(target_staging)
                 shutil.move(str(target_staging), str(dest))
 
                 self._send_json(200, {
@@ -474,12 +488,14 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                 if self.staging_root.exists():
                     if folder_name:
                         target = self.staging_root / folder_name
+                        invalidate_simulation_cache(target)
                         if target.exists():
                             if target.is_dir():
                                 shutil.rmtree(target)
                             else:
                                 target.unlink()
                     else:
+                        invalidate_simulation_cache(self.staging_root)
                         for item in self.staging_root.iterdir():
                             if item.is_dir():
                                 shutil.rmtree(item)
@@ -577,6 +593,7 @@ class WorkbenchAPIHandler(BaseHTTPRequestHandler):
                     self._send_error(404, f"Simulación no encontrada: {folder_name}")
                     return
 
+                invalidate_simulation_cache(target)
                 shutil.rmtree(target)
                 self._send_json(200, {
                     "success": True,

@@ -25,7 +25,8 @@ import pandas as pd
 from gui.trace_parser import (
     get_simulation_summary,
     split_dataframe_by_drops,
-    get_cluster_iteration_info
+    get_cluster_iteration_info,
+    load_packet_csv_cached
 )
 
 
@@ -223,48 +224,51 @@ def _extract_lightweight_meta(folder_path, is_staging=False, date_display="N/A",
 
 
 def _extract_op_points(csv_path, num_gpus):
-    """Extracts per-operation points (lambda_flits vs lat_flits) from packet_tracking_debug.csv."""
+    """Extracts per-operation points (lambda_flits vs lat_flits) via shared compact CSV cache."""
     if not os.path.exists(csv_path):
         return []
 
     try:
-        df = pd.read_csv(csv_path, on_bad_lines="skip")
-        if df.empty or "Creation_Cycle" not in df.columns:
+        df_full, seg_bounds = load_packet_csv_cached(Path(csv_path).parent)
+        if df_full is None or df_full.empty or "Creation_Cycle" not in df_full.columns or not seg_bounds:
             return []
 
-        df.columns = df.columns.str.strip()
-        for col in ["Creation_Cycle", "Receive_Cycle", "Num_Flits", "Avg_Flit_Latency", "Total_Latency", "Op_Start_NS"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        if "Num_Flits" not in df.columns:
-            df["Num_Flits"] = 9
-        if "Avg_Flit_Latency" not in df.columns:
-            df["Avg_Flit_Latency"] = df.get("Total_Latency", 1.0)
-
-        # Anti-appends filter: isolate last iteration
-        if "Op_Start_NS" in df.columns and not df["Op_Start_NS"].isna().all():
-            drops = df["Op_Start_NS"].diff() < -100.0
-            if drops.any():
-                last_cut = drops[drops].index[-1]
-                df = df.loc[last_cut:].copy()
-        elif "Creation_Cycle" in df.columns:
-            drops = df["Creation_Cycle"].diff() < -1000.0
-            if drops.any():
-                last_cut = drops[drops].index[-1]
-                df = df.loc[last_cut:].copy()
-
-        df = df.dropna(subset=["Creation_Cycle", "Receive_Cycle"])
+        s_b, e_b = seg_bounds[-1]
+        df = df_full.iloc[s_b:e_b]
         if df.empty:
             return []
 
         op_points = []
+        has_flits = "Num_Flits" in df.columns
+        has_avg_flit = "Avg_Flit_Latency" in df.columns
         if "Op_Type" in df.columns and "Op_Idx" in df.columns:
-            for (op_t, op_i), grp in df.groupby(["Op_Type", "Op_Idx"]):
-                f_cnt = grp["Num_Flits"].sum()
-                dur = max(1.0, float(grp["Receive_Cycle"].max() - grp["Creation_Cycle"].min()))
+            agg_spec = {
+                "rx_max": ("Receive_Cycle", "max"),
+                "cr_min": ("Creation_Cycle", "min"),
+            }
+            if has_flits:
+                agg_spec["flits"] = ("Num_Flits", "sum")
+            else:
+                agg_spec["pkts"] = ("Creation_Cycle", "count")
+
+            if has_avg_flit:
+                agg_spec["lat_flits"] = ("Avg_Flit_Latency", "mean")
+            elif "Total_Latency" in df.columns:
+                agg_spec["lat_flits"] = ("Total_Latency", "mean")
+            else:
+                agg_spec["sum_rx"] = ("Receive_Cycle", "sum")
+                agg_spec["sum_cr"] = ("Creation_Cycle", "sum")
+                agg_spec["cnt"] = ("Creation_Cycle", "count")
+
+            grp_df = df.groupby(["Op_Type", "Op_Idx"], observed=True, sort=False).agg(**agg_spec)
+            for (op_t, op_i), row in grp_df.iterrows():
+                f_cnt = float(row["flits"]) if "flits" in row else float(row["pkts"]) * 9.0
+                dur = max(1.0, float(row["rx_max"] - row["cr_min"]))
                 l_flits = f_cnt / (num_gpus * dur)
-                lat_flits = float(grp["Avg_Flit_Latency"].mean())
+                if "lat_flits" in row:
+                    lat_flits = float(row["lat_flits"])
+                else:
+                    lat_flits = float(row["sum_rx"] - row["sum_cr"]) / max(1, int(row["cnt"]))
                 op_points.append({
                     "lambda_flits": l_flits,
                     "lat_flits": lat_flits,
@@ -272,10 +276,13 @@ def _extract_op_points(csv_path, num_gpus):
                     "op_idx": int(op_i) if str(op_i).isdigit() else op_i
                 })
         else:
-            f_cnt = df["Num_Flits"].sum()
+            f_cnt = float(df["Num_Flits"].sum()) if has_flits else float(len(df) * 9)
             dur = max(1.0, float(df["Receive_Cycle"].max() - df["Creation_Cycle"].min()))
             l_flits = f_cnt / (num_gpus * dur)
-            lat_flits = float(df["Avg_Flit_Latency"].mean())
+            if has_avg_flit:
+                lat_flits = float(np.mean(df["Avg_Flit_Latency"].to_numpy(dtype=np.float64, copy=False)))
+            else:
+                lat_flits = float(np.mean(df["Receive_Cycle"].to_numpy(dtype=np.float64, copy=False) - df["Creation_Cycle"].to_numpy(dtype=np.float64, copy=False)))
             op_points.append({
                 "lambda_flits": l_flits,
                 "lat_flits": lat_flits,

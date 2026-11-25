@@ -9,3 +9,4 @@ booksim2-orig/
 
 # Ignorar el contenido de las subcarpetas dentro de results
 LLMSimulator/build/results/*/*
+LLMSimulator/build/tmp_staging/*

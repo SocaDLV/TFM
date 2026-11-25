@@ -1115,6 +1115,7 @@ class HybridPacketCanvas {
       ctx.fillText("No hay paquetes en tránsito dentro de esta ventana de tiempo.", width / 2, height / 2);
       if (this.visibleInfoEl) {
         this.visibleInfoEl.textContent = "Mostrando paquetes 0 de 0";
+        this.visibleInfoEl.classList.remove("is-truncated");
       }
       return;
     }
@@ -1124,7 +1125,16 @@ class HybridPacketCanvas {
     const lastIdx = Math.min(totalPackets - 1, Math.ceil((scrollTop + viewportH) / this.ROW_HEIGHT));
 
     if (this.visibleInfoEl) {
-      this.visibleInfoEl.textContent = `Mostrando paquetes ${firstIdx + 1}–${lastIdx + 1} de ${totalPackets.toLocaleString()}`;
+      const isTruncated = Boolean(this.packetsData && this.packetsData.truncated);
+      if (isTruncated) {
+        const totalInWin = this.packetsData.total_in_window != null ? this.packetsData.total_in_window : totalPackets;
+        const retCount = this.packetsData.returned != null ? this.packetsData.returned : totalPackets;
+        this.visibleInfoEl.textContent = `Mostrando ${retCount.toLocaleString()} de ${totalInWin.toLocaleString()} paquetes (muestreo macro — haz zoom para ver el 100% exacto)`;
+        this.visibleInfoEl.classList.add("is-truncated");
+      } else {
+        this.visibleInfoEl.textContent = `Mostrando paquetes ${firstIdx + 1}–${lastIdx + 1} de ${totalPackets.toLocaleString()}`;
+        this.visibleInfoEl.classList.remove("is-truncated");
+      }
     }
 
     const plotWidth = width - this.marginLeft - this.marginRight;
@@ -1297,6 +1307,8 @@ class HybridSyncController {
     this.dragStartViewEnd = 0;
 
     this.fetchDebounceTimer = null;
+    this.fetchAbortController = null;
+    this.fetchSeqId = 0;
 
     this.init();
   }
@@ -1603,17 +1615,43 @@ class HybridSyncController {
     this.triggerFetchPackets();
   }
 
+  cancelPendingFetches() {
+    clearTimeout(this.fetchDebounceTimer);
+    if (this.fetchAbortController) {
+      try {
+        this.fetchAbortController.abort();
+      } catch (e) {}
+      this.fetchAbortController = null;
+    }
+    this.fetchSeqId += 1;
+  }
+
   triggerFetchPackets() {
     clearTimeout(this.fetchDebounceTimer);
     this.fetchDebounceTimer = setTimeout(async () => {
       if (this.fetchPacketsWindowFn) {
-        const data = await this.fetchPacketsWindowFn(this.viewStartNs, this.viewEndNs);
-        if (data) {
+        if (this.fetchAbortController) {
+          try {
+            this.fetchAbortController.abort();
+          } catch (e) {}
+        }
+        this.fetchAbortController = typeof AbortController !== "undefined" ? new AbortController() : null;
+        const seqId = ++this.fetchSeqId;
+        const signal = this.fetchAbortController ? this.fetchAbortController.signal : undefined;
+
+        const data = await this.fetchPacketsWindowFn(this.viewStartNs, this.viewEndNs, undefined, signal);
+        if (data && seqId === this.fetchSeqId) {
           this.packetCanvas.loadData(data, this.viewStartNs, this.viewEndNs);
           if (this.packetBadgeEl) {
             const count = data.total_in_window || 0;
-            const truncText = data.truncated ? ` (${data.returned} mostrados, muestreado)` : "";
-            this.packetBadgeEl.textContent = `${count.toLocaleString()} paquetes en ventana${truncText}`;
+            const ret = data.returned != null ? data.returned : (data.packets ? data.packets.length : 0);
+            if (data.truncated) {
+              this.packetBadgeEl.textContent = `${count.toLocaleString()} pkts (muestreo: ${ret.toLocaleString()})`;
+              this.packetBadgeEl.classList.add("is-truncated");
+            } else {
+              this.packetBadgeEl.textContent = `${count.toLocaleString()} paquetes en ventana`;
+              this.packetBadgeEl.classList.remove("is-truncated");
+            }
           }
         }
       }

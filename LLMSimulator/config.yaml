@@ -2,11 +2,11 @@ model:
   model_name: deepseekV3
 
 system:
-  gpu_gen: B100
+  gpu_gen: H100
   nvlink_gen: 5
   infiniband_gen: 800
   num_node: 1
-  num_device: 8
+  num_device: 16
   processor_type: GPU
   distribution:
     expert_tensor_degree: 1
@@ -27,7 +27,7 @@ system:
     decode_mode: on
 
 serving:
-  max_batch_size: 32
+  max_batch_size: 128
   max_process_token: 0
 
 simulation:
@@ -35,7 +35,7 @@ simulation:
   input_len: 1024
   output_len: 2
   precision_byte: 1
-  skewness: 0.0
+  skewness: 0.6
   iter: 2
   injection_rate: 0
   exit_out_of_memory: off
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: build/results/deepseekV3_4x2dev_mesh_bs32_20261120_212952/
-  gantt_directory: build/results/deepseekV3_4x2dev_mesh_bs32_20261120_212952/gantt/
+  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/deepseekV3_16dev_torus_bs128_skew0.6_20261125_202758/
+  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/deepseekV3_16dev_torus_bs128_skew0.6_20261125_202758/gantt/

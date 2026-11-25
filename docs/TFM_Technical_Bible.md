@@ -107,6 +107,7 @@
    - 10.11. Pestaña 4: Mapa Topológico Interactivo NoC, Heatmap de Tráfico e Inspector Arquitectónico (Fase 4)
    - 10.12. Refinamiento de Pestaña 4: Mapa de Calor Térmico en Enlaces/Flujos NoC y Tooltips Interactivos en Hover sobre Conexiones (Fase 4.5)
    - 10.13. Despliegue en Linux (`run_gui.sh`) y Validación End-to-End del Sistema (Fase 5)
+   - 10.14. Optimización de Memoria y Escalabilidad para Simulaciones Masivas (16+ GPUs / DeepSeek-V3 BS=128)
 
 ---
 
@@ -3672,6 +3673,42 @@ Se lanzó vía `POST /api/run` una simulación de **Mixtral 8x7B en Malla 4x2 (8
 
 ### 3. Certificación de Aislamiento Estricto (Golden Rule of Isolation)
 Mediante inspección forense con `git diff` y `git status`, se certificó que **ninguno de los scripts CLI tradicionales** (`run_sim.py`, `analyze_traces.py`, `plot_cronograma.py`, `plot_packet_tracking.py`) ni los archivos fuente en C++ (`src/`, `eval/`, `booksim2/`) sufrieron alteración alguna durante el desarrollo de las 5 fases. La GUI web reside en un espacio totalmente autónomo en `gui/`, garantizando la coexistencia armónica y la repetibilidad estricta de los resultados.
+
+---
+
+## 10.14. Optimización de Memoria y Escalabilidad para Simulaciones Masivas (16+ GPUs / DeepSeek-V3 BS=128)
+
+Al escalar simulaciones a configuraciones de gran tamaño como **DeepSeek-V3 en 16 GPUs con Batch Size 128 y Skewness 0.6** (`9.197.160` filas totales en `packet_tracking_debug.csv`, `938 MB` en disco, `4.595.976` paquetes en la última iteración y `35,59M` ciclos), la lectura concurrente sin control desde `ThreadingHTTPServer` disparaba múltiples invocaciones paralelas de `pd.read_csv()` con tipos por defecto (`int64`/`float64`/`object`), superando varios gigabytes de RAM y provocando la terminación abrupta por el *OOM Killer* de Linux. Se implementó una arquitectura integral de contención de memoria y vectorización en `LLMSimulator/gui/` sin alterar ningún script CLI ni fuente C++:
+
+### 1. Cachés LRU Thread-Safe con Lock por Archivo y Carga Compacta (`trace_parser.py` y `analysis_gui.py`)
+1. **Cachés Compartidas Sincronizadas (`_CSV_CACHE`, `_TRC_CACHE`, `_CLUSTER_INFO_CACHE`, `_SUMMARY_CACHE`, `_CHRONO_CACHE`):**
+   - Cada ruta canónica dispone de un `threading.Lock` dedicado (`_get_path_lock`). Cuando múltiples hilos HTTP solicitan `/api/results/summary`, `/api/results/chronogram`, `/api/results/packets` y `/api/results/packets_window` simultáneamente, solo el primer hilo lee y parsea el CSV/TRC mientras el resto reutiliza la estructura inmutable en memoria (invalidada automáticamente por `(st_mtime_ns, st_size)`).
+   - El límite combinado de `_CSV_CACHE` (`_CSV_CACHE_MAX_ENTRIES = 2`, `_CSV_CACHE_MAX_BYTES = 450 MB`) expulsa cachés previas antes de cargar un CSV masivo nuevo (`> 120 MB` en disco), evitando picos acumulados.
+   - `invalidate_simulation_cache()` limpia explícitamente cachés y ejecuta `gc.collect()` + `_malloc_trim()` al guardar (`save`), descartar (`discard`) o borrar (`delete`) simulaciones.
+2. **Carga Pre-Asignada y Tipado Compacto (`load_packet_csv_cached`):**
+   - Selección estricta de columnas esenciales (`usecols` de 11 columnas cuando las 3 columnas de ciclo `Creation_Cycle`, `Inject_Cycle`, `Receive_Cycle` están presentes) y tipos compactos (`int32` para PID/ciclos, `int16` para `Source`/`Dest`/`Num_Flits`/`Op_Idx`, `float32` para `Avg_Flit_Latency`, `float64` para `Op_Start_NS` preservando alineación exacta de 0 ciclos, y `category` para `Op_Type`).
+   - Para archivos `> 40 MB`, se realiza un conteo binario rápido de líneas y una pre-asignación exacta de arrays NumPy rellenados en bloques (`chunksize = 250.000`), reduciendo la huella de `9.197.160` filas a **`324,5 MB`** en DataFrame (frente a `> 2,5 GB` originales) y el RSS de carga inicial a **`437,5 MB`**.
+3. **Vectorización Completa y Reducción de Payload:**
+   - Eliminación de `.apply()` y `.iterrows()` en `parse_single_trc_segment`, `load_network_ops_debug`, `get_packet_tracking_data` y `get_packets_in_time_window`, sustituidos por vistas sin copia (`iloc`), `groupby(..., observed=True)` y compresión de `sub_ops` junto con la supresión de la lista duplicada `blocks` en `get_chronogram_data` (reduciendo el JSON del cronograma de `33.682,8 KB` a `9.515,5 KB`).
+   - Serialización controlada (`_HEAVY_DF_OP_LOCK`) únicamente cuando el DataFrame excede `1.000.000` de filas para evitar picos simultáneos entre hilos, manteniendo las simulaciones pequeñas sin bloqueo.
+
+### 2. Protección Adaptativa en Ventana Temporal (`SAFE_MAX_PACKETS = 2500`)
+- En `get_packets_in_time_window` (`trace_parser.py`) y `/api/results/packets_window` (`server.py`), se impone un tope adaptativo seguro de `2.500` paquetes por respuesta:
+  - Si la ventana visible contiene $\le 2.500$ paquetes, se devuelve el **100% exacto sin truncamiento** (`truncated: False`).
+  - Si la ventana contiene $> 2.500$ paquetes (p. ej., zoom amplio en simulaciones de 4,6M paquetes), se aplica **muestreo estratificado uniforme determinista** sobre el eje temporal ordenado (`np.argsort` + `np.linspace`), devolviendo `2.500` paquetes (`truncated: True`, `total_in_window: <total_real>`).
+- En la interfaz (`timeline_canvas.js`, `app.js`, `styles.css`), la píldora de cabecera del panel derecho muestra un aviso claro en **ámbar** (`Mostrando 2.500 de X paquetes (muestreo macro — haz zoom para ver el 100% exacto)`) y se incorporó cancelación automática de peticiones obsoletas con `AbortController` al hacer zoom/panorámica o al pulsar **Guardar Simulación**.
+
+### 3. Validación Experimental y Paridad Numérica CLI ↔ GUI (`DeepSeek-V3`, 16 GPUs, BS=128)
+La batería de estrés concurrente sobre `deepseekV3_16dev_torus_bs128_skew0.6_20261125_202758` arrojó los siguientes resultados verificados:
+
+| Indicador Auditado | Resultado Obtenido | Criterio / Referencia CLI |
+| :--- | :--- | :--- |
+| **Memoria Estable (`VmRSS`) del Servidor** | **`561,0 MB` – `581,2 MB`** (tras carga y 4 endpoints concurrentes) | Contenido bajo `< 800 MB` |
+| **Respuesta Concurrente en Caliente (4 endpoints)** | **`0,46 s` total** (`summary`: `0,005 s`, `chronogram`: `0,159 s`, `packets`: `0,299 s`, `packets_window`: `0,454 s`) | `< 2,0 s` |
+| **Muestreo Macro (Ventana Total 4.595.976 pkts)** | `total=4.595.976`, `returned=2.500`, `truncated=True` | Aviso ámbar activo sin caída |
+| **Ventana Detallada ($\le 2.500$ pkts, `mixtral_8dev_torus_bs128`)** | `total=1.953`, `returned=1.953`, `truncated=False` | 100% exacto sin muestreo |
+| **Paridad Exacta (`Compute` / `Transit` / `Stalls` / `Wall-Clock`)** | `15.847.776,2` / `16.631.736,6` / `3.112.331,9` / `35.591.844,7 ns` | Idéntico decimal a decimal a `analyze_traces.py` |
+| **Paridad de Red ($\lambda$ / `Avg_Flit_Lat` / `Avg_Pkt_Lat`)** | `0,1192 f/c/n` / `31.327,8 c` / `71.806,6 c` | Idéntico a `analyze_traces.py` |
 
 ---
 

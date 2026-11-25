@@ -1282,6 +1282,19 @@ select.form-control {
   white-space: nowrap;
 }
 
+.hybrid-packets-visible-pill.is-truncated {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(245, 158, 11, 0.65);
+  font-weight: 600;
+}
+
+.badge-pill.is-truncated {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
 #hybrid-packets-spacer,
 .hybrid-packets-spacer {
   position: relative;

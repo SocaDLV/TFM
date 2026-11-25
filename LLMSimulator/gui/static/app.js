@@ -680,20 +680,31 @@ document.addEventListener("DOMContentLoaded", () => {
       scrubberPosEl: hybridScrubberPos,
       windowInfoEl: hybridWindowInfo,
       packetBadgeEl: hybridPacketBadge,
-      fetchPacketsWindowFn: async (startNs, endNs, iter) => {
+      fetchPacketsWindowFn: async (startNs, endNs, iter, signal) => {
         if (!currentStagingFolder) return { packets: [], total_in_window: 0 };
         const it = iter || activeIteration;
         try {
-          const res = await fetch(`/api/results/packets_window?source=${currentResultsSource}&folder=${currentStagingFolder}&start_ns=${startNs}&end_ns=${endNs}&iteration=${it}&max_packets=0`);
+          const fetchOpts = signal ? { signal } : {};
+          const res = await fetch(
+            `/api/results/packets_window?source=${currentResultsSource}&folder=${currentStagingFolder}&start_ns=${startNs}&end_ns=${endNs}&iteration=${it}&max_packets=2500`,
+            fetchOpts
+          );
           if (!res.ok) return { packets: [], total_in_window: 0 };
           const data = await res.json();
           if (hybridPacketBadge) {
             const count = data.total_in_window != null ? data.total_in_window : (data.packets ? data.packets.length : 0);
-            const trunc = data.truncated ? ` (muestreados ${data.returned || (data.packets ? data.packets.length : 0)})` : "";
-            hybridPacketBadge.textContent = `${count.toLocaleString()} paquetes en ventana${trunc}`;
+            const ret = data.returned != null ? data.returned : (data.packets ? data.packets.length : 0);
+            if (data.truncated) {
+              hybridPacketBadge.textContent = `${count.toLocaleString()} pkts (muestreo: ${ret.toLocaleString()})`;
+              hybridPacketBadge.classList.add("is-truncated");
+            } else {
+              hybridPacketBadge.textContent = `${count.toLocaleString()} paquetes en ventana`;
+              hybridPacketBadge.classList.remove("is-truncated");
+            }
           }
           return data;
         } catch (e) {
+          if (e.name === "AbortError") return null;
           console.error("Error fetching packets_window:", e);
           return { packets: [], total_in_window: 0 };
         }
@@ -818,25 +829,27 @@ document.addEventListener("DOMContentLoaded", () => {
       console.error("Error cargando summary:", err);
     }
 
-    // 2. Fetch Chronogram
-    try {
-      const chronoRes = await fetch(`/api/results/chronogram?source=${source}&folder=${folder}&iteration=${activeIteration}`);
-      if (chronoRes.ok) {
-        const chronoData = await chronoRes.json();
-        lastChronoData = chronoData;
-        if (chronoCanvas) {
-          chronoCanvas.loadData(chronoData);
+    // 2. Fetch Chronogram & Packets in parallel (cache lock deduplicates CSV parsing)
+    const chronoPromise = fetch(`/api/results/chronogram?source=${source}&folder=${folder}&iteration=${activeIteration}`)
+      .then(async (chronoRes) => {
+        if (chronoRes.ok) {
+          const chronoData = await chronoRes.json();
+          lastChronoData = chronoData;
+          if (chronoCanvas) {
+            chronoCanvas.loadData(chronoData);
+          }
+          if (hybridSyncController) {
+            hybridSyncController.loadData(chronoData);
+          }
         }
-        if (hybridSyncController) {
-          hybridSyncController.loadData(chronoData);
-        }
-      }
-    } catch (err) {
-      console.error("Error cargando chronogram:", err);
-    }
+      })
+      .catch((err) => {
+        console.error("Error cargando chronogram:", err);
+      });
 
     // 3. Fetch Packets
-    loadPacketsData(source, folder, 0, packetsLimit);
+    const packetsPromise = loadPacketsData(source, folder, 0, packetsLimit);
+    await Promise.all([chronoPromise, packetsPromise]);
 
     // 4. Update Hybrid View if active
     if (activeSubview === "hybrid") {
@@ -1133,9 +1146,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Save Simulation Button
+  // Save Simulation Button (prioritario e independiente del renderizado pesado)
   btnSaveStaging.addEventListener("click", async () => {
     if (!currentStagingFolder || currentResultsSource === "saved") return;
+
+    if (hybridSyncController && typeof hybridSyncController.cancelPendingFetches === "function") {
+      hybridSyncController.cancelPendingFetches();
+    }
 
     const label = stagingCustomLabel.value.trim();
     btnSaveStaging.disabled = true;
@@ -1176,7 +1193,11 @@ document.addEventListener("DOMContentLoaded", () => {
       alert(`¡Simulación guardada con éxito en el historial!\nRuta: build/results/${currentStagingFolder}`);
 
     } catch (err) {
-      alert(`Error al guardar la simulación:\n${err.message}`);
+      const isConnErr = err.name === "TypeError" || /networkerror|failed to fetch|load failed/i.test(err.message || "");
+      const detail = isConnErr
+        ? `No se pudo conectar con el servidor GUI (${err.message}). Verifica que ./run_gui.sh sigue en ejecución y vuelve a intentarlo; tus datos siguen intactos en build/tmp_staging/${currentStagingFolder}.`
+        : err.message;
+      alert(`Error al guardar la simulación:\n${detail}`);
       btnSaveStaging.disabled = false;
       btnSaveStaging.textContent = "💾 Guardar Simulación";
     }
@@ -1190,6 +1211,10 @@ document.addEventListener("DOMContentLoaded", () => {
       `¿Estás seguro de que deseas descartar y eliminar la simulación temporal "${currentStagingFolder}"?\nEsta acción no se puede deshacer.`
     );
     if (!confirmDiscard) return;
+
+    if (hybridSyncController && typeof hybridSyncController.cancelPendingFetches === "function") {
+      hybridSyncController.cancelPendingFetches();
+    }
 
     btnDiscardStaging.disabled = true;
     btnDiscardStaging.textContent = "Descartando...";
@@ -1229,7 +1254,11 @@ document.addEventListener("DOMContentLoaded", () => {
       switchTab("tab-config");
 
     } catch (err) {
-      alert(`Error al descartar simulación:\n${err.message}`);
+      const isConnErr = err.name === "TypeError" || /networkerror|failed to fetch|load failed/i.test(err.message || "");
+      const detail = isConnErr
+        ? `Conexión interrumpida con el servidor GUI (${err.message}). Comprueba que ./run_gui.sh sigue activo.`
+        : err.message;
+      alert(`Error al descartar simulación:\n${detail}`);
       btnDiscardStaging.disabled = false;
       btnDiscardStaging.textContent = "🗑️ Descartar";
     }

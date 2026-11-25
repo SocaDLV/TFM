@@ -8,38 +8,437 @@ Supports multi-iteration analysis (Iteración 1..N o Simulación Completa).
 """
 
 import os
+import gc
 import glob
 import re
 import json
+import threading
+from contextlib import nullcontext
+from collections import OrderedDict
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
 
+SAFE_MAX_PACKETS = 2500
+
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS = {}
+
+_CSV_CACHE_LOCK = threading.Lock()
+_CSV_CACHE = OrderedDict()
+_CSV_CACHE_MAX_ENTRIES = 2
+_CSV_CACHE_MAX_BYTES = 450 * 1024 * 1024
+
+_TRC_CACHE_LOCK = threading.Lock()
+_TRC_CACHE = OrderedDict()
+_TRC_CACHE_MAX_ENTRIES = 48
+
+_CLUSTER_INFO_CACHE_LOCK = threading.Lock()
+_CLUSTER_INFO_CACHE = OrderedDict()
+_CLUSTER_INFO_CACHE_MAX = 8
+
+_RESULT_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE = OrderedDict()   # (resolved_folder, iteration) -> {"sig": ..., "data": ...}
+_CHRONO_CACHE = OrderedDict()    # (resolved_folder, iteration) -> {"sig": ..., "data": ...}
+_RESULT_CACHE_MAX = 2
+
+_HEAVY_DF_OP_LOCK = threading.Lock()
+
+
+def _get_path_lock(resolved_path):
+    """Returns a dedicated threading.Lock per canonical file path."""
+    key = str(resolved_path)
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PATH_LOCKS[key] = lock
+        return lock
+
+
+def _malloc_trim():
+    """Asks glibc to return freed heap arenas back to the OS."""
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
+def invalidate_simulation_cache(folder_path=None):
+    """
+    Evicts cached CSV, TRC, summary, chronogram, and iteration metadata entries
+    for folder_path (or clears all caches if folder_path is None) and triggers gc.collect().
+    """
+    target_prefix = str(Path(folder_path).resolve()) if folder_path else None
+    with _CSV_CACHE_LOCK:
+        if target_prefix is None:
+            _CSV_CACHE.clear()
+        else:
+            for k in [k for k in _CSV_CACHE if k == target_prefix or k.startswith(target_prefix + os.sep)]:
+                del _CSV_CACHE[k]
+
+    with _TRC_CACHE_LOCK:
+        if target_prefix is None:
+            _TRC_CACHE.clear()
+        else:
+            for k in [k for k in _TRC_CACHE if k == target_prefix or k.startswith(target_prefix + os.sep)]:
+                del _TRC_CACHE[k]
+
+    with _CLUSTER_INFO_CACHE_LOCK:
+        if target_prefix is None:
+            _CLUSTER_INFO_CACHE.clear()
+        else:
+            _CLUSTER_INFO_CACHE.pop(target_prefix, None)
+
+    with _RESULT_CACHE_LOCK:
+        if target_prefix is None:
+            _SUMMARY_CACHE.clear()
+            _CHRONO_CACHE.clear()
+        else:
+            for cache_d in (_SUMMARY_CACHE, _CHRONO_CACHE):
+                for k in [k for k in cache_d if k[0] == target_prefix]:
+                    del cache_d[k]
+
+    gc.collect()
+    _malloc_trim()
+
+
+def _compute_drop_bounds(df, col_name, drop_threshold=-1.0):
+    """
+    Computes contiguous iteration index ranges [(start, end), ...] whenever col_name drops
+    by more than drop_threshold, using zero-copy NumPy operations.
+    """
+    n = len(df)
+    if n == 0 or col_name not in df.columns:
+        return [(0, n)] if n > 0 else []
+
+    vals = df[col_name].to_numpy(dtype=np.float64, copy=False)
+    if len(vals) <= 1:
+        return [(0, n)]
+
+    drop_pos = np.flatnonzero(np.diff(vals) < drop_threshold) + 1
+    if len(drop_pos) == 0:
+        return [(0, n)]
+
+    cuts = [0] + drop_pos.tolist() + [n]
+    bounds = []
+    for i in range(len(cuts) - 1):
+        if cuts[i + 1] > cuts[i]:
+            bounds.append((cuts[i], cuts[i + 1]))
+    return bounds if bounds else [(0, n)]
+
+
 def split_dataframe_by_drops(df, col_name, drop_threshold=-1.0):
     """
-    Splits a DataFrame into sequential iteration segments whenever col_name drops
+    Splits a DataFrame into sequential iteration slice views whenever col_name drops
     by more than drop_threshold (e.g. START_NS < -1.0 or Op_Start_NS < -100.0).
-    Returns a list of DataFrames: [seg_iter_1, seg_iter_2, ...].
+    Returns a list of DataFrame views without unnecessary full-frame copies.
     """
     if df.empty or col_name not in df.columns:
         return [df]
-    drops = df[col_name].diff() < drop_threshold
-    if not drops.any():
+    bounds = _compute_drop_bounds(df, col_name, drop_threshold)
+    if len(bounds) == 1 and bounds[0] == (0, len(df)):
         return [df]
-    cut_indices = [0] + list(df.index[drops]) + [len(df)]
-    segments = []
-    for i in range(len(cut_indices) - 1):
-        seg = df.iloc[cut_indices[i] : cut_indices[i + 1]].copy().reset_index(drop=True)
-        if not seg.empty:
-            segments.append(seg)
-    return segments if segments else [df]
+    return [df.iloc[s:e] for (s, e) in bounds]
+
+
+def _load_trc_cached(trc_path):
+    """
+    Thread-safe cached loader for a single *device_*.trc file.
+    Validates (mtime_ns, size) and returns immutable (df, seg_bounds).
+    """
+    resolved = str(Path(trc_path).resolve())
+    st = os.stat(resolved)
+    sig = (st.st_mtime_ns, st.st_size)
+
+    with _TRC_CACHE_LOCK:
+        entry = _TRC_CACHE.get(resolved)
+        if entry is not None and entry["sig"] == sig:
+            _TRC_CACHE.move_to_end(resolved)
+            return entry["df"], entry["seg_bounds"]
+
+    path_lock = _get_path_lock(resolved)
+    with path_lock:
+        with _TRC_CACHE_LOCK:
+            entry = _TRC_CACHE.get(resolved)
+            if entry is not None and entry["sig"] == sig:
+                _TRC_CACHE.move_to_end(resolved)
+                return entry["df"], entry["seg_bounds"]
+
+        df = pd.read_csv(resolved, on_bad_lines="skip")
+        df.columns = df.columns.str.strip()
+        df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
+        df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
+        df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
+        df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
+        df = df[df["DURATION"] > 0].reset_index(drop=True)
+        if "TYPE" in df.columns:
+            df["TYPE"] = df["TYPE"].astype(str).str.strip()
+        if "DETAILS" in df.columns:
+            df["DETAILS"] = df["DETAILS"].fillna("").astype(str).str.strip()
+        else:
+            df["DETAILS"] = ""
+
+        seg_bounds = _compute_drop_bounds(df, "START_NS", -1.0)
+
+        with _TRC_CACHE_LOCK:
+            _TRC_CACHE[resolved] = {"sig": sig, "df": df, "seg_bounds": seg_bounds}
+            _TRC_CACHE.move_to_end(resolved)
+            while len(_TRC_CACHE) > _TRC_CACHE_MAX_ENTRIES:
+                _TRC_CACHE.popitem(last=False)
+
+        return df, seg_bounds
+
+
+def load_packet_csv_cached(folder_path):
+    """
+    Thread-safe LRU cached loader for packet_tracking_debug.csv.
+    Uses compact dtypes (int32/int16/float32/category) and minimal usecols to keep
+    ~9.2M rows under ~350 MB RAM, synchronized by per-file threading.Lock.
+    Returns (df, seg_bounds) or (None, []) if missing/empty.
+    """
+    folder = Path(folder_path).resolve()
+    csv_path = folder / "packet_tracking_debug.csv"
+    if not csv_path.exists():
+        return None, []
+
+    resolved = str(csv_path)
+    st = os.stat(resolved)
+    sig = (st.st_mtime_ns, st.st_size)
+
+    with _CSV_CACHE_LOCK:
+        entry = _CSV_CACHE.get(resolved)
+        if entry is not None and entry["sig"] == sig:
+            _CSV_CACHE.move_to_end(resolved)
+            return entry["df"], entry["seg_bounds"]
+
+    path_lock = _get_path_lock(resolved)
+    with path_lock:
+        with _CSV_CACHE_LOCK:
+            entry = _CSV_CACHE.get(resolved)
+            if entry is not None and entry["sig"] == sig:
+                _CSV_CACHE.move_to_end(resolved)
+                return entry["df"], entry["seg_bounds"]
+
+        # If loading a large CSV (>120 MB on disk), evict other cached CSVs first to bound peak RSS
+        if st.st_size > 120 * 1024 * 1024:
+            evicted = False
+            with _CSV_CACHE_LOCK:
+                for k in list(_CSV_CACHE.keys()):
+                    if k != resolved:
+                        del _CSV_CACHE[k]
+                        evicted = True
+            if evicted:
+                gc.collect()
+
+        with open(resolved, "r", encoding="utf-8", errors="ignore") as fh:
+            header_line = fh.readline()
+        if not header_line:
+            return None, []
+
+        raw_cols = [c for c in header_line.rstrip("\r\n").split(",")]
+        stripped_to_raw = {c.strip(): c for c in raw_cols if c.strip()}
+
+        essential_cols = [
+            "PID", "Source", "Dest",
+            "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
+            "Num_Flits", "Avg_Flit_Latency",
+            "Op_Type", "Op_Idx", "Op_Start_NS",
+        ]
+        # Only load legacy latency columns if raw cycle columns are absent
+        has_all_cycles = all(c in stripped_to_raw for c in ("Creation_Cycle", "Inject_Cycle", "Receive_Cycle"))
+        if not has_all_cycles:
+            essential_cols.extend(["Total_Latency", "Latency", "Network_Latency", "Queueing_Delay"])
+
+        usecols_raw = [stripped_to_raw[c] for c in essential_cols if c in stripped_to_raw]
+        if not usecols_raw:
+            return None, []
+
+        compact_dtypes = {
+            "PID": "int32",
+            "Source": "int16",
+            "Dest": "int16",
+            "Creation_Cycle": "int32",
+            "Inject_Cycle": "int32",
+            "Receive_Cycle": "int32",
+            "Total_Latency": "int32",
+            "Latency": "int32",
+            "Network_Latency": "int32",
+            "Queueing_Delay": "int32",
+            "Num_Flits": "int16",
+            "Avg_Flit_Latency": "float32",
+            "Op_Type": "category",
+            "Op_Idx": "int16",
+            "Op_Start_NS": "float64",
+        }
+        dtypes_raw = {
+            stripped_to_raw[k]: v
+            for k, v in compact_dtypes.items()
+            if k in stripped_to_raw and stripped_to_raw[k] in usecols_raw
+        }
+
+        df = None
+        try:
+            if st.st_size > 40 * 1024 * 1024:
+                # Pre-allocated chunked path for huge CSVs: cuts peak RSS from ~720 MB to ~435 MB
+                n_lines = 0
+                last_byte = b"\n"
+                with open(resolved, "rb") as bf:
+                    while True:
+                        buf = bf.read(4 * 1024 * 1024)
+                        if not buf:
+                            break
+                        n_lines += buf.count(b"\n")
+                        last_byte = buf[-1:]
+                if last_byte != b"\n":
+                    n_lines += 1
+                n_rows = max(0, n_lines - 1)
+
+                if n_rows > 0:
+                    np_dtype_map = {
+                        "int32": np.int32,
+                        "int16": np.int16,
+                        "float32": np.float32,
+                        "float64": np.float64,
+                    }
+                    arrs = {}
+                    chunk_dtypes = {}
+                    has_op_type = False
+                    for raw_c in usecols_raw:
+                        norm_c = raw_c.strip()
+                        dt_str = compact_dtypes.get(norm_c, "float32")
+                        chunk_dtypes[raw_c] = dt_str
+                        if norm_c == "Op_Type" and dt_str == "category":
+                            has_op_type = True
+                            arrs["_op_codes"] = np.empty(n_rows, dtype=np.int16)
+                        else:
+                            arrs[norm_c] = np.empty(n_rows, dtype=np_dtype_map.get(dt_str, np.float32))
+
+                    cat_list = []
+                    cat_map = {}
+                    pos = 0
+                    for ch in pd.read_csv(
+                        resolved,
+                        usecols=usecols_raw,
+                        dtype=chunk_dtypes,
+                        chunksize=250_000,
+                        na_filter=False,
+                        on_bad_lines="skip",
+                    ):
+                        k = len(ch)
+                        if k == 0:
+                            continue
+                        if pos + k > n_rows:
+                            # Defensive grow in case line estimate was low
+                            extra = (pos + k) - n_rows
+                            n_rows += extra
+                            for ak in arrs:
+                                arrs[ak] = np.resize(arrs[ak], n_rows)
+                        for raw_c in usecols_raw:
+                            norm_c = raw_c.strip()
+                            if norm_c == "Op_Type" and has_op_type:
+                                ch_codes = ch[raw_c].cat.codes.to_numpy(dtype=np.int16, copy=False)
+                                cats = ch[raw_c].cat.categories.tolist()
+                                lookup = np.empty(len(cats), dtype=np.int16)
+                                for ci, cname in enumerate(cats):
+                                    cid = cat_map.get(cname)
+                                    if cid is None:
+                                        cid = len(cat_list)
+                                        cat_map[cname] = cid
+                                        cat_list.append(cname)
+                                    lookup[ci] = cid
+                                arrs["_op_codes"][pos : pos + k] = lookup[ch_codes]
+                            else:
+                                arrs[norm_c][pos : pos + k] = ch[raw_c].to_numpy(copy=False)
+                        pos += k
+
+                    op_cat = None
+                    if has_op_type:
+                        codes_final = arrs.pop("_op_codes")[:pos]
+                        op_cat = pd.Categorical.from_codes(codes_final, categories=cat_list)
+                    df = pd.DataFrame(
+                        {col_n: (v[:pos] if pos < n_rows else v) for col_n, v in arrs.items()},
+                        copy=False,
+                    )
+                    if op_cat is not None:
+                        df["Op_Type"] = op_cat
+                    del arrs
+            else:
+                df = pd.read_csv(
+                    resolved,
+                    usecols=usecols_raw,
+                    dtype=dtypes_raw,
+                    na_filter=False,
+                    on_bad_lines="skip",
+                )
+                df.columns = df.columns.str.strip()
+        except Exception:
+            # Fallback for legacy/malformed CSVs containing NaNs or float cycles
+            df = pd.read_csv(resolved, usecols=usecols_raw, on_bad_lines="skip")
+            df.columns = df.columns.str.strip()
+            for col in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
+                        "Total_Latency", "Latency", "Network_Latency", "Queueing_Delay", "Num_Flits", "Op_Idx"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce")
+            if "Op_Start_NS" in df.columns:
+                df["Op_Start_NS"] = pd.to_numeric(df["Op_Start_NS"], errors="coerce")
+            if "Avg_Flit_Latency" in df.columns:
+                df["Avg_Flit_Latency"] = pd.to_numeric(df["Avg_Flit_Latency"], errors="coerce").astype("float32")
+            req_drop = [c for c in ("Creation_Cycle", "Receive_Cycle") if c in df.columns]
+            if req_drop:
+                df = df.dropna(subset=req_drop).reset_index(drop=True)
+            for col, target_dt in compact_dtypes.items():
+                if col in df.columns:
+                    if target_dt == "category":
+                        df[col] = df[col].astype("category")
+                    elif target_dt in ("int16", "int32"):
+                        vals = df[col].fillna(0)
+                        if target_dt == "int16" and vals.abs().max() < 32767:
+                            df[col] = vals.astype("int16")
+                        elif vals.abs().max() < 2147483647:
+                            df[col] = vals.astype("int32")
+
+        if df is None or df.empty:
+            return None, []
+
+        # Synthesize Creation_Cycle / Receive_Cycle for very old legacy CSVs if needed
+        if "Creation_Cycle" not in df.columns and "Inject_Cycle" in df.columns:
+            df["Creation_Cycle"] = df["Inject_Cycle"]
+        if "Receive_Cycle" not in df.columns and "Creation_Cycle" in df.columns:
+            lat_col = "Total_Latency" if "Total_Latency" in df.columns else ("Latency" if "Latency" in df.columns else None)
+            if lat_col is not None:
+                df["Receive_Cycle"] = df["Creation_Cycle"] + df[lat_col]
+
+        seg_bounds = _compute_drop_bounds(df, "Op_Start_NS", -100.0)
+        mem_bytes = int(df.memory_usage(deep=True).sum())
+
+        with _CSV_CACHE_LOCK:
+            _CSV_CACHE[resolved] = {
+                "sig": sig,
+                "df": df,
+                "seg_bounds": seg_bounds,
+                "mem_bytes": mem_bytes,
+            }
+            _CSV_CACHE.move_to_end(resolved)
+
+            total_bytes = sum(v["mem_bytes"] for v in _CSV_CACHE.values())
+            while len(_CSV_CACHE) > _CSV_CACHE_MAX_ENTRIES or (total_bytes > _CSV_CACHE_MAX_BYTES and len(_CSV_CACHE) > 1):
+                _, popped = _CSV_CACHE.popitem(last=False)
+                total_bytes -= popped["mem_bytes"]
+
+        if mem_bytes > 50 * 1024 * 1024:
+            gc.collect()
+            _malloc_trim()
+
+        return df, seg_bounds
 
 
 def get_cluster_iteration_info(folder_path):
     """
-    Scans all *device_*.trc files in folder_path to determine the number of iterations
-    and the max wall-clock duration of each iteration across all GPUs.
+    Scans all *device_*.trc files in folder_path (via _TRC_CACHE) to determine
+    the number of iterations and the max wall-clock duration of each iteration across all GPUs.
     Returns: (num_iters, durations_list, offsets_list)
     """
     folder = Path(folder_path).resolve()
@@ -47,25 +446,35 @@ def get_cluster_iteration_info(folder_path):
     if not trc_files:
         return 1, [0.0], [0.0]
 
+    folder_key = str(folder)
+    try:
+        sig = tuple((tf, os.stat(tf).st_mtime_ns, os.stat(tf).st_size) for tf in trc_files)
+    except OSError:
+        sig = None
+
+    if sig is not None:
+        with _CLUSTER_INFO_CACHE_LOCK:
+            cached = _CLUSTER_INFO_CACHE.get(folder_key)
+            if cached is not None and cached["sig"] == sig:
+                _CLUSTER_INFO_CACHE.move_to_end(folder_key)
+                return cached["info"]
+
     max_ends_per_iter = {}
     min_starts_per_iter = {}
 
     for tf in trc_files:
         try:
-            df = pd.read_csv(tf, on_bad_lines="skip")
-            df.columns = df.columns.str.strip()
-            df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
-            df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
-            df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
-            df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
-            df = df[df["DURATION"] > 0]
+            df, seg_bounds = _load_trc_cached(tf)
             if df.empty:
                 continue
 
-            segs = split_dataframe_by_drops(df, "START_NS", -1.0)
-            for k, seg in enumerate(segs):
-                s_min = float(seg["START_NS"].min())
-                e_max = float(seg["END_NS"].max())
+            starts_arr = df["START_NS"].to_numpy(dtype=np.float64, copy=False)
+            ends_arr = df["END_NS"].to_numpy(dtype=np.float64, copy=False)
+            for k, (s_idx, e_idx) in enumerate(seg_bounds):
+                if e_idx <= s_idx:
+                    continue
+                s_min = float(starts_arr[s_idx:e_idx].min())
+                e_max = float(ends_arr[s_idx:e_idx].max())
                 min_starts_per_iter[k] = min(min_starts_per_iter.get(k, float("inf")), s_min)
                 max_ends_per_iter[k] = max(max_ends_per_iter.get(k, 0.0), e_max)
         except Exception:
@@ -82,140 +491,162 @@ def get_cluster_iteration_info(folder_path):
     for k in range(1, num_iters):
         offsets.append(offsets[-1] + durations[k - 1])
 
-    return num_iters, durations, offsets
+    result = (num_iters, durations, offsets)
+    if sig is not None:
+        with _CLUSTER_INFO_CACHE_LOCK:
+            _CLUSTER_INFO_CACHE[folder_key] = {"sig": sig, "info": result}
+            _CLUSTER_INFO_CACHE.move_to_end(folder_key)
+            while len(_CLUSTER_INFO_CACHE) > _CLUSTER_INFO_CACHE_MAX:
+                _CLUSTER_INFO_CACHE.popitem(last=False)
+
+    return result
 
 
 def load_network_ops_debug(folder_path, iteration="last", iteration_offsets=None):
     """
-    Loads packet_tracking_debug.csv, segments by iteration, applies temporal offsets if iteration=='all',
-    and aggregates statistics per network collective and per GPU.
+    Loads packet_tracking_debug.csv via thread-safe cache, selects iteration slices without
+    copying the full DataFrame, and aggregates per-collective and per-GPU stats vectorially.
     """
-    csv_path = os.path.join(folder_path, "packet_tracking_debug.csv")
-    if not os.path.exists(csv_path):
-        return []
-
     try:
-        df_p = pd.read_csv(csv_path, on_bad_lines="skip")
-        if df_p.empty or "Op_Type" not in df_p.columns:
+        df_p, seg_bounds = load_packet_csv_cached(folder_path)
+        if df_p is None or df_p.empty or "Op_Type" not in df_p.columns:
             return []
 
-        df_p.columns = df_p.columns.str.strip()
-
-        # Normalizar tipos
-        for c in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
-                  "Total_Latency", "Num_Flits", "Op_Idx", "Op_Start_NS", "Op_End_NS", "Avg_Flit_Latency", "Throughput"]:
-            if c in df_p.columns:
-                df_p[c] = pd.to_numeric(df_p[c], errors="coerce")
-
-        segs = split_dataframe_by_drops(df_p, "Op_Start_NS", -100.0)
-        num_iters = len(segs)
+        num_iters = len(seg_bounds)
+        if num_iters == 0:
+            return []
 
         if iteration == "all":
-            processed_segs = []
-            for k, seg in enumerate(segs):
-                off = iteration_offsets[k] if (iteration_offsets and k < len(iteration_offsets)) else 0.0
-                seg = seg.copy()
-                if off > 0:
-                    if "Op_Start_NS" in seg.columns:
-                        seg["Op_Start_NS"] = seg["Op_Start_NS"] + off
-                    if "Op_End_NS" in seg.columns:
-                        seg["Op_End_NS"] = seg["Op_End_NS"] + off
-                seg["ITERATION"] = k + 1
-                processed_segs.append(seg)
-            df_active = pd.concat(processed_segs, ignore_index=True)
+            slices_to_process = [
+                (k + 1, df_p.iloc[s:e], iteration_offsets[k] if (iteration_offsets and k < len(iteration_offsets)) else 0.0)
+                for k, (s, e) in enumerate(seg_bounds)
+            ]
         elif iteration == "last":
-            df_active = segs[-1].copy()
-            df_active["ITERATION"] = num_iters
+            s, e = seg_bounds[-1]
+            slices_to_process = [(num_iters, df_p.iloc[s:e], 0.0)]
         else:
             try:
                 iter_k = int(iteration) - 1
-                if 0 <= iter_k < num_iters:
-                    df_active = segs[iter_k].copy()
-                    df_active["ITERATION"] = iter_k + 1
-                else:
-                    df_active = segs[-1].copy()
-                    df_active["ITERATION"] = num_iters
+                idx = iter_k if 0 <= iter_k < num_iters else num_iters - 1
             except ValueError:
-                df_active = segs[-1].copy()
-                df_active["ITERATION"] = num_iters
+                idx = num_iters - 1
+            s, e = seg_bounds[idx]
+            slices_to_process = [(idx + 1, df_p.iloc[s:e], 0.0)]
 
-        all_nodes = set()
-        if "Source" in df_active.columns:
-            all_nodes.update(df_active["Source"].dropna().unique())
-        if "Dest" in df_active.columns:
-            all_nodes.update(df_active["Dest"].dropna().unique())
-        max_node = int(max(all_nodes)) if all_nodes else 7
-        num_gpus = max(8, max_node + 1)
+        max_src = int(df_p["Source"].max()) if "Source" in df_p.columns and not df_p.empty else 7
+        max_dst = int(df_p["Dest"].max()) if "Dest" in df_p.columns and not df_p.empty else 7
+        num_gpus = max(8, max(max_src, max_dst) + 1)
 
         ops = []
-        group_cols = ["ITERATION", "Op_Type", "Op_Idx"] if "ITERATION" in df_active.columns else ["Op_Type", "Op_Idx"]
-        for keys, grp in df_active.groupby(group_cols, sort=False):
-            if "ITERATION" in df_active.columns:
-                iter_num, op_type, op_idx = keys
-            else:
-                op_type, op_idx = keys
-                iter_num = 1
+        for iter_num, seg_view, off_ns in slices_to_process:
+            if seg_view.empty:
+                continue
 
-            start_ns = float(grp["Op_Start_NS"].iloc[0]) if "Op_Start_NS" in grp.columns else 0.0
-            end_ns = float(grp["Op_End_NS"].iloc[0]) if "Op_End_NS" in grp.columns else 0.0
-            min_pid = int(grp["PID"].min())
-            max_pid = int(grp["PID"].max())
-            total_pkts = len(grp)
-            final_avg_lat = float(grp["Avg_Flit_Latency"].iloc[-1]) if "Avg_Flit_Latency" in grp.columns else 0.0
-            final_prod = float(grp["Throughput"].iloc[-1]) if "Throughput" in grp.columns else 0.0
+            has_flits = "Num_Flits" in seg_view.columns
+            has_avg_flit = "Avg_Flit_Latency" in seg_view.columns
+            has_op_start = "Op_Start_NS" in seg_view.columns
+            has_rx = "Receive_Cycle" in seg_view.columns
+            has_cr = "Creation_Cycle" in seg_view.columns
 
-            op_type_lower = str(op_type).lower()
-            gpu_data = {}
-            for d in range(num_gpus):
-                if "scatter" in op_type_lower:
-                    sub = grp[grp["Dest"] == d]
-                    role = "RX (Experto Destino)"
-                elif "gather" in op_type_lower:
-                    sub = grp[grp["Source"] == d]
-                    role = "TX (Activación Origen)"
-                elif "allreduce" in op_type_lower or "all_reduce" in op_type_lower:
-                    sub = grp[grp["Dest"] == d]
-                    if sub.empty:
-                        sub = grp[grp["Source"] == d]
-                    role = "Ring TP"
-                else:
-                    sub = grp[(grp["Dest"] == d) | (grp["Source"] == d)]
-                    role = "P2P"
+            op_agg_dict = {
+                "min_pid": ("PID", "min"),
+                "max_pid": ("PID", "max"),
+                "total_pkts": ("PID", "count"),
+            }
+            if has_op_start:
+                op_agg_dict["start_ns"] = ("Op_Start_NS", "first")
+            if has_rx:
+                op_agg_dict["max_rx"] = ("Receive_Cycle", "max")
+            if has_avg_flit:
+                op_agg_dict["avg_flit_lat"] = ("Avg_Flit_Latency", "last")
 
-                n_local = len(sub)
-                if n_local > 0:
-                    lat_local = float(sub["Total_Latency"].mean()) if "Total_Latency" in sub.columns else 0.0
-                    flits_local = int(sub["Num_Flits"].sum()) if "Num_Flits" in sub.columns else n_local * 9
-                    min_pid_local = int(sub["PID"].min())
-                    max_pid_local = int(sub["PID"].max())
-                else:
-                    lat_local = 0.0
-                    flits_local = 0
-                    min_pid_local = 0
-                    max_pid_local = 0
+            op_summary = seg_view.groupby(["Op_Type", "Op_Idx"], observed=True, sort=False).agg(**op_agg_dict)
 
-                gpu_data[d] = {
-                    "pkts": n_local,
-                    "lat": round(lat_local, 1),
-                    "flits": flits_local,
-                    "min_pid": min_pid_local,
-                    "max_pid": max_pid_local,
-                    "role": role
-                }
+            # Vectorized per-GPU TX (Source) & RX (Dest) aggregations
+            gpu_agg_cols = {
+                "pkts": ("PID", "count"),
+                "min_pid": ("PID", "min"),
+                "max_pid": ("PID", "max"),
+            }
+            if has_flits:
+                gpu_agg_cols["flits"] = ("Num_Flits", "sum")
+            if has_rx and has_cr:
+                gpu_agg_cols["sum_rx"] = ("Receive_Cycle", "sum")
+                gpu_agg_cols["sum_cr"] = ("Creation_Cycle", "sum")
+            elif "Total_Latency" in seg_view.columns:
+                gpu_agg_cols["sum_lat"] = ("Total_Latency", "sum")
 
-            ops.append({
-                "iter": int(iter_num),
-                "type": str(op_type),
-                "idx": int(op_idx) if str(op_idx).isdigit() else 1,
-                "start_ns": start_ns,
-                "end_ns": end_ns,
-                "min_pid": min_pid,
-                "max_pid": max_pid,
-                "total_pkts": total_pkts,
-                "avg_flit_lat": round(final_avg_lat, 2),
-                "throughput": round(final_prod, 2),
-                "gpu_data": gpu_data
-            })
+            tx_agg = seg_view.groupby(["Op_Type", "Op_Idx", "Source"], observed=True, sort=False).agg(**gpu_agg_cols)
+            rx_agg = seg_view.groupby(["Op_Type", "Op_Idx", "Dest"], observed=True, sort=False).agg(**gpu_agg_cols)
+
+            tx_lookup = tx_agg.to_dict("index")
+            rx_lookup = rx_agg.to_dict("index")
+
+            for (op_type, op_idx), row in op_summary.iterrows():
+                start_ns = float(row["start_ns"]) + off_ns if "start_ns" in row else off_ns
+                max_rx_val = float(row["max_rx"]) if "max_rx" in row else 0.0
+                end_ns = start_ns + max_rx_val + 1.0
+                min_pid = int(row["min_pid"])
+                max_pid = int(row["max_pid"])
+                total_pkts = int(row["total_pkts"])
+                final_avg_lat = float(row["avg_flit_lat"]) if "avg_flit_lat" in row else 0.0
+
+                op_type_lower = str(op_type).lower()
+                gpu_data = {}
+                for d in range(num_gpus):
+                    if "scatter" in op_type_lower:
+                        rec = rx_lookup.get((op_type, op_idx, d))
+                        role = "RX (Experto Destino)"
+                    elif "gather" in op_type_lower:
+                        rec = tx_lookup.get((op_type, op_idx, d))
+                        role = "TX (Activación Origen)"
+                    elif "allreduce" in op_type_lower or "all_reduce" in op_type_lower:
+                        rec = rx_lookup.get((op_type, op_idx, d)) or tx_lookup.get((op_type, op_idx, d))
+                        role = "Ring TP"
+                    else:
+                        rec = rx_lookup.get((op_type, op_idx, d)) or tx_lookup.get((op_type, op_idx, d))
+                        role = "P2P"
+
+                    if rec and rec["pkts"] > 0:
+                        n_local = int(rec["pkts"])
+                        if "sum_rx" in rec and "sum_cr" in rec:
+                            lat_local = float(rec["sum_rx"] - rec["sum_cr"]) / n_local
+                        elif "sum_lat" in rec:
+                            lat_local = float(rec["sum_lat"]) / n_local
+                        else:
+                            lat_local = 0.0
+                        flits_local = int(rec["flits"]) if "flits" in rec else n_local * 9
+                        min_pid_local = int(rec["min_pid"])
+                        max_pid_local = int(rec["max_pid"])
+                    else:
+                        n_local = 0
+                        lat_local = 0.0
+                        flits_local = 0
+                        min_pid_local = 0
+                        max_pid_local = 0
+
+                    gpu_data[d] = {
+                        "pkts": n_local,
+                        "lat": round(lat_local, 1),
+                        "flits": flits_local,
+                        "min_pid": min_pid_local,
+                        "max_pid": max_pid_local,
+                        "role": role,
+                    }
+
+                ops.append({
+                    "iter": int(iter_num),
+                    "type": str(op_type),
+                    "idx": int(op_idx) if str(op_idx).isdigit() else 1,
+                    "start_ns": start_ns,
+                    "end_ns": end_ns,
+                    "min_pid": min_pid,
+                    "max_pid": max_pid,
+                    "total_pkts": total_pkts,
+                    "avg_flit_lat": round(final_avg_lat, 2),
+                    "throughput": 0.0,
+                    "gpu_data": gpu_data,
+                })
         return ops
     except Exception as e:
         print(f"⚠️ trace_parser: Error al parsear packet_tracking_debug.csv: {e}")
@@ -241,6 +672,15 @@ def get_simulation_summary(folder_path, iteration="last"):
     folder = Path(folder_path).resolve()
     if not folder.exists():
         raise FileNotFoundError(f"Carpeta no encontrada: {folder_path}")
+
+    cache_key = (str(folder), str(iteration))
+    sig = _get_folder_sig(folder)
+    if sig is not None:
+        with _RESULT_CACHE_LOCK:
+            cached = _SUMMARY_CACHE.get(cache_key)
+            if cached is not None and cached["sig"] == sig:
+                _SUMMARY_CACHE.move_to_end(cache_key)
+                return cached["data"]
 
     # 1. Metadatos de config.yaml, test.cfg, .trc y gui_metadata.json
     fname = folder.name.lower()
@@ -367,7 +807,7 @@ def get_simulation_summary(folder_path, iteration="last"):
     if local_trc:
         metadata["num_gpus"] = len(local_trc)
 
-    # 2. Análisis multi-iteración de los archivos .trc
+    # 2. Análisis multi-iteración de los archivos .trc (mediante caché thread-safe)
     num_iters, durations, offsets = get_cluster_iteration_info(folder)
     metadata["num_iterations"] = num_iters
 
@@ -394,32 +834,32 @@ def get_simulation_summary(folder_path, iteration="last"):
 
     for trc_path in sorted(trc_files):
         try:
-            df = pd.read_csv(trc_path, on_bad_lines="skip")
-            df.columns = df.columns.str.strip()
-            df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
-            df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
-            df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
-            df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
-            df = df[df["DURATION"] > 0]
-            if df.empty:
+            df, seg_bounds = _load_trc_cached(trc_path)
+            if df.empty or not seg_bounds:
                 continue
 
-            segs = split_dataframe_by_drops(df, "START_NS", -1.0)
             if target_iter_mode == "all":
-                df_active = pd.concat(segs, ignore_index=True)
+                df_active = df
             else:
-                idx = min(target_iter_mode, len(segs) - 1)
-                df_active = segs[idx]
+                idx = min(target_iter_mode, len(seg_bounds) - 1)
+                s_b, e_b = seg_bounds[idx]
+                df_active = df.iloc[s_b:e_b]
 
-            df_active["TYPE"] = df_active["TYPE"].astype(str).str.strip().str.lower()
-            scatter = df_active[df_active["TYPE"].str.contains("scatter")]["DURATION"].sum()
-            gather = df_active[df_active["TYPE"].str.contains("gather")]["DURATION"].sum()
-            all_red = df_active[df_active["TYPE"].str.contains("all_reduce|allreduce")]["DURATION"].sum()
+            type_lower = df_active["TYPE"].str.lower()
+            dur_vals = df_active["DURATION"]
+
+            is_scatter = type_lower.str.contains("scatter", regex=False)
+            is_gather = type_lower.str.contains("gather", regex=False)
+            is_allred = type_lower.str.contains("all_reduce|allreduce", regex=True)
+            is_stall = type_lower.str.contains("stall", regex=False)
+
+            scatter = float(dur_vals[is_scatter].sum())
+            gather = float(dur_vals[is_gather].sum())
+            all_red = float(dur_vals[is_allred].sum())
             transit = scatter + gather + all_red
-
-            stall = df_active[df_active["TYPE"].str.contains("stall")]["DURATION"].sum()
-            non_comp_mask = df_active["TYPE"].str.contains("scatter|gather|stall|all_reduce|allreduce")
-            compute = df_active[~non_comp_mask]["DURATION"].sum()
+            stall = float(dur_vals[is_stall].sum())
+            non_comp_mask = is_scatter | is_gather | is_stall | is_allred
+            compute = float(dur_vals[~non_comp_mask].sum())
 
             compute_total += compute
             transit_total += transit
@@ -444,7 +884,7 @@ def get_simulation_summary(folder_path, iteration="last"):
     gath_avg_ns = gather_total / devices_counted if devices_counted > 0 else 0.0
     ar_avg_ns = allreduce_total / devices_counted if devices_counted > 0 else 0.0
 
-    # 3. Métricas de packet_tracking_debug.csv para el ámbito seleccionado
+    # 3. Métricas de packet_tracking_debug.csv para el ámbito seleccionado (usando caché compacta)
     csv_path = folder / "packet_tracking_debug.csv"
     has_packet_csv = csv_path.exists()
     total_packets = 0
@@ -456,59 +896,69 @@ def get_simulation_summary(folder_path, iteration="last"):
 
     if has_packet_csv:
         try:
-            df_p = pd.read_csv(csv_path, on_bad_lines="skip")
-            if not df_p.empty and "Creation_Cycle" in df_p.columns:
-                df_p.columns = df_p.columns.str.strip()
-                for c in ["Creation_Cycle", "Receive_Cycle", "Num_Flits", "Avg_Flit_Latency", "Total_Latency", "Queueing_Delay", "Op_Start_NS"]:
-                    if c in df_p.columns:
-                        df_p[c] = pd.to_numeric(df_p[c], errors="coerce")
-
-                segs_csv = split_dataframe_by_drops(df_p, "Op_Start_NS", -100.0)
+            df_p, seg_bounds_csv = load_packet_csv_cached(folder)
+            if df_p is not None and not df_p.empty and "Creation_Cycle" in df_p.columns and seg_bounds_csv:
                 if target_iter_mode == "all":
-                    df_slice = pd.concat(segs_csv, ignore_index=True)
+                    df_slice = df_p
                 else:
-                    c_idx = min(target_iter_mode, len(segs_csv) - 1)
-                    df_slice = segs_csv[c_idx]
+                    c_idx = min(target_iter_mode, len(seg_bounds_csv) - 1)
+                    s_c, e_c = seg_bounds_csv[c_idx]
+                    df_slice = df_p.iloc[s_c:e_c]
 
-                df_slice = df_slice.dropna(subset=["Creation_Cycle", "Receive_Cycle"])
                 total_packets = len(df_slice)
-                if "Num_Flits" in df_slice.columns:
-                    total_flits = int(df_slice["Num_Flits"].sum())
-                else:
-                    total_flits = total_packets * 9
-
                 if total_packets > 0:
-                    if "Total_Latency" not in df_slice.columns and "Latency" in df_slice.columns:
-                        df_slice["Total_Latency"] = df_slice["Latency"]
-                    if "Avg_Flit_Latency" not in df_slice.columns:
-                        df_slice["Avg_Flit_Latency"] = df_slice["Total_Latency"]
-                    if "Num_Flits" not in df_slice.columns:
-                        df_slice["Num_Flits"] = 9
+                    if "Num_Flits" in df_slice.columns:
+                        total_flits = int(df_slice["Num_Flits"].to_numpy(dtype=np.int64, copy=False).sum())
+                    else:
+                        total_flits = total_packets * 9
 
-                    op_points = []
+                    cr_arr = df_slice["Creation_Cycle"].to_numpy(dtype=np.float64, copy=False)
+                    rx_arr = df_slice["Receive_Cycle"].to_numpy(dtype=np.float64, copy=False)
+
                     if "Op_Type" in df_slice.columns and "Op_Idx" in df_slice.columns:
-                        for (op_t, op_i), grp in df_slice.groupby(["Op_Type", "Op_Idx"]):
-                            f_cnt = grp["Num_Flits"].sum()
-                            dur = max(1.0, float(grp["Receive_Cycle"].max() - grp["Creation_Cycle"].min()))
-                            l_flits = f_cnt / (num_gpus * dur)
-                            op_points.append(l_flits)
-                    else:
-                        f_cnt = df_slice["Num_Flits"].sum()
-                        dur = max(1.0, float(df_slice["Receive_Cycle"].max() - df_slice["Creation_Cycle"].min()))
-                        op_points.append(f_cnt / (num_gpus * dur))
+                        agg_dict = {
+                            "rx_max": ("Receive_Cycle", "max"),
+                            "cr_min": ("Creation_Cycle", "min"),
+                        }
+                        if "Num_Flits" in df_slice.columns:
+                            agg_dict["flits"] = ("Num_Flits", "sum")
+                        else:
+                            agg_dict["pkts"] = ("PID", "count")
 
-                    if op_points:
-                        lambda_rate = float(np.mean(op_points))
+                        grp_df = df_slice.groupby(["Op_Type", "Op_Idx"], observed=True, sort=False).agg(**agg_dict)
+                        if not grp_df.empty:
+                            durs = np.maximum(
+                                1.0,
+                                grp_df["rx_max"].to_numpy(dtype=np.float64) - grp_df["cr_min"].to_numpy(dtype=np.float64),
+                            )
+                            f_cnts = (
+                                grp_df["flits"].to_numpy(dtype=np.float64)
+                                if "flits" in grp_df.columns
+                                else grp_df["pkts"].to_numpy(dtype=np.float64) * 9.0
+                            )
+                            lambda_rate = float(np.mean(f_cnts / (num_gpus * durs)))
+                        else:
+                            dur_cycles = max(1.0, cluster_wall_clock_ns)
+                            lambda_rate = total_flits / (num_gpus * dur_cycles)
                     else:
-                        dur_cycles = max(1.0, cluster_wall_clock_ns)
-                        lambda_rate = total_flits / (num_gpus * dur_cycles)
+                        dur = max(1.0, float(rx_arr.max() - cr_arr.min()))
+                        lambda_rate = float(total_flits / (num_gpus * dur))
+
+                    if "Total_Latency" in df_slice.columns:
+                        avg_pkt_lat = float(np.mean(df_slice["Total_Latency"].to_numpy(dtype=np.float64, copy=False)))
+                    else:
+                        avg_pkt_lat = float(np.mean(rx_arr - cr_arr))
 
                     if "Avg_Flit_Latency" in df_slice.columns:
-                        avg_flit_lat = float(df_slice["Avg_Flit_Latency"].mean())
-                    if "Total_Latency" in df_slice.columns:
-                        avg_pkt_lat = float(df_slice["Total_Latency"].mean())
+                        avg_flit_lat = float(np.mean(df_slice["Avg_Flit_Latency"].to_numpy(dtype=np.float64, copy=False)))
+                    else:
+                        avg_flit_lat = avg_pkt_lat
+
                     if "Queueing_Delay" in df_slice.columns:
-                        avg_queue_delay = float(df_slice["Queueing_Delay"].mean())
+                        avg_queue_delay = float(np.mean(df_slice["Queueing_Delay"].to_numpy(dtype=np.float64, copy=False)))
+                    elif "Inject_Cycle" in df_slice.columns:
+                        inj_arr = df_slice["Inject_Cycle"].to_numpy(dtype=np.float64, copy=False)
+                        avg_queue_delay = float(np.mean(inj_arr - cr_arr))
         except Exception as e:
             print(f"⚠️ trace_parser: Error leyendo CSV en summary: {e}")
 
@@ -558,179 +1008,217 @@ def get_simulation_summary(folder_path, iteration="last"):
         "devices_counted": int(devices_counted)
     }
 
-    return {
+    res = {
         "metadata": metadata,
         "kpis": kpis_data,
         **metadata,
         **kpis_data
     }
+    if sig is not None:
+        with _RESULT_CACHE_LOCK:
+            _SUMMARY_CACHE[cache_key] = {"sig": sig, "data": res}
+            _SUMMARY_CACHE.move_to_end(cache_key)
+            while len(_SUMMARY_CACHE) > _RESULT_CACHE_MAX:
+                _SUMMARY_CACHE.popitem(last=False)
+    return res
+
+
+_RE_SHARED_EXP = re.compile(r"shared_expert_ffn_(\d+)")
+_RE_EXP_FFN = re.compile(r"expert_ffn_(\d+)")
+
+
+def _classify_trc_op(raw_type, raw_details):
+    """Fast semantic classifier for a single .trc operation row."""
+    t = raw_type.lower()
+    d = raw_details.lower()
+    op = f"{t} {d}"
+
+    if "all_reduce" in op or "allreduce" in op:
+        return "all_reduce", "#8e44ad", "AllReduce", "AllReduce", None
+    if "scatter" in op:
+        return "scatter", "#3498db", "Scatter", "Scatter", None
+    if "gather" in op:
+        return "gather", "#3498db", "Gather", "Gather", None
+    if "stall" in op:
+        return "stall", "#e74c3c", "Stall", "Stall", None
+
+    if "shared_expert" in op:
+        shared_m = _RE_SHARED_EXP.search(op)
+        shared_id = int(shared_m.group(1)) if shared_m else 0
+        if "gate_proj" in op:
+            micro = "Gate_Proj"
+        elif "activation" in op or "act" in op or "silu" in op:
+            micro = "SiLU"
+        elif "up_proj" in op:
+            micro = "Up_Proj"
+        elif "down_proj" in op:
+            micro = "Down_Proj"
+        else:
+            micro = "FFN"
+        return "calc", "#2ecc71", "SharedExpert", micro, shared_id
+
+    exp_m = _RE_EXP_FFN.search(op)
+    if "expert_ffn" in op or exp_m:
+        exp_id = int(exp_m.group(1)) if exp_m else None
+        if "gate_proj" in op:
+            micro = "Gate_Proj"
+        elif "activation" in op or "act" in op or "silu" in op:
+            micro = "SiLU"
+        elif "up_proj" in op:
+            micro = "Up_Proj"
+        elif "down_proj" in op:
+            micro = "Down_Proj"
+        else:
+            micro = "FFN"
+        return "calc", "#2ecc71", "ExpertFFN", micro, exp_id
+
+    if "feedforward" in op:
+        if "gate_proj" in op:
+            micro = "Gate_Proj"
+        elif "activation" in op or "act" in op or "silu" in op:
+            micro = "SiLU"
+        elif "up_proj" in op:
+            micro = "Up_Proj"
+        elif "down_proj" in op:
+            micro = "Down_Proj"
+        else:
+            micro = "FFN"
+        return "calc", "#2ecc71", "DenseFFN", micro, None
+
+    if "attn_qkv" in op:
+        return "calc", "#2ecc71", "Attention", "QKV_Proj", None
+    if "attentiongen" in op or "self_attention" in op:
+        return "calc", "#2ecc71", "Attention", "AttnGen", None
+    if "attn_o_proj" in op or "attn_o_up_proj" in op:
+        return "calc", "#2ecc71", "Attention", "O_Proj", None
+    if "input_layer_norm" in op or "post_attn_layer_norm" in op:
+        return "calc", "#2ecc71", "Attention", "LN", None
+    if "residual_1" in op:
+        return "calc", "#2ecc71", "Attention", "Res1", None
+    if "gate_fn" in op:
+        return "calc", "#2ecc71", "Attention", "Gate", None
+    if "residual_2" in op:
+        return "calc", "#2ecc71", "Residual", "Res2", None
+    if "attn" in op or "attention" in op or "rope" in op or "latent" in op:
+        micro = "MLA_Proj"
+        if "mla" in op:
+            micro = "MLA_Gen"
+        elif "rope" in op:
+            micro = "RoPE"
+        elif "proj" in op:
+            micro = "Proj"
+        return "calc", "#2ecc71", "Attention", micro, None
+
+    sub = "Linear" if "pop_operation" in op else raw_type[:10]
+    return "calc", "#2ecc71", sub, sub, None
 
 
 def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
     """
-    Parses a single contiguous DataFrame segment (one iteration) of a .trc file.
+    Vectorized parser for a single contiguous DataFrame segment (one iteration) of a .trc file.
+    Avoids .apply() and .iterrows() while preserving exact sub_ops and mem_bound_pct math.
     Applies offset_ns to all absolute timestamps (start_ns, end_ns, sub_ops).
     """
-    df = df[df["DURATION"] > 0].reset_index(drop=True)
     if df.empty:
         return []
 
-    # 1. Extracción de capa
-    explicit_layer = df["DETAILS"].str.extract(r"(?:MoE_decoder_|decoder_)(\d+)")[0]
-    df["EXPLICIT_LAYER"] = pd.to_numeric(explicit_layer, errors="coerce")
-    layers = [None] * len(df)
-    for i in range(len(df)):
-        if pd.notna(df.at[i, "EXPLICIT_LAYER"]):
-            layers[i] = int(df.at[i, "EXPLICIT_LAYER"])
-        elif "input_layer_norm" in df.at[i, "TYPE"].lower():
-            for j in range(i + 1, min(i + 5, len(df))):
-                if pd.notna(df.at[j, "EXPLICIT_LAYER"]):
-                    layers[i] = int(df.at[j, "EXPLICIT_LAYER"])
-                    break
-    df["LAYER"] = pd.Series(layers).ffill().bfill().fillna(0).astype(int)
+    dur_mask = (df["DURATION"] > 0).to_numpy()
+    if not dur_mask.any():
+        return []
+    if not dur_mask.all():
+        df = df.iloc[dur_mask]
 
-    # 2. Métricas Comp_ns y Mem_ns
-    comp_ns = df["DETAILS"].str.extract(r"Comp_ns:([0-9.]+)")[0]
-    mem_ns = df["DETAILS"].str.extract(r"Mem_ns:([0-9.]+)")[0]
-    df["COMP_NS"] = pd.to_numeric(comp_ns, errors="coerce").fillna(0.0)
-    df["MEM_NS"] = pd.to_numeric(mem_ns, errors="coerce").fillna(0.0)
+    n_rows = len(df)
+    if n_rows == 0:
+        return []
 
-    # 3. Clasificación semántica
-    def classify_row(row):
-        t = row["TYPE"].lower()
-        d = row["DETAILS"].lower()
-        op = t + " " + d
+    # 1. Extracción vectorizada de capa
+    explicit_series = pd.to_numeric(
+        df["DETAILS"].str.extract(r"(?:MoE_decoder_|decoder_)(\d+)", expand=False),
+        errors="coerce",
+    )
+    exp_arr = explicit_series.to_numpy(dtype=np.float64, copy=True)
+    is_norm = df["TYPE"].str.lower().str.contains("input_layer_norm", regex=False).to_numpy()
+    norm_missing_idx = np.flatnonzero(np.isnan(exp_arr) & is_norm)
+    for i in norm_missing_idx:
+        for j in range(i + 1, min(i + 5, n_rows)):
+            if not np.isnan(exp_arr[j]):
+                exp_arr[i] = exp_arr[j]
+                break
+    layers_arr = pd.Series(exp_arr).ffill().bfill().fillna(0).to_numpy(dtype=np.int32)
 
-        if "all_reduce" in op or "allreduce" in op:
-            return "all_reduce", "#8e44ad", "AllReduce", "AllReduce", None
-        elif "scatter" in op:
-            return "scatter", "#3498db", "Scatter", "Scatter", None
-        elif "gather" in op:
-            return "gather", "#3498db", "Gather", "Gather", None
-        elif "stall" in op:
-            return "stall", "#e74c3c", "Stall", "Stall", None
+    # 2. Métricas vectorizadas Comp_ns y Mem_ns
+    comp_arr = (
+        pd.to_numeric(df["DETAILS"].str.extract(r"Comp_ns:([0-9.]+)", expand=False), errors="coerce")
+        .fillna(0.0)
+        .to_numpy(dtype=np.float64)
+    )
+    mem_arr = (
+        pd.to_numeric(df["DETAILS"].str.extract(r"Mem_ns:([0-9.]+)", expand=False), errors="coerce")
+        .fillna(0.0)
+        .to_numpy(dtype=np.float64)
+    )
 
-        if "shared_expert" in op:
-            shared_m = re.search(r"shared_expert_ffn_(\d+)", op)
-            shared_id = int(shared_m.group(1)) if shared_m else 0
-            if "gate_proj" in op:
-                micro = "Gate_Proj"
-            elif "activation" in op or "act" in op or "silu" in op:
-                micro = "SiLU"
-            elif "up_proj" in op:
-                micro = "Up_Proj"
-            elif "down_proj" in op:
-                micro = "Down_Proj"
-            else:
-                micro = "FFN"
-            return "calc", "#2ecc71", "SharedExpert", micro, shared_id
+    start_arr = df["START_NS"].to_numpy(dtype=np.float64, copy=False) + offset_ns
+    end_arr = df["END_NS"].to_numpy(dtype=np.float64, copy=False) + offset_ns
+    dur_arr = df["DURATION"].to_numpy(dtype=np.float64, copy=False)
 
-        exp_m = re.search(r"expert_ffn_(\d+)", op)
-        if "expert_ffn" in op or exp_m:
-            exp_id = int(exp_m.group(1)) if exp_m else None
-            if "gate_proj" in op:
-                micro = "Gate_Proj"
-            elif "activation" in op or "act" in op or "silu" in op:
-                micro = "SiLU"
-            elif "up_proj" in op:
-                micro = "Up_Proj"
-            elif "down_proj" in op:
-                micro = "Down_Proj"
-            else:
-                micro = "FFN"
-            return "calc", "#2ecc71", "ExpertFFN", micro, exp_id
+    # 3. Clasificación semántica rápida sin pandas apply()
+    types_list = df["TYPE"].tolist()
+    details_list = df["DETAILS"].tolist()
+    classified = [_classify_trc_op(t, d) for t, d in zip(types_list, details_list)]
 
-        if "feedforward" in op:
-            if "gate_proj" in op:
-                micro = "Gate_Proj"
-            elif "activation" in op or "act" in op or "silu" in op:
-                micro = "SiLU"
-            elif "up_proj" in op:
-                micro = "Up_Proj"
-            elif "down_proj" in op:
-                micro = "Down_Proj"
-            else:
-                micro = "FFN"
-            return "calc", "#2ecc71", "DenseFFN", micro, None
+    cats = [c[0] for c in classified]
+    colors = [c[1] for c in classified]
+    macros = [c[2] for c in classified]
+    micros = [c[3] for c in classified]
+    exp_ids = [c[4] for c in classified]
+    layers_list = layers_arr.tolist()
 
-        if "attn_qkv" in op:
-            return "calc", "#2ecc71", "Attention", "QKV_Proj", None
-        elif "attentiongen" in op or "self_attention" in op:
-            return "calc", "#2ecc71", "Attention", "AttnGen", None
-        elif "attn_o_proj" in op or "attn_o_up_proj" in op:
-            return "calc", "#2ecc71", "Attention", "O_Proj", None
-        elif "input_layer_norm" in op or "post_attn_layer_norm" in op:
-            return "calc", "#2ecc71", "Attention", "LN", None
-        elif "residual_1" in op:
-            return "calc", "#2ecc71", "Attention", "Res1", None
-        elif "gate_fn" in op:
-            return "calc", "#2ecc71", "Attention", "Gate", None
-        elif "residual_2" in op:
-            return "calc", "#2ecc71", "Residual", "Res2", None
-        elif "attn" in op or "attention" in op or "rope" in op or "latent" in op:
-            micro = "MLA_Proj"
-            if "mla" in op:
-                micro = "MLA_Gen"
-            elif "rope" in op:
-                micro = "RoPE"
-            elif "proj" in op:
-                micro = "Proj"
-            return "calc", "#2ecc71", "Attention", micro, None
-        else:
-            sub = "Linear" if "pop_operation" in op else row["TYPE"][:10]
-            return "calc", "#2ecc71", sub, sub, None
+    # 4. Fronteras contiguas por (LAYER, CATEGORY, MACRO_OP)
+    group_starts = [0]
+    for i in range(1, n_rows):
+        if layers_list[i] != layers_list[i - 1] or cats[i] != cats[i - 1] or macros[i] != macros[i - 1]:
+            group_starts.append(i)
+    group_starts.append(n_rows)
 
-    parsed = df.apply(classify_row, axis=1)
-    df["CATEGORY"] = [p[0] for p in parsed]
-    df["COLOR"] = [p[1] for p in parsed]
-    df["MACRO_OP"] = [p[2] for p in parsed]
-    df["MICRO_OP"] = [p[3] for p in parsed]
-    df["EXP_ID"] = [p[4] for p in parsed]
-
-    # 4. Agrupación contigua por Capa y Macro-Operación
-    df["group"] = (
-        (df["LAYER"] != df["LAYER"].shift(1))
-        | (df["CATEGORY"] != df["CATEGORY"].shift(1))
-        | (df["MACRO_OP"] != df["MACRO_OP"].shift(1))
-    ).cumsum()
+    start_list = start_arr.tolist()
+    end_list = end_arr.tolist()
+    dur_list = dur_arr.tolist()
+    comp_list = comp_arr.tolist()
+    mem_list = mem_arr.tolist()
 
     blocks = []
-    for _, grp in df.groupby("group", sort=False):
-        first_row = grp.iloc[0]
-        start_ns = float(grp["START_NS"].min()) + offset_ns
-        end_ns = float(grp["END_NS"].max()) + offset_ns
+    for idx_g in range(len(group_starts) - 1):
+        s = group_starts[idx_g]
+        e = group_starts[idx_g + 1]
+
+        start_ns = float(start_arr[s:e].min())
+        end_ns = float(end_arr[s:e].max())
         dur_ns = end_ns - start_ns
-        category = first_row["CATEGORY"]
-        color = first_row["COLOR"]
-        macro_op = first_row["MACRO_OP"]
-        layer = int(first_row["LAYER"])
+        category = cats[s]
+        color = colors[s]
+        macro_op = macros[s]
+        layer = int(layers_list[s])
 
-        # Fronteras internas y desglose de micro-operaciones
+        # Fronteras internas y desglose de micro-operaciones (sin .iterrows())
         sub_ops = []
-        for _, r in grp.iterrows():
-            r_dur = float(r["DURATION"])
+        for st, en, r_dur, mic, c_ns, m_ns in zip(
+            start_list[s:e], end_list[s:e], dur_list[s:e], micros[s:e], comp_list[s:e], mem_list[s:e]
+        ):
             if r_dur > 0.0:
-                c_ns = float(r["COMP_NS"]) if "COMP_NS" in r else 0.0
-                m_ns = float(r["MEM_NS"]) if "MEM_NS" in r else 0.0
-                if (c_ns + m_ns) > 0.0:
-                    s_mem = round(min(100.0, max(0.0, (m_ns / (c_ns + m_ns)) * 100.0)), 1)
-                else:
-                    s_mem = 0.0
-
+                denom = c_ns + m_ns
+                s_mem = round(min(100.0, max(0.0, (m_ns / denom) * 100.0)), 1) if denom > 0.0 else 0.0
                 sub_ops.append({
-                    "start_ns": float(r["START_NS"]) + offset_ns,
-                    "end_ns": float(r["END_NS"]) + offset_ns,
-                    "duration_ns": r_dur,
-                    "name": str(r["MICRO_OP"]),
-                    "comp_ns": c_ns,
-                    "mem_ns": m_ns,
+                    "start_ns": round(st, 1),
+                    "duration_ns": round(r_dur, 1),
+                    "name": mic,
                     "mem_pct": s_mem,
-                    "mem_bound_pct": s_mem
                 })
 
-        # Secuencia descriptiva
+        micro_slice = micros[s:e]
         if macro_op == "Attention":
-            if any("mla" in str(u).lower() or "rope" in str(u).lower() for u in grp["MICRO_OP"]):
+            if any("mla" in u.lower() or "rope" in u.lower() for u in micro_slice):
                 seq_str = "(LN + MLA_Compress + RoPE + Absorb_Gen + Up_Proj + O_Proj + Res)"
             else:
                 seq_str = "(LN + QKV_Proj + AttnGen + O_Proj + Res + Gate)"
@@ -739,28 +1227,25 @@ def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
         elif macro_op == "SharedExpert":
             seq_str = "(SharedExp#0: Gate_Proj + SiLU + Up_Proj + Down_Proj)"
         elif macro_op == "ExpertFFN":
-            exp_ids = sorted(list(set(int(e) for e in grp["EXP_ID"].dropna().unique())))
-            if len(exp_ids) == 1:
-                seq_str = f"(Exp#{exp_ids[0]}: Gate_Proj + SiLU + Up_Proj + Down_Proj)"
-            elif len(exp_ids) > 1:
-                if len(exp_ids) <= 3:
-                    ids_str = ",".join(str(e) for e in exp_ids)
-                    seq_str = f"(Exp#{ids_str}: {len(exp_ids)}x[Gate+SiLU+Up+Down])"
+            exp_vals = sorted({int(x) for x in exp_ids[s:e] if x is not None})
+            if len(exp_vals) == 1:
+                seq_str = f"(Exp#{exp_vals[0]}: Gate_Proj + SiLU + Up_Proj + Down_Proj)"
+            elif len(exp_vals) > 1:
+                if len(exp_vals) <= 3:
+                    ids_str = ",".join(str(x) for x in exp_vals)
+                    seq_str = f"(Exp#{ids_str}: {len(exp_vals)}x[Gate+SiLU+Up+Down])"
                 else:
-                    seq_str = f"(Exp#{exp_ids[0]}..#{exp_ids[-1]}: {len(exp_ids)}x[Gate+SiLU+Up+Down])"
+                    seq_str = f"(Exp#{exp_vals[0]}..#{exp_vals[-1]}: {len(exp_vals)}x[Gate+SiLU+Up+Down])"
             else:
                 seq_str = "(ExpertFFN: Gate + SiLU + Up + Down)"
-        elif category in ["scatter", "gather", "all_reduce", "stall"]:
+        elif category in ("scatter", "gather", "all_reduce", "stall"):
             seq_str = ""
         else:
-            unique_micros = []
-            for u in grp["MICRO_OP"].unique():
-                if u not in unique_micros:
-                    unique_micros.append(str(u))
+            unique_micros = list(dict.fromkeys(micro_slice))
             seq_str = f"({' + '.join(unique_micros)})"
 
-        tot_comp = float(grp["COMP_NS"].sum())
-        tot_mem = float(grp["MEM_NS"].sum())
+        tot_comp = float(comp_arr[s:e].sum())
+        tot_mem = float(mem_arr[s:e].sum())
         mem_bound_pct = None
         if (tot_comp + tot_mem) > 0.0:
             mem_bound_pct = round(min(100.0, max(0.0, (tot_mem / (tot_comp + tot_mem)) * 100.0)), 1)
@@ -788,7 +1273,7 @@ def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
             "comp_ns": tot_comp,
             "mem_ns": tot_mem,
             "sub_ops": sub_ops,
-            "local_net": None
+            "local_net": None,
         })
 
     return blocks
@@ -796,8 +1281,8 @@ def parse_single_trc_segment(df, gpu_id, offset_ns=0.0, iter_num=1):
 
 def parse_single_trc(filepath, iteration="last", iteration_offsets=None):
     """
-    Parses a single .trc file. Depending on iteration, extracts either a single iteration
-    ('last' or '1'..'N') or concatenates all iterations with offsets ('all').
+    Parses a single .trc file using cached DataFrame views. Depending on iteration, extracts either
+    a single iteration ('last' or '1'..'N') or concatenates all iterations with offsets ('all').
     """
     basename = os.path.basename(filepath)
     try:
@@ -805,35 +1290,43 @@ def parse_single_trc(filepath, iteration="last", iteration_offsets=None):
     except Exception:
         gpu_id = 0
 
-    df = pd.read_csv(filepath, on_bad_lines="skip")
-    df.columns = df.columns.str.strip()
-    df["GPU"] = gpu_id
-    df["START_NS"] = pd.to_numeric(df["START_NS"], errors="coerce")
-    df["END_NS"] = pd.to_numeric(df["END_NS"], errors="coerce")
-    df["DURATION"] = pd.to_numeric(df["DURATION"], errors="coerce")
-    df["TYPE"] = df["TYPE"].astype(str).str.strip()
-    df["DETAILS"] = df["DETAILS"].fillna("").astype(str).str.strip()
-    df = df.dropna(subset=["START_NS", "END_NS", "DURATION"])
+    df, seg_bounds = _load_trc_cached(filepath)
+    if df.empty or not seg_bounds:
+        return []
 
-    segs = split_dataframe_by_drops(df, "START_NS", -1.0)
-    num_iters = len(segs)
+    num_iters = len(seg_bounds)
 
     if iteration == "all":
         all_blocks = []
-        for k, seg in enumerate(segs):
+        for k, (s_b, e_b) in enumerate(seg_bounds):
             off = iteration_offsets[k] if (iteration_offsets and k < len(iteration_offsets)) else 0.0
-            blocks_k = parse_single_trc_segment(seg, gpu_id, offset_ns=off, iter_num=k + 1)
+            blocks_k = parse_single_trc_segment(df.iloc[s_b:e_b], gpu_id, offset_ns=off, iter_num=k + 1)
             all_blocks.extend(blocks_k)
         return all_blocks
     elif iteration == "last":
-        return parse_single_trc_segment(segs[-1], gpu_id, offset_ns=0.0, iter_num=num_iters)
+        s_b, e_b = seg_bounds[-1]
+        return parse_single_trc_segment(df.iloc[s_b:e_b], gpu_id, offset_ns=0.0, iter_num=num_iters)
     else:
         try:
             val = int(iteration) - 1
             idx = max(0, min(val, num_iters - 1))
         except ValueError:
             idx = num_iters - 1
-        return parse_single_trc_segment(segs[idx], gpu_id, offset_ns=0.0, iter_num=idx + 1)
+        s_b, e_b = seg_bounds[idx]
+        return parse_single_trc_segment(df.iloc[s_b:e_b], gpu_id, offset_ns=0.0, iter_num=idx + 1)
+
+
+def _get_folder_sig(folder):
+    """Lightweight mtime+size signature for all .trc, metadata, and packet CSV in folder."""
+    files = sorted(glob.glob(str(folder / "*device_*.trc")))
+    for extra_name in ("packet_tracking_debug.csv", "gui_metadata.json"):
+        p = folder / extra_name
+        if p.exists():
+            files.append(str(p))
+    try:
+        return tuple((f, os.stat(f).st_mtime_ns, os.stat(f).st_size) for f in files)
+    except OSError:
+        return None
 
 
 def get_chronogram_data(folder_path, iteration="last"):
@@ -846,6 +1339,15 @@ def get_chronogram_data(folder_path, iteration="last"):
     trc_files = glob.glob(str(folder / "*device_*.trc"))
     if not trc_files:
         raise FileNotFoundError(f"No se encontraron ficheros *device_*.trc en: {folder_path}")
+
+    cache_key = (str(folder), str(iteration))
+    sig = _get_folder_sig(folder)
+    if sig is not None:
+        with _RESULT_CACHE_LOCK:
+            cached = _CHRONO_CACHE.get(cache_key)
+            if cached is not None and cached["sig"] == sig:
+                _CHRONO_CACHE.move_to_end(cache_key)
+                return cached["data"]
 
     num_iters, durations, offsets = get_cluster_iteration_info(folder)
     network_ops = load_network_ops_debug(folder_path, iteration=iteration, iteration_offsets=offsets)
@@ -905,7 +1407,7 @@ def get_chronogram_data(folder_path, iteration="last"):
     # Ordenar bloques cronológicamente
     all_blocks.sort(key=lambda x: (x["gpu_id"], x["start_ns"]))
 
-    # Organizar tracks individuales por GPU
+    # Organizar tracks individuales por GPU (sin duplicar all_blocks en 'blocks' para no doblar el payload JSON)
     tracks = [[] for _ in range(num_gpus)]
     for b in all_blocks:
         b["block_type"] = b["category"]
@@ -915,6 +1417,9 @@ def get_chronogram_data(folder_path, iteration="last"):
             b["avg_lat_cycles"] = b["local_net"].get("avg_lat_cycles", 0.0)
             b["throughput_flits_per_cycle"] = b["local_net"].get("prod_flits_cycle", 0.0)
         tracks[b["gpu_id"]].append(b)
+
+    total_blocks_count = len(all_blocks)
+    del all_blocks
 
     # Iteration markers para líneas divisorias en el Canvas
     if iteration == "all":
@@ -928,7 +1433,7 @@ def get_chronogram_data(folder_path, iteration="last"):
             {"iter": iter_num, "start_ns": 0.0, "duration_ns": round(max_ns - min_ns, 1)}
         ]
 
-    return {
+    res = {
         "num_gpus": num_gpus,
         "num_iterations": num_iters,
         "active_iteration": str(iteration),
@@ -939,20 +1444,27 @@ def get_chronogram_data(folder_path, iteration="last"):
         "max_time_ns": round(max_ns, 1),
         "total_span_ns": round(max_ns - min_ns, 1),
         "total_duration_us": round((max_ns - min_ns) / 1000.0, 2),
-        "total_blocks": len(all_blocks),
+        "total_blocks": total_blocks_count,
         "tracks": tracks,
-        "blocks": all_blocks
+        "blocks": []
     }
+    if sig is not None:
+        with _RESULT_CACHE_LOCK:
+            _CHRONO_CACHE[cache_key] = {"sig": sig, "data": res}
+            _CHRONO_CACHE.move_to_end(cache_key)
+            while len(_CHRONO_CACHE) > _RESULT_CACHE_MAX:
+                _CHRONO_CACHE.popitem(last=False)
+    return res
 
 
 def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", iteration="last"):
     """
-    Reads packet_tracking_debug.csv, filters according to iteration,
-    and returns a paginated slice supporting regime presets ('free', 'medium', 'critical', 'custom').
+    Reads packet_tracking_debug.csv via cache, filters according to iteration without copying
+    full DataFrames, and returns a paginated slice supporting regime presets ('free', 'medium', 'critical', 'custom').
     """
     folder = Path(folder_path).resolve()
-    csv_path = folder / "packet_tracking_debug.csv"
-    if not csv_path.exists():
+    df, seg_bounds = load_packet_csv_cached(folder)
+    if df is None or df.empty or "Creation_Cycle" not in df.columns or not seg_bounds:
         return {
             "has_data": False,
             "num_iterations": 1,
@@ -964,55 +1476,33 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", 
             "packets": []
         }
 
-    df = pd.read_csv(csv_path, on_bad_lines="skip")
-    if df.empty or "Creation_Cycle" not in df.columns:
-        return {
-            "has_data": False,
-            "num_iterations": 1,
-            "active_iteration": str(iteration),
-            "total_packets": 0,
-            "offset": 0,
-            "limit": limit,
-            "regime": regime,
-            "packets": []
-        }
-
-    df.columns = df.columns.str.strip()
-
-    for col in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
-                "Total_Latency", "Network_Latency", "Queueing_Delay", "Num_Flits", "Size_Bytes",
-                "Avg_Flit_Latency", "Throughput", "Op_Idx", "Op_Start_NS", "Op_End_NS"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    num_iters, durations, offsets = get_cluster_iteration_info(folder)
-    segs = split_dataframe_by_drops(df, "Op_Start_NS", -100.0)
-    num_csv_iters = len(segs)
+    num_iters, _, offsets = get_cluster_iteration_info(folder)
+    num_csv_iters = len(seg_bounds)
 
     if iteration == "all":
-        processed_segs = []
-        for k, seg in enumerate(segs):
-            off = offsets[k] if k < len(offsets) else 0.0
-            seg = seg.copy()
-            if off > 0:
-                if "Op_Start_NS" in seg.columns:
-                    seg["Op_Start_NS"] = seg["Op_Start_NS"] + off
-                if "Op_End_NS" in seg.columns:
-                    seg["Op_End_NS"] = seg["Op_End_NS"] + off
-            processed_segs.append(seg)
-        df_active = pd.concat(processed_segs, ignore_index=True)
+        seg_view = df
+        if num_csv_iters > 1 and any(o > 0 for o in offsets[:num_csv_iters]):
+            op_offsets = np.zeros(len(df), dtype=np.float64)
+            for k, (s_b, e_b) in enumerate(seg_bounds):
+                if k < len(offsets) and offsets[k] > 0:
+                    op_offsets[s_b:e_b] = offsets[k]
+        else:
+            op_offsets = None
     elif iteration == "last":
-        df_active = segs[-1].copy()
+        s_b, e_b = seg_bounds[-1]
+        seg_view = df.iloc[s_b:e_b]
+        op_offsets = None
     else:
         try:
             val = int(iteration) - 1
             idx = max(0, min(val, num_csv_iters - 1))
         except ValueError:
             idx = num_csv_iters - 1
-        df_active = segs[idx].copy()
+        s_b, e_b = seg_bounds[idx]
+        seg_view = df.iloc[s_b:e_b]
+        op_offsets = None
 
-    df_active = df_active.dropna(subset=["Creation_Cycle", "Receive_Cycle"]).sort_values(by="PID", ascending=True).reset_index(drop=True)
-    total_pkts = len(df_active)
+    total_pkts = len(seg_view)
     if total_pkts == 0:
         return {
             "has_data": False,
@@ -1025,82 +1515,154 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", 
             "packets": []
         }
 
-    # Normalización para compatibilidad con trazas legacy con Creation_Cycle absoluto (> 1e7)
-    if not df_active.empty and df_active["Creation_Cycle"].min() > 1e7:
-        base_cycles = df_active.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
-        df_active["Creation_Cycle"] = df_active["Creation_Cycle"] - base_cycles
-        df_active["Inject_Cycle"] = df_active["Inject_Cycle"] - base_cycles
-        df_active["Receive_Cycle"] = df_active["Receive_Cycle"] - base_cycles
+    with (_HEAVY_DF_OP_LOCK if total_pkts > 1_000_000 else nullcontext()):
+        pid_arr = seg_view["PID"].to_numpy(copy=False)
+        order = np.argsort(pid_arr, kind="mergesort")
 
-    # Selección de régimen
-    regime = str(regime).lower().strip()
-    effective_offset = offset
-    if regime == "free":
-        effective_offset = 0
-    elif regime == "medium":
-        med_val = df_active["Total_Latency"].median()
-        med_pos = int((df_active["Total_Latency"] - med_val).abs().values.argmin())
-        effective_offset = max(0, med_pos - limit // 2)
-    elif regime == "critical":
-        max_pos = int(df_active["Total_Latency"].values.argmax())
-        effective_offset = max(0, max_pos - limit // 2)
+        # Selección de régimen sin ordenar/copiar el DataFrame entero
+        regime = str(regime).lower().strip()
+        limit = max(10, min(int(limit), 500))
+        if regime == "free":
+            effective_offset = 0
+        elif regime in ("medium", "critical"):
+            if "Total_Latency" in seg_view.columns:
+                tot_lat_all = seg_view["Total_Latency"].to_numpy(copy=False)
+            else:
+                tot_lat_all = (
+                    seg_view["Receive_Cycle"].to_numpy(copy=False)
+                    - seg_view["Creation_Cycle"].to_numpy(copy=False)
+                )
+            tot_lat_ordered = tot_lat_all[order]
+            if regime == "medium":
+                med_val = float(np.median(tot_lat_ordered))
+                med_pos = int(np.abs(tot_lat_ordered - med_val).argmin())
+                effective_offset = max(0, med_pos - limit // 2)
+            else:
+                max_pos = int(tot_lat_ordered.argmax())
+                effective_offset = max(0, max_pos - limit // 2)
+            del tot_lat_ordered
+        else:
+            effective_offset = max(0, min(int(offset), total_pkts - 1))
+
+        sel_idx = order[effective_offset : effective_offset + limit]
+        del order
+        df_slice = seg_view.iloc[sel_idx].copy()
+    if op_offsets is not None and "Op_Start_NS" in df_slice.columns:
+        df_slice["Op_Start_NS"] = df_slice["Op_Start_NS"].to_numpy(dtype=np.float64) + op_offsets[sel_idx]
+
+    # Normalización para trazas legacy con Creation_Cycle absoluto (> 1e7)
+    is_legacy = not seg_view.empty and float(seg_view["Creation_Cycle"].min()) > 1e7
+    if is_legacy and "Op_Type" in df_slice.columns and "Op_Idx" in df_slice.columns:
+        base_map = (
+            seg_view.groupby(["Op_Type", "Op_Idx"], observed=True)["Creation_Cycle"]
+            .min()
+            .to_dict()
+        )
+        base_cycles = np.array(
+            [base_map.get((ot, oi), 0.0) for ot, oi in zip(df_slice["Op_Type"], df_slice["Op_Idx"])],
+            dtype=np.float64,
+        )
     else:
-        effective_offset = max(0, min(offset, total_pkts - 1))
+        base_cycles = np.zeros(len(df_slice), dtype=np.float64)
 
-    limit = max(10, min(limit, 500))
-    df_slice = df_active.iloc[effective_offset : effective_offset + limit]
+    cr_arr = df_slice["Creation_Cycle"].to_numpy(dtype=np.float64) - base_cycles
+    inj_arr = (
+        df_slice["Inject_Cycle"].to_numpy(dtype=np.float64) - base_cycles
+        if "Inject_Cycle" in df_slice.columns
+        else cr_arr
+    )
+    rx_arr = df_slice["Receive_Cycle"].to_numpy(dtype=np.float64) - base_cycles
 
-    min_cycle = float(df_slice["Creation_Cycle"].min()) if not df_slice.empty else 0.0
-    max_cycle = float(df_slice["Receive_Cycle"].max()) if not df_slice.empty else 1.0
-    op_start_ns = float(df_slice["Op_Start_NS"].iloc[0]) if not df_slice.empty and "Op_Start_NS" in df_slice.columns else 0.0
+    q_arr = (
+        df_slice["Queueing_Delay"].to_numpy(dtype=np.float64)
+        if "Queueing_Delay" in df_slice.columns
+        else np.maximum(0.0, inj_arr - cr_arr)
+    )
+    net_arr = (
+        df_slice["Network_Latency"].to_numpy(dtype=np.float64)
+        if "Network_Latency" in df_slice.columns
+        else np.maximum(0.0, rx_arr - inj_arr)
+    )
+    tot_arr = (
+        df_slice["Total_Latency"].to_numpy(dtype=np.float64)
+        if "Total_Latency" in df_slice.columns
+        else (q_arr + net_arr)
+    )
+    flits_arr = (
+        df_slice["Num_Flits"].to_numpy(dtype=np.int64)
+        if "Num_Flits" in df_slice.columns
+        else np.full(len(df_slice), 9, dtype=np.int64)
+    )
+    size_arr = (
+        df_slice["Size_Bytes"].to_numpy(dtype=np.int64)
+        if "Size_Bytes" in df_slice.columns
+        else flits_arr * 32
+    )
+    avg_flit_arr = (
+        df_slice["Avg_Flit_Latency"].to_numpy(dtype=np.float64)
+        if "Avg_Flit_Latency" in df_slice.columns
+        else tot_arr
+    )
+    prod_arr = (
+        df_slice["Throughput"].to_numpy(dtype=np.float64)
+        if "Throughput" in df_slice.columns
+        else np.zeros(len(df_slice), dtype=np.float64)
+    )
+
+    min_cycle = float(cr_arr.min()) if len(cr_arr) > 0 else 0.0
+    max_cycle = float(rx_arr.max()) if len(rx_arr) > 0 else 1.0
+    op_start_arr = (
+        df_slice["Op_Start_NS"].to_numpy(dtype=np.float64)
+        if "Op_Start_NS" in df_slice.columns
+        else np.zeros(len(df_slice), dtype=np.float64)
+    )
+    op_end_arr = (
+        df_slice["Op_End_NS"].to_numpy(dtype=np.float64)
+        if "Op_End_NS" in df_slice.columns
+        else (op_start_arr + tot_arr)
+    )
+
+    pid_slice = df_slice["PID"].to_numpy(dtype=np.int64).tolist()
+    src_slice = df_slice["Source"].to_numpy(dtype=np.int64).tolist()
+    dst_slice = df_slice["Dest"].to_numpy(dtype=np.int64).tolist()
+    op_t_slice = [str(x) for x in df_slice["Op_Type"].tolist()] if "Op_Type" in df_slice.columns else ["Scatter"] * len(df_slice)
+    op_i_slice = [int(x) if pd.notna(x) else 1 for x in df_slice["Op_Idx"].tolist()] if "Op_Idx" in df_slice.columns else [1] * len(df_slice)
 
     packets = []
-    for _, row in df_slice.iterrows():
-        c_cycle = float(row.get("Creation_Cycle", 0.0))
-        inj_cycle = float(row.get("Inject_Cycle", c_cycle))
-        rx_cycle = float(row.get("Receive_Cycle", inj_cycle))
-        q_delay = float(row.get("Queueing_Delay", max(0.0, inj_cycle - c_cycle)))
-        net_lat = float(row.get("Network_Latency", max(0.0, rx_cycle - inj_cycle)))
-        tot_lat = float(row.get("Total_Latency", q_delay + net_lat))
-        flits = int(row.get("Num_Flits", 9))
-        size_b = int(row.get("Size_Bytes", flits * 32))
-        avg_flit = float(row.get("Avg_Flit_Latency", tot_lat))
-        prod = float(row.get("Throughput", 0.0))
-
-        op_t = str(row.get("Op_Type", "Scatter"))
-        op_i = int(row.get("Op_Idx", 1)) if not pd.isna(row.get("Op_Idx")) else 1
-        p_op_start = float(row.get("Op_Start_NS", op_start_ns))
-        p_op_end = float(row.get("Op_End_NS", p_op_start + tot_lat))
-
-        global_create_ns = p_op_start + c_cycle
-        global_inject_ns = p_op_start + inj_cycle
-        global_receive_ns = p_op_start + rx_cycle
-
+    for (pid, src, dst, op_t, op_i, flits, size_b, c_cyc, inj_cyc, rx_cyc,
+         q_del, net_l, tot_l, avg_f, prod, p_op_s, p_op_e) in zip(
+        pid_slice, src_slice, dst_slice, op_t_slice, op_i_slice,
+        flits_arr.tolist(), size_arr.tolist(),
+        cr_arr.tolist(), inj_arr.tolist(), rx_arr.tolist(),
+        q_arr.tolist(), net_arr.tolist(), tot_arr.tolist(),
+        avg_flit_arr.tolist(), prod_arr.tolist(),
+        op_start_arr.tolist(), op_end_arr.tolist()
+    ):
         packets.append({
-            "pid": int(row.get("PID", 0)),
-            "src": int(row.get("Source", 0)),
-            "dst": int(row.get("Dest", 0)),
+            "pid": pid,
+            "src": src,
+            "dst": dst,
             "op_type": op_t,
             "op_idx": op_i,
             "flits": flits,
             "num_flits": flits,
             "size_bytes": size_b,
-            "creation_cycle": c_cycle,
-            "inject_cycle": inj_cycle,
-            "receive_cycle": rx_cycle,
-            "queueing_delay": q_delay,
-            "queue_delay_cycles": q_delay,
-            "network_latency": net_lat,
-            "flight_cycles": net_lat,
-            "total_latency": tot_lat,
-            "total_latency_cycles": tot_lat,
-            "avg_flit_latency": round(avg_flit, 2),
+            "creation_cycle": c_cyc,
+            "inject_cycle": inj_cyc,
+            "receive_cycle": rx_cyc,
+            "queueing_delay": q_del,
+            "queue_delay_cycles": q_del,
+            "network_latency": net_l,
+            "flight_cycles": net_l,
+            "total_latency": tot_l,
+            "total_latency_cycles": tot_l,
+            "avg_flit_latency": round(avg_f, 2),
             "throughput": round(prod, 2),
-            "op_start_ns": p_op_start,
-            "op_end_ns": p_op_end,
-            "global_create_ns": global_create_ns,
-            "global_inject_ns": global_inject_ns,
-            "global_receive_ns": global_receive_ns
+            "op_start_ns": p_op_s,
+            "op_end_ns": p_op_e,
+            "global_create_ns": p_op_s + c_cyc,
+            "global_inject_ns": p_op_s + inj_cyc,
+            "global_receive_ns": p_op_s + rx_cyc,
         })
 
     return {
@@ -1119,12 +1681,13 @@ def get_packet_tracking_data(folder_path, offset=0, limit=150, regime="custom", 
     }
 
 
-def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", max_packets=0):
+def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", max_packets=SAFE_MAX_PACKETS):
     """
-    Returns all in-flight packets whose lifecycle [pkt_start_ns, pkt_end_ns]
+    Returns in-flight packets whose lifecycle [pkt_start_ns, pkt_end_ns]
     overlaps with the visible time window [start_ns, end_ns] in global nanoseconds.
-    If max_packets <= 0, returns 100% of packets without subsampling (zero truncation).
-    If max_packets > 0 and packets exceed limit, applies uniform deterministic sampling.
+    Uses thread-safe cached CSV + minimal-footprint NumPy window filtering.
+    Enforces adaptive safe cap (SAFE_MAX_PACKETS=2500): returns 100% exact when <=2500,
+    or deterministic uniform stratified sampling of 2500 packets when >2500.
     """
     folder = Path(folder_path).resolve()
     csv_path = folder / "packet_tracking_debug.csv"
@@ -1142,8 +1705,8 @@ def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", 
         }
 
     try:
-        df = pd.read_csv(csv_path, on_bad_lines="skip")
-        if df.empty or "Creation_Cycle" not in df.columns:
+        df, seg_bounds = load_packet_csv_cached(folder)
+        if df is None or df.empty or "Creation_Cycle" not in df.columns or not seg_bounds:
             return {
                 "has_data": False,
                 "num_iterations": 1,
@@ -1156,103 +1719,192 @@ def get_packets_in_time_window(folder_path, start_ns, end_ns, iteration="last", 
                 "packets": []
             }
 
-        df.columns = df.columns.str.strip()
-        for col in ["PID", "Source", "Dest", "Creation_Cycle", "Inject_Cycle", "Receive_Cycle",
-                    "Total_Latency", "Network_Latency", "Queueing_Delay", "Num_Flits",
-                    "Op_Idx", "Op_Start_NS", "Op_End_NS"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+        num_iters, _, offsets = get_cluster_iteration_info(folder)
 
-        num_iters, durations, offsets = get_cluster_iteration_info(folder)
-        segs = split_dataframe_by_drops(df, "Op_Start_NS", -100.0)
-
-        # Determinar segmentos a procesar
         if iteration == "all":
-            slices_to_process = [(k, segs[k], offsets[k] if k < len(offsets) else 0.0) for k in range(len(segs))]
+            slices_to_process = [
+                (k, seg_bounds[k], offsets[k] if k < len(offsets) else 0.0)
+                for k in range(len(seg_bounds))
+            ]
         elif iteration == "last":
-            slices_to_process = [(len(segs) - 1, segs[-1], 0.0)]
+            slices_to_process = [(len(seg_bounds) - 1, seg_bounds[-1], 0.0)]
         else:
             try:
                 val = int(iteration) - 1
-                idx = max(0, min(val, len(segs) - 1))
+                idx = max(0, min(val, len(seg_bounds) - 1))
             except ValueError:
-                idx = len(segs) - 1
-            slices_to_process = [(idx, segs[idx], 0.0)]
+                idx = len(seg_bounds) - 1
+            slices_to_process = [(idx, seg_bounds[idx], 0.0)]
 
-        matching_rows = []
-        for k_iter, seg, off_ns in slices_to_process:
-            seg = seg.dropna(subset=["Creation_Cycle", "Receive_Cycle"]).copy()
-            if seg.empty:
-                continue
-
-            # Calcular ciclo base por colectiva: si Creation_Cycle ya está normalizado (FinishOperation normalizado),
-            # base_cycles es 0.0 para no desplazar artificialmente los paquetes.
-            # En trazas legacy con ciclos absolutos acumulados (> 1e7), se resta el mínimo.
-            if seg["Creation_Cycle"].min() > 1e7:
-                base_cycles = seg.groupby(["Op_Type", "Op_Idx"])["Creation_Cycle"].transform("min")
-            else:
-                base_cycles = 0.0
-            adjusted_op_start = seg["Op_Start_NS"] + off_ns
-
-            seg["pkt_start_ns"] = adjusted_op_start + (seg["Creation_Cycle"] - base_cycles)
-            seg["pkt_inject_ns"] = adjusted_op_start + (seg["Inject_Cycle"] - base_cycles)
-            seg["pkt_end_ns"] = adjusted_op_start + (seg["Receive_Cycle"] - base_cycles)
-
-            # Filtro de solapamiento con la ventana visible
-            in_window = seg[(seg["pkt_end_ns"] >= start_ns) & (seg["pkt_start_ns"] <= end_ns)]
-            if not in_window.empty:
-                matching_rows.append(in_window)
-
-        if not matching_rows:
-            return {
-                "has_data": True,
-                "num_iterations": num_iters,
-                "active_iteration": str(iteration),
-                "start_ns": float(start_ns),
-                "end_ns": float(end_ns),
-                "total_in_window": 0,
-                "returned": 0,
-                "truncated": False,
-                "packets": []
-            }
-
-        all_matching = pd.concat(matching_rows, ignore_index=True)
-        all_matching = all_matching.sort_values(by=["pkt_start_ns", "PID"], ascending=[True, True]).reset_index(drop=True)
-        total_in_window = len(all_matching)
-
-        max_pkts = int(max_packets) if max_packets is not None else 0
-        if max_pkts > 0 and total_in_window > max_pkts:
-            limit_p = max(10, min(max_pkts, 5000))
-            indices = np.linspace(0, total_in_window - 1, limit_p, dtype=int)
-            sampled_df = all_matching.iloc[indices]
-            truncated = True
+        # Enforce safe adaptive cap (default/0 -> SAFE_MAX_PACKETS=2500, upper bounded by 2500)
+        if max_packets is None or int(max_packets) <= 0:
+            effective_cap = SAFE_MAX_PACKETS
         else:
-            sampled_df = all_matching
-            truncated = False
+            effective_cap = max(10, min(int(max_packets), SAFE_MAX_PACKETS))
+
+        with (_HEAVY_DF_OP_LOCK if len(df) > 1_000_000 else nullcontext()):
+            matched_global_idx = []
+            matched_start_ns = []
+            slice_off_meta = []  # (len_hits, off_ns, is_legacy, base_arr_or_None)
+
+            for _, (s_b, e_b), off_ns in slices_to_process:
+                if e_b <= s_b:
+                    continue
+                seg = df.iloc[s_b:e_b]
+                cr_arr = seg["Creation_Cycle"].to_numpy(copy=False)
+                rx_arr = seg["Receive_Cycle"].to_numpy(copy=False)
+                op_start_arr = seg["Op_Start_NS"].to_numpy(copy=False)
+
+                is_legacy = cr_arr.min() > 1e7 and "Op_Type" in seg.columns and "Op_Idx" in seg.columns
+                if is_legacy:
+                    base_cycles = seg.groupby(["Op_Type", "Op_Idx"], observed=True)["Creation_Cycle"].transform("min").to_numpy(dtype=np.float64)
+                    pkt_start = (op_start_arr + off_ns) + (cr_arr - base_cycles)
+                    mask_s = pkt_start <= end_ns
+                    cand_rel = np.flatnonzero(mask_s)
+                    del mask_s
+                    if len(cand_rel) > 0:
+                        pkt_end_cand = (op_start_arr[cand_rel] + off_ns) + (rx_arr[cand_rel] - base_cycles[cand_rel])
+                        rel_hits = cand_rel[pkt_end_cand >= start_ns]
+                        del pkt_end_cand
+                    else:
+                        rel_hits = cand_rel
+                    del cand_rel
+                else:
+                    base_cycles = None
+                    pkt_start = op_start_arr + cr_arr
+                    if off_ns != 0.0:
+                        pkt_start += off_ns
+                    mask_s = pkt_start <= end_ns
+                    cand_rel = np.flatnonzero(mask_s)
+                    del mask_s
+                    if len(cand_rel) > 0:
+                        pkt_end_cand = op_start_arr[cand_rel] + rx_arr[cand_rel]
+                        if off_ns != 0.0:
+                            pkt_end_cand += off_ns
+                        rel_hits = cand_rel[pkt_end_cand >= start_ns]
+                        del pkt_end_cand
+                    else:
+                        rel_hits = cand_rel
+                    del cand_rel
+
+                if len(rel_hits) > 0:
+                    matched_global_idx.append((rel_hits + s_b).astype(np.int32))
+                    matched_start_ns.append(pkt_start[rel_hits])
+                    slice_off_meta.append((len(rel_hits), off_ns, base_cycles[rel_hits] if base_cycles is not None else None))
+
+                del pkt_start, base_cycles
+
+            if not matched_global_idx:
+                return {
+                    "has_data": True,
+                    "num_iterations": num_iters,
+                    "active_iteration": str(iteration),
+                    "start_ns": float(start_ns),
+                    "end_ns": float(end_ns),
+                    "total_in_window": 0,
+                    "returned": 0,
+                    "truncated": False,
+                    "packets": []
+                }
+
+            g_idx = matched_global_idx[0] if len(matched_global_idx) == 1 else np.concatenate(matched_global_idx)
+            m_start = matched_start_ns[0] if len(matched_start_ns) == 1 else np.concatenate(matched_start_ns)
+            del matched_global_idx, matched_start_ns
+
+            total_in_window = len(g_idx)
+
+            if total_in_window > effective_cap:
+                time_order = np.argsort(m_start, kind="mergesort")
+                sample_pos = np.linspace(0, total_in_window - 1, effective_cap, dtype=int)
+                chosen_rel = time_order[sample_pos]
+                del time_order
+                truncated = True
+            else:
+                pid_m = df["PID"].to_numpy(copy=False)[g_idx]
+                chosen_rel = np.lexsort((pid_m, m_start))
+                truncated = False
+
+            sel_g = g_idx[chosen_rel]
+            sel_start = m_start[chosen_rel]
+            del g_idx, m_start
+
+            if truncated:
+                pid_sel = df["PID"].to_numpy(copy=False)[sel_g]
+                re_ord = np.lexsort((pid_sel, sel_start))
+                sel_g = sel_g[re_ord]
+                sel_start = sel_start[re_ord]
+                chosen_rel = chosen_rel[re_ord]
+
+            # Resolve per-selected-row offsets and legacy base cycles (only <=2500 elements!)
+            has_nonzero_off = any(m[1] != 0.0 for m in slice_off_meta)
+            has_legacy_base = any(m[2] is not None for m in slice_off_meta)
+            if has_nonzero_off or has_legacy_base:
+                sel_off = np.zeros(len(chosen_rel), dtype=np.float64)
+                sel_base = np.zeros(len(chosen_rel), dtype=np.float64)
+                cum_ends = np.cumsum([m[0] for m in slice_off_meta])
+                cum_starts = np.concatenate(([0], cum_ends[:-1]))
+                for out_i, r_pos in enumerate(chosen_rel):
+                    for seg_k, (cs, ce) in enumerate(zip(cum_starts, cum_ends)):
+                        if cs <= r_pos < ce:
+                            sel_off[out_i] = slice_off_meta[seg_k][1]
+                            if slice_off_meta[seg_k][2] is not None:
+                                sel_base[out_i] = slice_off_meta[seg_k][2][r_pos - cs]
+                            break
+            else:
+                sel_off = 0.0
+                sel_base = 0.0
+
+            del chosen_rel, slice_off_meta
+
+            sub = df.iloc[sel_g]
+            sel_op_start = sub["Op_Start_NS"].to_numpy(dtype=np.float64) + sel_off
+            sel_cr = sub["Creation_Cycle"].to_numpy(dtype=np.float64) - sel_base
+            sel_inj = (sub["Inject_Cycle"].to_numpy(dtype=np.float64) - sel_base) if "Inject_Cycle" in sub.columns else sel_cr
+            sel_rx = sub["Receive_Cycle"].to_numpy(dtype=np.float64) - sel_base
+
+        sel_inject = sel_op_start + sel_inj
+        sel_end = sel_op_start + sel_rx
+
+        pids = sub["PID"].to_numpy(dtype=np.int64).tolist()
+        srcs = sub["Source"].to_numpy(dtype=np.int64).tolist()
+        dsts = sub["Dest"].to_numpy(dtype=np.int64).tolist()
+        op_types = [str(x) for x in sub["Op_Type"].tolist()] if "Op_Type" in sub.columns else ["Scatter"] * len(sub)
+        op_idxs = [int(x) if pd.notna(x) else 1 for x in sub["Op_Idx"].tolist()] if "Op_Idx" in sub.columns else [1] * len(sub)
+        flits_l = sub["Num_Flits"].to_numpy(dtype=np.int64).tolist() if "Num_Flits" in sub.columns else [9] * len(sub)
+
+        if "Queueing_Delay" in sub.columns:
+            q_delays = sub["Queueing_Delay"].to_numpy(dtype=np.float64).tolist()
+        else:
+            q_delays = np.maximum(0.0, sel_inject - sel_start).tolist()
+
+        if "Network_Latency" in sub.columns:
+            net_lats = sub["Network_Latency"].to_numpy(dtype=np.float64).tolist()
+        else:
+            net_lats = np.maximum(0.0, sel_end - sel_inject).tolist()
+
+        if "Total_Latency" in sub.columns:
+            tot_lats = sub["Total_Latency"].to_numpy(dtype=np.float64).tolist()
+        else:
+            tot_lats = (sel_end - sel_start).tolist()
 
         packets = []
-        for _, r in sampled_df.iterrows():
-            c_cycle = float(r.get("Creation_Cycle", 0.0))
-            inj_cycle = float(r.get("Inject_Cycle", c_cycle))
-            rx_cycle = float(r.get("Receive_Cycle", inj_cycle))
-            q_delay = float(r.get("Queueing_Delay", max(0.0, inj_cycle - c_cycle)))
-            net_lat = float(r.get("Network_Latency", max(0.0, rx_cycle - inj_cycle)))
-            tot_lat = float(r.get("Total_Latency", q_delay + net_lat))
-            flits = int(r.get("Num_Flits", 9))
-
+        for pid, src, dst, op_t, op_i, flits, q_d, net_l, tot_l, p_s, p_i, p_e in zip(
+            pids, srcs, dsts, op_types, op_idxs, flits_l, q_delays, net_lats, tot_lats,
+            sel_start.tolist(), sel_inject.tolist(), sel_end.tolist()
+        ):
             packets.append({
-                "pid": int(r["PID"]),
-                "src": int(r["Source"]),
-                "dst": int(r["Dest"]),
-                "op_type": str(r.get("Op_Type", "Scatter")),
-                "op_idx": int(r.get("Op_Idx", 1)) if pd.notna(r.get("Op_Idx")) else 1,
+                "pid": pid,
+                "src": src,
+                "dst": dst,
+                "op_type": op_t,
+                "op_idx": op_i,
                 "flits": flits,
-                "queue_delay_cycles": round(q_delay, 1),
-                "flight_cycles": round(net_lat, 1),
-                "total_latency_cycles": round(tot_lat, 1),
-                "pkt_start_ns": round(float(r["pkt_start_ns"]), 1),
-                "pkt_inject_ns": round(float(r["pkt_inject_ns"]), 1),
-                "pkt_end_ns": round(float(r["pkt_end_ns"]), 1),
+                "queue_delay_cycles": round(q_d, 1),
+                "flight_cycles": round(net_l, 1),
+                "total_latency_cycles": round(tot_l, 1),
+                "pkt_start_ns": round(p_s, 1),
+                "pkt_inject_ns": round(p_i, 1),
+                "pkt_end_ns": round(p_e, 1),
             })
 
         return {
@@ -1682,40 +2334,41 @@ def get_topology_traffic_data(folder_path=None, iteration="last", op_filter="all
         try:
             basename = os.path.basename(tf)
             d_id = int(basename.split("_")[-1].split(".")[0])
-            df_t = pd.read_csv(tf, on_bad_lines="skip")
-            df_t.columns = df_t.columns.str.strip()
-            df_t["START_NS"] = pd.to_numeric(df_t["START_NS"], errors="coerce")
-            df_t["DURATION"] = pd.to_numeric(df_t["DURATION"], errors="coerce")
-            df_t = df_t.dropna(subset=["START_NS", "DURATION"])
-            df_t = df_t[df_t["DURATION"] > 0]
-            if df_t.empty:
+            df_t, segs_b = _load_trc_cached(tf)
+            if df_t.empty or not segs_b:
                 continue
 
-            segs = split_dataframe_by_drops(df_t, "START_NS", -1.0)
             if target_iter_mode == "all":
-                df_act = pd.concat(segs, ignore_index=True)
+                df_act = df_t
             else:
-                s_idx = min(target_iter_mode, len(segs) - 1)
-                df_act = segs[s_idx]
+                s_idx = min(target_iter_mode, len(segs_b) - 1)
+                s_b, e_b = segs_b[s_idx]
+                df_act = df_t.iloc[s_b:e_b]
 
-            df_act["TYPE"] = df_act["TYPE"].astype(str).str.strip().str.lower()
-            scat = df_act[df_act["TYPE"].str.contains("scatter")]["DURATION"].sum()
-            gath = df_act[df_act["TYPE"].str.contains("gather")]["DURATION"].sum()
-            ar = df_act[df_act["TYPE"].str.contains("all_reduce|allreduce")]["DURATION"].sum()
+            type_lower = df_act["TYPE"].str.lower()
+            dur_vals = df_act["DURATION"]
+            is_scatter = type_lower.str.contains("scatter", regex=False)
+            is_gather = type_lower.str.contains("gather", regex=False)
+            is_allred = type_lower.str.contains("all_reduce|allreduce", regex=True)
+            is_stall = type_lower.str.contains("stall", regex=False)
+
+            scat = float(dur_vals[is_scatter].sum())
+            gath = float(dur_vals[is_gather].sum())
+            ar = float(dur_vals[is_allred].sum())
             trans = scat + gath + ar
-            stl = df_act[df_act["TYPE"].str.contains("stall")]["DURATION"].sum()
-            non_comp = df_act["TYPE"].str.contains("scatter|gather|stall|all_reduce|allreduce")
-            comp = df_act[~non_comp]["DURATION"].sum()
+            stl = float(dur_vals[is_stall].sum())
+            non_comp = is_scatter | is_gather | is_stall | is_allred
+            comp = float(dur_vals[~non_comp].sum())
 
             gpu_times[d_id] = {
-                "compute_us": round(float(comp) / 1000.0, 2),
-                "transit_us": round(float(trans) / 1000.0, 2),
-                "stall_us": round(float(stl) / 1000.0, 2)
+                "compute_us": round(comp / 1000.0, 2),
+                "transit_us": round(trans / 1000.0, 2),
+                "stall_us": round(stl / 1000.0, 2)
             }
         except Exception:
             pass
 
-    # 4. Datos de paquetes NoC desde packet_tracking_debug.csv
+    # 4. Datos de paquetes NoC desde packet_tracking_debug.csv (usando caché compartida)
     csv_path = folder / "packet_tracking_debug.csv"
     has_packet_data = csv_path.exists()
     flows = []
@@ -1727,95 +2380,132 @@ def get_topology_traffic_data(folder_path=None, iteration="last", op_filter="all
 
     if has_packet_data:
         try:
-            # Lectura optimizada seleccionando solo columnas necesarias
-            usecols = ["Source", "Dest", "Num_Flits", "Queueing_Delay", "Total_Latency", "Network_Latency", "Op_Type", "Op_Start_NS"]
-            first_line = pd.read_csv(csv_path, nrows=2)
-            valid_cols = [c.strip() for c in first_line.columns if c.strip() in usecols or c.strip() in ["Latency", "Network_Latency"]]
-            df_p = pd.read_csv(csv_path, usecols=valid_cols, on_bad_lines="skip")
-            if not df_p.empty and "Source" in df_p.columns and "Dest" in df_p.columns:
-                df_p.columns = df_p.columns.str.strip()
-                for c in ["Source", "Dest", "Num_Flits", "Queueing_Delay", "Total_Latency", "Network_Latency", "Op_Start_NS"]:
-                    if c in df_p.columns:
-                        df_p[c] = pd.to_numeric(df_p[c], errors="coerce")
-
-                if "Num_Flits" not in df_p.columns:
-                    df_p["Num_Flits"] = 9
-                if "Queueing_Delay" not in df_p.columns:
-                    df_p["Queueing_Delay"] = 0.0
-                if "Total_Latency" not in df_p.columns:
-                    df_p["Total_Latency"] = df_p.get("Latency", 0.0)
-                if "Network_Latency" not in df_p.columns:
-                    df_p["Network_Latency"] = (df_p["Total_Latency"] - df_p["Queueing_Delay"]).clip(lower=0)
-
-                # Segmentación por iteración
-                segs_p = split_dataframe_by_drops(df_p, "Op_Start_NS", -100.0)
+            df_p, segs_csv = load_packet_csv_cached(folder)
+            if df_p is not None and not df_p.empty and "Source" in df_p.columns and "Dest" in df_p.columns and segs_csv:
                 if target_iter_mode == "all":
-                    df_slice = pd.concat(segs_p, ignore_index=True)
+                    df_slice = df_p
                 else:
-                    c_idx = min(target_iter_mode, len(segs_p) - 1)
-                    df_slice = segs_p[c_idx]
-
-                df_slice = df_slice.dropna(subset=["Source", "Dest"])
+                    c_idx = min(target_iter_mode, len(segs_csv) - 1)
+                    s_c, e_c = segs_csv[c_idx]
+                    df_slice = df_p.iloc[s_c:e_c]
 
                 # Filtro por fase de operación colectiva
                 f_op = op_filter.lower().strip()
-                if f_op in ["scatter", "moe scatter"]:
-                    df_filtered = df_slice[df_slice["Op_Type"].astype(str).str.contains("scatter", case=False, na=False)]
-                elif f_op in ["gather", "moe gather"]:
-                    df_filtered = df_slice[df_slice["Op_Type"].astype(str).str.contains("gather", case=False, na=False)]
-                elif f_op in ["allreduce", "ring-allreduce", "all_reduce"]:
-                    df_filtered = df_slice[df_slice["Op_Type"].astype(str).str.contains("all_reduce|allreduce", case=False, na=False)]
+                if "Op_Type" in df_slice.columns:
+                    op_str = df_slice["Op_Type"].astype(str).str.lower()
+                    if f_op in ["scatter", "moe scatter"]:
+                        df_filtered = df_slice[op_str.str.contains("scatter", regex=False, na=False)]
+                    elif f_op in ["gather", "moe gather"]:
+                        df_filtered = df_slice[op_str.str.contains("gather", regex=False, na=False)]
+                    elif f_op in ["allreduce", "ring-allreduce", "all_reduce"]:
+                        df_filtered = df_slice[op_str.str.contains("all_reduce|allreduce", regex=True, na=False)]
+                    else:
+                        df_filtered = df_slice
                 else:
                     df_filtered = df_slice
 
                 total_slice_packets = len(df_filtered)
-                total_slice_flits = int(df_filtered["Num_Flits"].sum()) if total_slice_packets > 0 else 0
+                has_flits = "Num_Flits" in df_filtered.columns
+                total_slice_flits = int(df_filtered["Num_Flits"].to_numpy(dtype=np.int64, copy=False).sum()) if (total_slice_packets > 0 and has_flits) else total_slice_packets * 9
 
                 # Agregación vectorizada ultra-rápida por nodo
                 if total_slice_packets > 0:
-                    tx_grp = df_filtered.groupby("Source")
-                    tx_pkts_s = tx_grp.size()
-                    tx_flits_s = tx_grp["Num_Flits"].sum() if "Num_Flits" in df_filtered else tx_pkts_s * 9
-                    tx_q_s = tx_grp["Queueing_Delay"].mean() if "Queueing_Delay" in df_filtered else None
+                    has_cycles = all(c in df_filtered.columns for c in ("Creation_Cycle", "Inject_Cycle", "Receive_Cycle"))
 
-                    rx_grp = df_filtered.groupby("Dest")
-                    rx_pkts_s = rx_grp.size()
-                    rx_flits_s = rx_grp["Num_Flits"].sum() if "Num_Flits" in df_filtered else rx_pkts_s * 9
-                    rx_lat_s = rx_grp["Total_Latency"].mean() if "Total_Latency" in df_filtered else None
+                    tx_agg_spec = {"pkts": ("Source", "count")}
+                    rx_agg_spec = {"pkts": ("Dest", "count")}
+                    if has_flits:
+                        tx_agg_spec["flits"] = ("Num_Flits", "sum")
+                        rx_agg_spec["flits"] = ("Num_Flits", "sum")
+                    if "Queueing_Delay" in df_filtered.columns:
+                        tx_agg_spec["q_avg"] = ("Queueing_Delay", "mean")
+                    elif has_cycles:
+                        tx_agg_spec["sum_inj"] = ("Inject_Cycle", "sum")
+                        tx_agg_spec["sum_cr"] = ("Creation_Cycle", "sum")
+
+                    if "Total_Latency" in df_filtered.columns:
+                        rx_agg_spec["lat_avg"] = ("Total_Latency", "mean")
+                    elif has_cycles:
+                        rx_agg_spec["sum_rx"] = ("Receive_Cycle", "sum")
+                        rx_agg_spec["sum_cr"] = ("Creation_Cycle", "sum")
+
+                    tx_df_g = df_filtered.groupby("Source", observed=True).agg(**tx_agg_spec)
+                    rx_df_g = df_filtered.groupby("Dest", observed=True).agg(**rx_agg_spec)
 
                     for d in range(num_gpus):
-                        p_tx = int(tx_pkts_s.get(d, 0))
-                        f_tx = int(tx_flits_s.get(d, 0))
-                        q_tx = float(tx_q_s.get(d, 0.0)) if tx_q_s is not None and d in tx_q_s else 0.0
+                        if d in tx_df_g.index:
+                            r_tx = tx_df_g.loc[d]
+                            p_tx = int(r_tx["pkts"])
+                            f_tx = int(r_tx["flits"]) if "flits" in r_tx else p_tx * 9
+                            if "q_avg" in r_tx:
+                                q_tx = float(r_tx["q_avg"])
+                            elif "sum_inj" in r_tx and p_tx > 0:
+                                q_tx = float(r_tx["sum_inj"] - r_tx["sum_cr"]) / p_tx
+                            else:
+                                q_tx = 0.0
+                        else:
+                            p_tx, f_tx, q_tx = 0, 0, 0.0
 
-                        p_rx = int(rx_pkts_s.get(d, 0))
-                        f_rx = int(rx_flits_s.get(d, 0))
-                        l_rx = float(rx_lat_s.get(d, 0.0)) if rx_lat_s is not None and d in rx_lat_s else 0.0
+                        if d in rx_df_g.index:
+                            r_rx = rx_df_g.loc[d]
+                            p_rx = int(r_rx["pkts"])
+                            f_rx = int(r_rx["flits"]) if "flits" in r_rx else p_rx * 9
+                            if "lat_avg" in r_rx:
+                                l_rx = float(r_rx["lat_avg"])
+                            elif "sum_rx" in r_rx and p_rx > 0:
+                                l_rx = float(r_rx["sum_rx"] - r_rx["sum_cr"]) / p_rx
+                            else:
+                                l_rx = 0.0
+                        else:
+                            p_rx, f_rx, l_rx = 0, 0, 0.0
 
                         tx_stats[d] = {"pkts": p_tx, "flits": f_tx, "q_avg": round(q_tx, 1)}
                         rx_stats[d] = {"pkts": p_rx, "flits": f_rx, "lat_avg": round(l_rx, 1)}
 
                     # Agregación vectorizada de flujos (Source -> Dest con s != d)
-                    flow_df = df_filtered[df_filtered["Source"] != df_filtered["Dest"]]
+                    flow_mask = df_filtered["Source"].to_numpy() != df_filtered["Dest"].to_numpy()
+                    flow_df = df_filtered.iloc[flow_mask] if not flow_mask.all() else df_filtered
                     if not flow_df.empty:
-                        flow_grp = flow_df.groupby(["Source", "Dest"]).agg(
+                        if "Total_Latency" in flow_df.columns and "Queueing_Delay" in flow_df.columns and "Network_Latency" in flow_df.columns:
+                            flow_tmp = flow_df
+                        else:
+                            # Construir dataframe ligero solo con las columnas de flujo necesarias
+                            cr_f = flow_df["Creation_Cycle"].to_numpy(dtype=np.int32, copy=False)
+                            inj_f = flow_df["Inject_Cycle"].to_numpy(dtype=np.int32, copy=False) if "Inject_Cycle" in flow_df.columns else cr_f
+                            rx_f = flow_df["Receive_Cycle"].to_numpy(dtype=np.int32, copy=False)
+                            flow_tmp = pd.DataFrame({
+                                "Source": flow_df["Source"].to_numpy(copy=False),
+                                "Dest": flow_df["Dest"].to_numpy(copy=False),
+                                "Num_Flits": flow_df["Num_Flits"].to_numpy(copy=False) if has_flits else np.full(len(flow_df), 9, dtype=np.int16),
+                                "Total_Latency": flow_df["Total_Latency"].to_numpy(copy=False) if "Total_Latency" in flow_df.columns else (rx_f - cr_f),
+                                "Queueing_Delay": flow_df["Queueing_Delay"].to_numpy(copy=False) if "Queueing_Delay" in flow_df.columns else np.maximum(0, inj_f - cr_f),
+                                "Network_Latency": flow_df["Network_Latency"].to_numpy(copy=False) if "Network_Latency" in flow_df.columns else np.maximum(0, rx_f - inj_f),
+                            })
+
+                        flow_grp = flow_tmp.groupby(["Source", "Dest"], observed=True).agg(
                             packets=("Num_Flits", "count"),
                             flits=("Num_Flits", "sum"),
-                            avg_latency=("Total_Latency", "mean") if "Total_Latency" in flow_df else ("Num_Flits", lambda _: 0.0),
-                            avg_queue=("Queueing_Delay", "mean") if "Queueing_Delay" in flow_df else ("Num_Flits", lambda _: 0.0),
-                            max_queue=("Queueing_Delay", "max") if "Queueing_Delay" in flow_df else ("Num_Flits", lambda _: 0.0),
-                            avg_net_lat=("Network_Latency", "mean") if "Network_Latency" in flow_df else ("Num_Flits", lambda _: 0.0),
+                            avg_latency=("Total_Latency", "mean"),
+                            avg_queue=("Queueing_Delay", "mean"),
+                            max_queue=("Queueing_Delay", "max"),
+                            avg_net_lat=("Network_Latency", "mean"),
                         ).reset_index()
 
-                        for _, f_row in flow_grp.iterrows():
-                            s = int(f_row["Source"])
-                            d = int(f_row["Dest"])
-                            cnt = int(f_row["packets"])
-                            f_sum = int(f_row["flits"])
-                            lat_m = float(f_row["avg_latency"]) if pd.notna(f_row["avg_latency"]) else 0.0
-                            q_m = float(f_row["avg_queue"]) if pd.notna(f_row["avg_queue"]) else 0.0
-                            q_max = float(f_row["max_queue"]) if pd.notna(f_row["max_queue"]) else 0.0
-                            net_m = float(f_row["avg_net_lat"]) if pd.notna(f_row["avg_net_lat"]) else max(0.0, lat_m - q_m)
+                        for s, d, cnt, f_sum, lat_m, q_m, q_max, net_m in zip(
+                            flow_grp["Source"].tolist(),
+                            flow_grp["Dest"].tolist(),
+                            flow_grp["packets"].tolist(),
+                            flow_grp["flits"].tolist(),
+                            flow_grp["avg_latency"].tolist(),
+                            flow_grp["avg_queue"].tolist(),
+                            flow_grp["max_queue"].tolist(),
+                            flow_grp["avg_net_lat"].tolist(),
+                        ):
+                            s, d, cnt, f_sum = int(s), int(d), int(cnt), int(f_sum)
+                            lat_m = float(lat_m) if pd.notna(lat_m) else 0.0
+                            q_m = float(q_m) if pd.notna(q_m) else 0.0
+                            q_max = float(q_max) if pd.notna(q_max) else 0.0
+                            net_m = float(net_m) if pd.notna(net_m) else max(0.0, lat_m - q_m)
                             sh_pct = round((cnt / total_slice_packets * 100.0), 2)
 
                             route_path = _compute_routing_path(s, d, topo, net_dims, num_gpus, adj_list)
