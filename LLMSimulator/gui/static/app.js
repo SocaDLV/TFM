@@ -26,6 +26,9 @@ document.addEventListener("DOMContentLoaded", () => {
   // Status & Header
   const liveStatusPill = document.getElementById("live-status-pill");
   const liveStatusText = document.getElementById("live-status-text");
+  const btnThemeToggle = document.getElementById("btn-theme-toggle");
+  const themeToggleIcon = document.getElementById("theme-toggle-icon");
+  const themeToggleLabel = document.getElementById("theme-toggle-label");
   const btnOpenHelp = document.getElementById("btn-open-help");
   const helpModal = document.getElementById("help-modal");
   const btnCloseModal = document.getElementById("btn-close-modal");
@@ -245,6 +248,50 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // =========================================================================
+  // Light / Dark Theme Switch (Haoziwan CAD-inspired)
+  // =========================================================================
+  const SUN_SVG_PATH = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>';
+  const MOON_SVG_PATH = '<path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z"/>';
+
+  function syncThemeButtonUI(theme) {
+    if (themeToggleLabel) {
+      themeToggleLabel.textContent = theme === "dark" ? "Claro" : "Oscuro";
+    }
+    if (themeToggleIcon) {
+      themeToggleIcon.innerHTML = theme === "dark" ? SUN_SVG_PATH : MOON_SVG_PATH;
+    }
+    if (btnThemeToggle) {
+      btnThemeToggle.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+    }
+  }
+
+  function redrawAllCanvasesForTheme() {
+    if (chronoCanvas && chronoCanvas.data) chronoCanvas.render();
+    if (packetFlightCanvas && packetFlightCanvas.packetsData) packetFlightCanvas.render();
+    if (hybridSyncController && hybridSyncController.chronoCanvas) hybridSyncController.render();
+    if (topologyCanvas && topologyCanvas.data) topologyCanvas.render();
+  }
+
+  function applyTheme(theme) {
+    const normalized = theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", normalized);
+    try {
+      localStorage.setItem("theme", normalized);
+    } catch (_) {}
+    syncThemeButtonUI(normalized);
+    redrawAllCanvasesForTheme();
+  }
+
+  syncThemeButtonUI(document.documentElement.getAttribute("data-theme") || "light");
+
+  if (btnThemeToggle) {
+    btnThemeToggle.addEventListener("click", () => {
+      const current = document.documentElement.getAttribute("data-theme") || "light";
+      applyTheme(current === "dark" ? "light" : "dark");
+    });
+  }
+
+  // =========================================================================
   // Form State & Live Validation (Guardrails)
   // =========================================================================
   function parseNetDims(str) {
@@ -281,7 +328,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // 4. Skewness Label Sync
     const skewVal = parseFloat(cfgSkewnessSlider.value);
-    cfgSkewnessInput.value = skewVal.toFixed(1);
+    if (document.activeElement !== cfgSkewnessInput) {
+      cfgSkewnessInput.value = skewVal.toFixed(1);
+    }
     if (skewVal === 0.0) {
       skewnessLabel.textContent = "0.0 (Distribución Uniforme de Tokens)";
     } else {
@@ -372,16 +421,19 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function renderGuardrails(errors, warnings) {
+    if (!guardrailsContainer) return;
     if (errors.length === 0 && warnings.length === 0) {
       guardrailsContainer.innerHTML = "";
+      guardrailsContainer.classList.add("hidden");
       return;
     }
+    guardrailsContainer.classList.remove("hidden");
 
     let html = "";
     errors.forEach(err => {
       html += `
         <div class="guardrail-alert guardrail-danger">
-          <span class="guardrail-icon">🛑</span>
+          <span class="guardrail-icon">[ERROR]</span>
           <div class="guardrail-content">
             <strong>${err.title}</strong>
             <p>${err.message}</p>
@@ -393,7 +445,7 @@ document.addEventListener("DOMContentLoaded", () => {
     warnings.forEach(warn => {
       html += `
         <div class="guardrail-alert guardrail-warning">
-          <span class="guardrail-icon">⚠️</span>
+          <span class="guardrail-icon">[AVISO]</span>
           <div class="guardrail-content">
             <strong>${warn.title}</strong>
             <p>${warn.message}</p>
@@ -436,7 +488,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const text = cmdPreviewText.textContent;
     navigator.clipboard.writeText(text).then(() => {
       const orig = btnCopyCmd.textContent;
-      btnCopyCmd.textContent = "✅ ¡Copiado!";
+      btnCopyCmd.textContent = "Copiado";
       setTimeout(() => { btnCopyCmd.textContent = orig; }, 1500);
     }).catch(err => {
       console.error("Error al copiar comando:", err);
@@ -472,7 +524,7 @@ document.addEventListener("DOMContentLoaded", () => {
         break;
       default:
         liveStatusPill.classList.add("status-idle");
-        liveStatusText.textContent = "Listo";
+        liveStatusText.textContent = "Sistema Listo";
         break;
     }
   }
@@ -481,7 +533,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const sec = Math.floor(totalSeconds % 60);
     const min = Math.floor((totalSeconds / 60) % 60);
     const hrs = Math.floor(totalSeconds / 3600);
-    return `⏱️ ${hrs.toString().padStart(2, "0")}:${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+    return `${hrs.toString().padStart(2, "0")}:${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   }
 
   function startTimer() {
@@ -526,7 +578,7 @@ document.addEventListener("DOMContentLoaded", () => {
       btnAbortSim.disabled = false;
       isSimulating = true;
       completionToast.classList.add("hidden");
-      consoleOutput.textContent = "🚀 Enviando solicitud de co-simulación al backend...\n";
+      consoleOutput.textContent = "[INFO] Enviando solicitud de co-simulación al backend...\n";
       logOffset = 0;
       updateLiveStatus("running");
       startTimer();
@@ -543,7 +595,7 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      consoleOutput.textContent += `📡 Sesión iniciada. Subproceso ./build/run activo.\n`;
+      consoleOutput.textContent += `[INFO] Sesión iniciada. Subproceso ./build/run activo.\n`;
       startPolling();
 
     } catch (err) {
@@ -552,7 +604,7 @@ document.addEventListener("DOMContentLoaded", () => {
       updateLiveStatus("error");
       btnRunSim.disabled = false;
       btnAbortSim.disabled = true;
-      consoleOutput.textContent += `\n❌ Error al lanzar simulación: ${err.message}\n`;
+      consoleOutput.textContent += `\n[ERROR] Error al lanzar simulación: ${err.message}\n`;
       alert(`Error al iniciar la simulación:\n${err.message}`);
     }
   }
@@ -560,12 +612,12 @@ document.addEventListener("DOMContentLoaded", () => {
   async function abortSimulation() {
     if (!isSimulating) return;
     btnAbortSim.disabled = true;
-    consoleOutput.textContent += `\n🛑 Solicitando cancelación inmediata...\n`;
+    consoleOutput.textContent += `\n[ABORT] Solicitando cancelación inmediata...\n`;
 
     try {
       const response = await fetch("/api/abort", { method: "POST" });
       const data = await response.json();
-      consoleOutput.textContent += `📡 Estado de aborto: ${data.status}\n`;
+      consoleOutput.textContent += `[ABORT] Estado: ${data.status}\n`;
     } catch (err) {
       console.error("Error al abortar:", err);
     }
@@ -798,7 +850,7 @@ document.addEventListener("DOMContentLoaded", () => {
       stagingSaveStatus.textContent = "(Guardada)";
       stagingSaveStatus.className = "staging-saved-tag";
       btnSaveStaging.disabled = true;
-      btnSaveStaging.textContent = "✅ Guardada";
+      btnSaveStaging.textContent = "Guardada";
       btnDiscardStaging.disabled = true;
       stagingCustomLabel.disabled = true;
       tab2Badge.textContent = "Guardada";
@@ -810,7 +862,7 @@ document.addEventListener("DOMContentLoaded", () => {
       stagingSaveStatus.textContent = "(No guardada)";
       stagingSaveStatus.className = "staging-unsaved";
       btnSaveStaging.disabled = false;
-      btnSaveStaging.textContent = "💾 Guardar Simulación";
+      btnSaveStaging.textContent = "Guardar";
       btnDiscardStaging.disabled = false;
       stagingCustomLabel.disabled = false;
       tab2Badge.textContent = "Staging";
@@ -1184,7 +1236,7 @@ document.addEventListener("DOMContentLoaded", () => {
       stagingSaveStatus.textContent = "(Guardada)";
       stagingSaveStatus.className = "staging-saved-tag";
 
-      btnSaveStaging.textContent = "✅ Guardada";
+      btnSaveStaging.textContent = "Guardada";
       btnSaveStaging.disabled = true;
       btnDiscardStaging.disabled = true;
       stagingCustomLabel.disabled = true;
@@ -1199,7 +1251,7 @@ document.addEventListener("DOMContentLoaded", () => {
         : err.message;
       alert(`Error al guardar la simulación:\n${detail}`);
       btnSaveStaging.disabled = false;
-      btnSaveStaging.textContent = "💾 Guardar Simulación";
+      btnSaveStaging.textContent = "Guardar";
     }
   });
 
@@ -1237,7 +1289,7 @@ document.addEventListener("DOMContentLoaded", () => {
       stagingSaveStatus.textContent = "(No guardada)";
       btnSaveStaging.disabled = true;
       btnDiscardStaging.disabled = true;
-      btnDiscardStaging.textContent = "🗑️ Descartar";
+      btnDiscardStaging.textContent = "Descartar";
       stagingCustomLabel.value = "";
       tab2Badge.classList.add("hidden");
 
@@ -1260,7 +1312,7 @@ document.addEventListener("DOMContentLoaded", () => {
         : err.message;
       alert(`Error al descartar simulación:\n${detail}`);
       btnDiscardStaging.disabled = false;
-      btnDiscardStaging.textContent = "🗑️ Descartar";
+      btnDiscardStaging.textContent = "Descartar";
     }
   });
 
@@ -1310,7 +1362,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (err) {
       console.error("Error cargando historial:", err);
       if (historyTableBody) {
-        historyTableBody.innerHTML = `<tr><td colspan="7" class="table-empty-row" style="color:#ef4444;">❌ Error cargando catálogo: ${err.message}</td></tr>`;
+        historyTableBody.innerHTML = `<tr><td colspan="7" class="table-empty-row" style="color:var(--danger);">Error cargando catálogo: ${err.message}</td></tr>`;
       }
     }
   }
@@ -1348,7 +1400,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const isStaging = sim.source === "staging";
       const rowClass = isStaging ? "row-staging" : "";
 
-      const labelBadge = sim.label ? `<span class="folder-label-tag">🏷️ ${escapeHtml(sim.label)}</span>` : "";
+      const labelBadge = sim.label ? `<span class="folder-label-tag">${escapeHtml(sim.label)}</span>` : "";
       const stagingBadge = isStaging ? `<span class="badge-staging">TEMPORAL (No guardada)</span>` : "";
 
       const modelBadge = sim.model === "deepseekV3" ? "badge-scatter" : (sim.model === "mixtral" ? "badge-calc" : "badge-allreduce");
@@ -1394,13 +1446,13 @@ document.addEventListener("DOMContentLoaded", () => {
           <td class="td-actions">
             <div class="actions-cell">
               <button class="btn-action-icon btn-open-viewer" data-folder="${escapeHtml(sim.folder)}" data-source="${sim.source}" title="Cargar en Pestaña 2 y abrir visores interactivos">
-                👁️ Abrir en Visor
+                Abrir
               </button>
               <button class="btn-action-icon btn-edit-label" data-folder="${escapeHtml(sim.folder)}" data-label="${escapeHtml(sim.label || '')}" title="Editar etiqueta descriptiva" ${isStaging ? 'disabled' : ''}>
-                🏷️
+                Etiqueta
               </button>
               <button class="btn-action-icon btn-action-delete" data-folder="${escapeHtml(sim.folder)}" title="Eliminar simulación del historial" ${isStaging ? 'disabled' : ''}>
-                🗑️
+                Eliminar
               </button>
             </div>
           </td>
@@ -1623,14 +1675,14 @@ document.addEventListener("DOMContentLoaded", () => {
           <td><span class="badge ${r.model === 'deepseekV3' ? 'badge-scatter' : 'badge-calc'}">${escapeHtml(r.model)}</span></td>
           <td>${escapeHtml(r.topology.toUpperCase())}</td>
           <td>${r.num_gpus}</td>
-          <td style="color:#38bdf8;font-weight:700;">${r.wall_clock_us.toFixed(2)} µs</td>
+          <td style="color:var(--accent);font-weight:700;">${r.wall_clock_us.toFixed(2)} µs</td>
           <td>${r.compute_us.toFixed(2)} µs <span style="color:var(--text-dim);">(${r.compute_pct.toFixed(1)}%)</span></td>
           <td>${r.transit_us.toFixed(2)} µs <span style="color:var(--text-dim);">(${r.transit_pct.toFixed(1)}%)</span></td>
-          <td style="color:#ef4444;">${r.stall_us.toFixed(2)} µs <span style="color:var(--text-dim);">(${r.stall_pct.toFixed(1)}%)</span></td>
+          <td style="color:var(--danger);">${r.stall_us.toFixed(2)} µs <span style="color:var(--text-dim);">(${r.stall_pct.toFixed(1)}%)</span></td>
           <td>${r.scatter_us.toFixed(2)} µs</td>
           <td>${r.gather_us.toFixed(2)} µs</td>
           <td>${r.allreduce_us > 0 ? r.allreduce_us.toFixed(2) + ' µs' : '--'}</td>
-          <td style="color:#10b981;font-weight:600;">${r.lambda_flits.toFixed(4)}</td>
+          <td style="color:var(--success);font-weight:600;">${r.lambda_flits.toFixed(4)}</td>
           <td>${r.avg_flit_lat_cycles > 0 ? r.avg_flit_lat_cycles.toFixed(1) + ' c' : '--'}</td>
           <td>${r.avg_pkt_lat_cycles > 0 ? r.avg_pkt_lat_cycles.toFixed(1) + ' c' : '--'}</td>
           <td>${r.total_packets.toLocaleString()}</td>
@@ -1785,19 +1837,16 @@ document.addEventListener("DOMContentLoaded", () => {
       // Modo Vista Previa usando valores de Pestaña 1
       const topoVal = cfgTopology ? cfgTopology.value : "torus";
       const modelVal = cfgModel ? cfgModel.value : "mixtral";
-      const gpusVal = cfgDevices ? parseInt(cfgDevices.value) || 8 : 8;
-      const bsVal = cfgBatchSize ? parseInt(cfgBatchSize.value) || 32 : 32;
-      const skewVal = cfgSkewness ? parseFloat(cfgSkewness.value) || 0.0 : 0.0;
-      const tpVal = cfgTensorDegree ? parseInt(cfgTensorDegree.value) || 1 : 1;
-      const vcsVal = cfgVCs ? parseInt(cfgVCs.value) || 4 : 4;
+      const rawDims = cfgNetDims ? cfgNetDims.value.trim() : "2 4";
+      const dimsArr = parseNetDims(rawDims);
+      const gpusVal = dimsArr.reduce((acc, v) => acc * v, 1);
+      const bsVal = cfgBatchSize ? parseInt(cfgBatchSize.value, 10) || 128 : 128;
+      const skewVal = cfgSkewnessInput ? parseFloat(cfgSkewnessInput.value) || 0.0 : 0.0;
+      const tpVal = cfgTp ? parseInt(cfgTp.value, 10) || 1 : 1;
+      const vcsVal = cfgVcs ? parseInt(cfgVcs.value, 10) || 4 : 4;
       const routingVal = cfgRouting ? cfgRouting.value : "dim_order";
 
-      let netDims = `${gpusVal}`;
-      if (topoVal === "mesh") {
-        if (gpusVal === 8) netDims = "4 2";
-        else if (gpusVal === 4) netDims = "2 2";
-        else if (gpusVal === 16) netDims = "4 4";
-      }
+      const netDims = rawDims.startsWith("anynet:") ? rawDims : dimsArr.join(" ");
 
       if (topoSimLabel) {
         topoSimLabel.textContent = `[Vista Previa] ${modelVal} | ${topoVal.toUpperCase()} (${netDims}) | ${gpusVal} GPUs`;
@@ -1853,16 +1902,16 @@ document.addEventListener("DOMContentLoaded", () => {
     const hasData = d.has_packet_data;
 
     let tagsHtml = `
-      <span class="tag">📐 ${topo} ${dims}</span>
-      <span class="tag">⚡ ${gpus} GPUs</span>
-      <span class="tag">🧠 ${model}</span>
-      <span class="tag">🚦 VCs: ${d.vcs || 4}</span>
+      <span class="tag">${topo} ${dims}</span>
+      <span class="tag">${gpus} GPUs</span>
+      <span class="tag">${model}</span>
+      <span class="tag">VCs: ${d.vcs || 4}</span>
     `;
 
     if (hasData) {
-      tagsHtml += `<span class="tag" style="color:#10b981;border-color:#10b981;">📦 ${totalPkts.toLocaleString()} paquetes analizados</span>`;
+      tagsHtml += `<span class="tag" style="color:var(--success);border-color:var(--success);">${totalPkts.toLocaleString()} paquetes analizados</span>`;
     } else {
-      tagsHtml += `<span class="tag" style="color:#f59e0b;border-color:#f59e0b;">⚠️ Sin trazas de paquetes (Modo Topológico)</span>`;
+      tagsHtml += `<span class="tag" style="color:var(--warning);border-color:var(--warning);">Sin trazas de paquetes (Modo Topológico)</span>`;
     }
 
     topoMetaTags.innerHTML = tagsHtml;
@@ -1924,8 +1973,8 @@ document.addEventListener("DOMContentLoaded", () => {
       incomingFlows.forEach(f => {
         incomingRows += `
           <tr>
-            <td>GPU ${f.src} ➔ GPU ${f.dst}</td>
-            <td style="color:#ef4444;font-weight:700;">${f.packets.toLocaleString()}</td>
+            <td>GPU ${f.src} → GPU ${f.dst}</td>
+            <td style="color:var(--danger);font-weight:700;">${f.packets.toLocaleString()}</td>
             <td>${f.flits.toLocaleString()}</td>
             <td>${f.avg_latency.toFixed(1)} c</td>
             <td>${f.share_pct.toFixed(1)}%</td>
@@ -1941,8 +1990,8 @@ document.addEventListener("DOMContentLoaded", () => {
       outgoingFlows.forEach(f => {
         outgoingRows += `
           <tr>
-            <td>GPU ${f.src} ➔ GPU ${f.dst}</td>
-            <td style="color:#38bdf8;font-weight:700;">${f.packets.toLocaleString()}</td>
+            <td>GPU ${f.src} → GPU ${f.dst}</td>
+            <td style="color:var(--accent);font-weight:700;">${f.packets.toLocaleString()}</td>
             <td>${f.flits.toLocaleString()}</td>
             <td>${f.avg_latency.toFixed(1)} c</td>
             <td>${f.share_pct.toFixed(1)}%</td>
@@ -1965,11 +2014,11 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="node-kpi-grid">
             <div class="node-kpi-box">
               <span class="label">Carga RX (% clúster):</span>
-              <span class="val" style="color:#ef4444;">${node.rx_share_pct.toFixed(2)}%</span>
+              <span class="val" style="color:var(--danger);">${node.rx_share_pct.toFixed(2)}%</span>
             </div>
             <div class="node-kpi-box">
               <span class="label">Carga TX (% clúster):</span>
-              <span class="val" style="color:#38bdf8;">${node.tx_share_pct.toFixed(2)}%</span>
+              <span class="val" style="color:var(--accent);">${node.tx_share_pct.toFixed(2)}%</span>
             </div>
             <div class="node-kpi-box">
               <span class="label">Paquetes RX:</span>
@@ -1987,7 +2036,7 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="node-kpi-grid">
             <div class="node-kpi-box">
               <span class="label">Retardo en Cola NIC:</span>
-              <span class="val" style="color:#f59e0b;">${node.avg_queueing_delay.toFixed(1)} ciclos</span>
+              <span class="val" style="color:var(--warning);">${node.avg_queueing_delay.toFixed(1)} ciclos</span>
             </div>
             <div class="node-kpi-box">
               <span class="label">Latencia Media de Vuelo:</span>
@@ -2009,15 +2058,15 @@ document.addEventListener("DOMContentLoaded", () => {
           <div class="node-kpi-grid">
             <div class="node-kpi-box">
               <span class="label">Cómputo GPU:</span>
-              <span class="val" style="color:#10b981;">${node.compute_us.toFixed(1)} µs</span>
+              <span class="val" style="color:var(--success);">${node.compute_us.toFixed(1)} µs</span>
             </div>
             <div class="node-kpi-box">
               <span class="label">Tránsito NoC:</span>
-              <span class="val" style="color:#38bdf8;">${node.transit_us.toFixed(1)} µs</span>
+              <span class="val" style="color:var(--accent);">${node.transit_us.toFixed(1)} µs</span>
             </div>
             <div class="node-kpi-box" style="grid-column: span 2;">
               <span class="label">Espera en Barrera BSP (Stall):</span>
-              <span class="val" style="color:#ef4444;">${node.stall_us.toFixed(1)} µs</span>
+              <span class="val" style="color:var(--danger);">${node.stall_us.toFixed(1)} µs</span>
             </div>
           </div>
         </div>

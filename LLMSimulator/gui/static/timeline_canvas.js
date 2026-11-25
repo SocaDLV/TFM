@@ -8,6 +8,112 @@
 // Global simulation unit state (default: 'cycles')
 window.activeSimUnit = window.activeSimUnit || "cycles";
 
+// Dynamic Light/Dark palette for HTML5 Canvas renderers (Haoziwan CAD-inspired)
+function getCanvasTheme() {
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  if (isDark) {
+    return {
+      isDark: true,
+      bg: "#0d1117",
+      headerBg: "#161b22",
+      altRowBg: "rgba(255, 255, 255, 0.02)",
+      hoverRowBg: "rgba(59, 130, 246, 0.16)",
+      gridLine: "rgba(48, 54, 61, 0.45)",
+      trackLine: "#21262d",
+      axisLine: "#30363d",
+      tickMark: "#484f58",
+      textPrimary: "#e6edf3",
+      textSecondary: "#8b949e",
+      textMuted: "#6e7681",
+      accent: "#3b82f6",
+      crosshair: "rgba(59, 130, 246, 0.85)",
+      crosshairBadgeBg: "#3b82f6",
+      crosshairBadgeText: "#ffffff",
+      iterMarker: "#f59e0b",
+      iterMarkerText: "#000000",
+      calcFill: "#10b981",
+      calcStroke: "#059669",
+      calcText: "#042f2e",
+      scatterFill: "#38bdf8",
+      scatterStroke: "#0284c7",
+      scatterText: "#042f2e",
+      gatherFill: "#2563eb",
+      gatherStroke: "#1d4ed8",
+      allreduceFill: "#a855f7",
+      allreduceStroke: "#7e22ce",
+      stallFill: "#ef4444",
+      stallStroke: "#b91c1c",
+      blockLightText: "#ffffff",
+      subOpDash: "rgba(255, 255, 255, 0.4)",
+      queueFill: "#e67e22",
+      flightFill: "#0284c7",
+      phaseScatter: "rgba(56, 189, 248, 0.06)",
+      phaseGather: "rgba(37, 99, 235, 0.06)",
+      phaseAllreduce: "rgba(168, 85, 247, 0.06)",
+      previewLink: "#475569",
+      previewWrap: "#9333ea",
+      hoverEdgeStroke: "#f8fafc",
+      nodeNeutralFill: "#1e293b",
+      nodeNeutralStroke: "#3b82f6",
+      nodeNeutralText: "#e2e8f0",
+      nodeHoverHalo: "#ffffff",
+      nodeSelectedStroke: "#60a5fa",
+      flowOut: "#fbbf24",
+      flowIn: "#f43f5e",
+    };
+  }
+  return {
+    isDark: false,
+    bg: "#ffffff",
+    headerBg: "#f8fafc",
+    altRowBg: "rgba(15, 23, 42, 0.025)",
+    hoverRowBg: "rgba(37, 99, 235, 0.10)",
+    gridLine: "rgba(203, 213, 225, 0.65)",
+    trackLine: "#e2e8f0",
+    axisLine: "#cbd5e1",
+    tickMark: "#94a3b8",
+    textPrimary: "#0f172a",
+    textSecondary: "#475569",
+    textMuted: "#64748b",
+    accent: "#2563eb",
+    crosshair: "rgba(37, 99, 235, 0.85)",
+    crosshairBadgeBg: "#2563eb",
+    crosshairBadgeText: "#ffffff",
+    iterMarker: "#d97706",
+    iterMarkerText: "#ffffff",
+    calcFill: "#10b981",
+    calcStroke: "#059669",
+    calcText: "#022c22",
+    scatterFill: "#0ea5e9",
+    scatterStroke: "#0284c7",
+    scatterText: "#ffffff",
+    gatherFill: "#2563eb",
+    gatherStroke: "#1d4ed8",
+    allreduceFill: "#9333ea",
+    allreduceStroke: "#7e22ce",
+    stallFill: "#dc2626",
+    stallStroke: "#b91c1c",
+    blockLightText: "#ffffff",
+    subOpDash: "rgba(15, 23, 42, 0.25)",
+    queueFill: "#d97706",
+    flightFill: "#0284c7",
+    phaseScatter: "rgba(14, 165, 233, 0.08)",
+    phaseGather: "rgba(37, 99, 235, 0.08)",
+    phaseAllreduce: "rgba(147, 51, 234, 0.08)",
+    previewLink: "#64748b",
+    previewWrap: "#7c3aed",
+    hoverEdgeStroke: "#0f172a",
+    nodeNeutralFill: "#f1f5f9",
+    nodeNeutralStroke: "#2563eb",
+    nodeNeutralText: "#0f172a",
+    nodeHoverHalo: "#0f172a",
+    nodeSelectedStroke: "#1d4ed8",
+    flowOut: "#d97706",
+    flowIn: "#e11d48",
+  };
+}
+window.getCanvasTheme = getCanvasTheme;
+
 // Helper to format nanoseconds into clean human-readable units (ns, µs, ms)
 function formatTimeNs(ns) {
   if (ns === undefined || ns === null || isNaN(ns)) return "0 ns";
@@ -430,14 +536,15 @@ class ChronogramCanvas {
   render() {
     if (!this.canvas) return;
     const { width, height, ctx } = setupHiDPICanvas(this.canvas);
+    const t = getCanvasTheme();
     this.canvas.style.cursor = "crosshair";
 
     // Clear background
-    ctx.fillStyle = "#090d16";
+    ctx.fillStyle = t.bg;
     ctx.fillRect(0, 0, width, height);
 
     if (!this.data) {
-      ctx.fillStyle = "#64748b";
+      ctx.fillStyle = t.textMuted;
       ctx.font = "14px JetBrains Mono, monospace";
       ctx.textAlign = "center";
       ctx.fillText("No hay datos cargados para el Cronograma GPU.", width / 2, height / 2);
@@ -453,18 +560,18 @@ class ChronogramCanvas {
     if (span <= 0) return;
 
     // 1. Time axis header
-    this.drawTimeAxis(ctx, width, plotWidth, span);
+    this.drawTimeAxis(ctx, width, plotWidth, span, t);
 
     // 2. Draw GPU Tracks and Blocks
     for (let g = 0; g < numGpus; g++) {
       const trackY = this.headerHeight + g * trackHeight;
 
       // Track background alternation
-      ctx.fillStyle = (g % 2 === 0) ? "rgba(255, 255, 255, 0.015)" : "transparent";
+      ctx.fillStyle = (g % 2 === 0) ? t.altRowBg : "transparent";
       ctx.fillRect(this.marginLeft, trackY, plotWidth, trackHeight);
 
       // Track horizontal border
-      ctx.strokeStyle = "#1e293b";
+      ctx.strokeStyle = t.trackLine;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, trackY + trackHeight);
@@ -472,7 +579,7 @@ class ChronogramCanvas {
       ctx.stroke();
 
       // Track Label on Left
-      ctx.fillStyle = "#94a3b8";
+      ctx.fillStyle = t.textSecondary;
       ctx.font = "12px JetBrains Mono, monospace";
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
@@ -490,7 +597,7 @@ class ChronogramCanvas {
         const bY = trackY + 3;
         const bH = trackHeight - 6;
 
-        this.drawBlock(ctx, b, x1, bY, bWidth, bH, span, plotWidth);
+        this.drawBlock(ctx, b, x1, bY, bWidth, bH, span, plotWidth, t);
       }
     }
 
@@ -502,7 +609,7 @@ class ChronogramCanvas {
           if (x >= this.marginLeft && x <= this.marginLeft + plotWidth) {
             ctx.save();
             ctx.setLineDash([6, 4]);
-            ctx.strokeStyle = "#f59e0b"; // gold / amber
+            ctx.strokeStyle = t.iterMarker;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(x, this.headerHeight);
@@ -510,9 +617,9 @@ class ChronogramCanvas {
             ctx.stroke();
 
             // Iteration badge in header
-            ctx.fillStyle = "#f59e0b";
+            ctx.fillStyle = t.iterMarker;
             ctx.fillRect(x - 30, 4, 60, 18);
-            ctx.fillStyle = "#000";
+            ctx.fillStyle = t.iterMarkerText;
             ctx.font = "bold 9px JetBrains Mono, monospace";
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
@@ -527,7 +634,7 @@ class ChronogramCanvas {
     if (this.crosshairX !== null && this.crosshairX !== undefined &&
         this.crosshairX >= this.marginLeft && this.crosshairX <= this.marginLeft + plotWidth) {
       ctx.save();
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+      ctx.strokeStyle = t.crosshair;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(this.crosshairX, this.headerHeight);
@@ -535,9 +642,9 @@ class ChronogramCanvas {
       ctx.stroke();
 
       if (this.crosshairNs !== null) {
-        ctx.fillStyle = "#38bdf8";
+        ctx.fillStyle = t.crosshairBadgeBg;
         ctx.fillRect(this.crosshairX - 32, this.headerHeight - 20, 64, 16);
-        ctx.fillStyle = "#000";
+        ctx.fillStyle = t.crosshairBadgeText;
         ctx.font = "bold 9px JetBrains Mono, monospace";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
@@ -547,11 +654,12 @@ class ChronogramCanvas {
     }
   }
 
-  drawTimeAxis(ctx, width, plotWidth, span) {
-    ctx.fillStyle = "#0f172a";
+  drawTimeAxis(ctx, width, plotWidth, span, theme) {
+    const themePal = theme || getCanvasTheme();
+    ctx.fillStyle = themePal.headerBg;
     ctx.fillRect(0, 0, width, this.headerHeight);
 
-    ctx.strokeStyle = "#334155";
+    ctx.strokeStyle = themePal.axisLine;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, this.headerHeight);
@@ -567,7 +675,7 @@ class ChronogramCanvas {
 
     const firstTick = Math.ceil(this.viewStartNs / tickStepNs) * tickStepNs;
 
-    ctx.fillStyle = "#94a3b8";
+    ctx.fillStyle = themePal.textSecondary;
     ctx.font = "10px JetBrains Mono, monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
@@ -576,41 +684,43 @@ class ChronogramCanvas {
       const x = this.marginLeft + ((t - this.viewStartNs) / span) * plotWidth;
       
       // Tick mark
-      ctx.strokeStyle = "#475569";
+      ctx.strokeStyle = themePal.tickMark;
       ctx.beginPath();
       ctx.moveTo(x, this.headerHeight - 6);
       ctx.lineTo(x, this.headerHeight);
       ctx.stroke();
 
       // Vertical guide line across plot
-      ctx.strokeStyle = "rgba(51, 65, 85, 0.3)";
+      ctx.strokeStyle = themePal.gridLine;
       ctx.beginPath();
       ctx.moveTo(x, this.headerHeight);
       ctx.lineTo(x, this.canvas.height);
       ctx.stroke();
 
       // Tick label
+      ctx.fillStyle = themePal.textSecondary;
       ctx.fillText(formatSimUnit(t, true), x, this.headerHeight - 8);
     }
   }
 
-  drawBlock(ctx, b, x, y, w, h, span, plotWidth) {
+  drawBlock(ctx, b, x, y, w, h, span, plotWidth, theme) {
+    const themePal = theme || getCanvasTheme();
     // Semantic block color
-    let fillColor = "#10b981"; // calc (green)
-    let strokeColor = "#059669";
+    let fillColor = themePal.calcFill;
+    let strokeColor = themePal.calcStroke;
     
     if (b.block_type === "scatter") {
-      fillColor = "#38bdf8"; // cyan / blue
-      strokeColor = "#0284c7";
+      fillColor = themePal.scatterFill;
+      strokeColor = themePal.scatterStroke;
     } else if (b.block_type === "gather") {
-      fillColor = "#2563eb"; // deep blue
-      strokeColor = "#1d4ed8";
+      fillColor = themePal.gatherFill;
+      strokeColor = themePal.gatherStroke;
     } else if (b.block_type === "all_reduce") {
-      fillColor = "#a855f7"; // purple
-      strokeColor = "#7e22ce";
+      fillColor = themePal.allreduceFill;
+      strokeColor = themePal.allreduceStroke;
     } else if (b.block_type === "stall") {
-      fillColor = "#ef4444"; // red
-      strokeColor = "#b91c1c";
+      fillColor = themePal.stallFill;
+      strokeColor = themePal.stallStroke;
     }
 
     // Fill block
@@ -628,7 +738,7 @@ class ChronogramCanvas {
     if (b.block_type === "calc" && b.sub_ops && b.sub_ops.length > 1 && w > 30) {
       ctx.save();
       ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+      ctx.strokeStyle = themePal.subOpDash;
       ctx.lineWidth = 1;
 
       b.sub_ops.forEach(sub => {
@@ -652,7 +762,10 @@ class ChronogramCanvas {
       ctx.rect(x + 2, y, w - 4, h);
       ctx.clip();
 
-      ctx.fillStyle = (b.block_type === "calc" || b.block_type === "scatter") ? "#042f2e" : "#ffffff";
+      if (b.block_type === "calc") ctx.fillStyle = themePal.calcText;
+      else if (b.block_type === "scatter") ctx.fillStyle = themePal.scatterText;
+      else ctx.fillStyle = themePal.blockLightText;
+
       ctx.font = "bold 10px JetBrains Mono, monospace";
       ctx.textAlign = "left";
       ctx.textBaseline = "middle";
@@ -748,14 +861,14 @@ class PacketFlightCanvas {
     this.tooltip.innerHTML = `
       <div class="tooltip-header">
         <span class="badge badge-scatter">PID #${pkt.pid}</span>
-        <span class="tooltip-gpu">GPU ${pkt.src} ➔ GPU ${pkt.dst}</span>
+        <span class="tooltip-gpu">GPU ${pkt.src} → GPU ${pkt.dst}</span>
       </div>
       <div class="tooltip-body">
         <div class="tooltip-row"><span>Operación / Tipo:</span> <strong>${pkt.op_type || 'Colectiva MoE'}</strong></div>
         <div class="tooltip-row"><span>Flits Totales:</span> <strong>${pkt.flits} flits</strong></div>
         <hr class="tooltip-divider">
-        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola:</span> <strong>${pkt.queue_delay_cycles.toLocaleString()} c (${formatTimeNs(queueNs)})</strong></div>
-        <div class="tooltip-row"><span style="color:#38bdf8;">■ Vuelo NoC (Travesía):</span> <strong>${pkt.flight_cycles.toLocaleString()} c (${formatTimeNs(flightNs)})</strong></div>
+        <div class="tooltip-row"><span style="color:var(--warning);font-weight:600;">Retardo en Cola:</span> <strong>${pkt.queue_delay_cycles.toLocaleString()} c (${formatTimeNs(queueNs)})</strong></div>
+        <div class="tooltip-row"><span style="color:var(--accent);font-weight:600;">Vuelo NoC (Travesía):</span> <strong>${pkt.flight_cycles.toLocaleString()} c (${formatTimeNs(flightNs)})</strong></div>
         <div class="tooltip-row"><span>Latencia de Paquete:</span> <strong class="highlight-val">${pkt.total_latency_cycles.toLocaleString()} c (${formatTimeNs(totalNs)})</strong></div>
         <hr class="tooltip-divider">
         <div class="tooltip-row"><span>Ciclo Creación:</span> <code>${pkt.creation_cycle.toLocaleString()}</code></div>
@@ -790,12 +903,13 @@ class PacketFlightCanvas {
   render() {
     if (!this.canvas) return;
     const { width, height, ctx } = setupHiDPICanvas(this.canvas);
+    const t = getCanvasTheme();
 
-    ctx.fillStyle = "#090d16";
+    ctx.fillStyle = t.bg;
     ctx.fillRect(0, 0, width, height);
 
     if (!this.packetsData || !this.packetsData.packets || this.packetsData.packets.length === 0) {
-      ctx.fillStyle = "#64748b";
+      ctx.fillStyle = t.textMuted;
       ctx.font = "14px JetBrains Mono, monospace";
       ctx.textAlign = "center";
       ctx.fillText("No hay paquetes disponibles en este rango o la simulación no tuvo SIM_DEBUG_PIDS activado.", width / 2, height / 2);
@@ -828,9 +942,9 @@ class PacketFlightCanvas {
           const x1 = this.marginLeft + ((Math.max(phase.start_cycle, startCycle) - startCycle) / cycleSpan) * plotWidth;
           const x2 = this.marginLeft + ((Math.min(phase.end_cycle, endCycle) - startCycle) / cycleSpan) * plotWidth;
           
-          let bandColor = "rgba(56, 189, 248, 0.05)";
-          if (phase.op_type === "gather") bandColor = "rgba(37, 99, 235, 0.05)";
-          else if (phase.op_type === "all_reduce") bandColor = "rgba(168, 85, 247, 0.05)";
+          let bandColor = t.phaseScatter;
+          if (phase.op_type === "gather") bandColor = t.phaseGather;
+          else if (phase.op_type === "all_reduce") bandColor = t.phaseAllreduce;
 
           ctx.fillStyle = bandColor;
           ctx.fillRect(x1, this.headerHeight, Math.max(1, x2 - x1), plotHeight);
@@ -839,7 +953,7 @@ class PacketFlightCanvas {
     }
 
     // 2. Dual Axes (Top: ns, Bottom: BookSim2 cycles)
-    this.drawDualAxes(ctx, width, height, plotWidth, startCycle, endCycle, cycleSpan, clkNs);
+    this.drawDualAxes(ctx, width, height, plotWidth, startCycle, endCycle, cycleSpan, clkNs, t);
 
     // 3. Render Packet Gantt bars
     const rowHeight = plotHeight / packets.length;
@@ -850,39 +964,40 @@ class PacketFlightCanvas {
 
       // Alternating row background
       if (idx % 2 === 0) {
-        ctx.fillStyle = "rgba(255, 255, 255, 0.012)";
+        ctx.fillStyle = t.altRowBg;
         ctx.fillRect(0, y, width, rowHeight);
       }
 
       // Left label: PID and nodes
-      ctx.fillStyle = "#94a3b8";
+      ctx.fillStyle = t.textSecondary;
       ctx.font = "10px JetBrains Mono, monospace";
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
-      ctx.fillText(`#${p.pid} G${p.src}➔G${p.dst}`, this.marginLeft - 8, y + rowHeight / 2);
+      ctx.fillText(`#${p.pid} G${p.src}->G${p.dst}`, this.marginLeft - 8, y + rowHeight / 2);
 
       // Segment 1: Queueing Delay (Orange)
       const xCreate = this.marginLeft + ((p.creation_cycle - startCycle) / cycleSpan) * plotWidth;
       const xInject = this.marginLeft + ((p.inject_cycle - startCycle) / cycleSpan) * plotWidth;
       const queueW = Math.max(1, xInject - xCreate);
 
-      ctx.fillStyle = "#e67e22";
+      ctx.fillStyle = t.queueFill;
       ctx.fillRect(xCreate, y + 1, queueW, barH);
 
       // Segment 2: NoC Flight Time (Blue)
       const xReceive = this.marginLeft + ((p.receive_cycle - startCycle) / cycleSpan) * plotWidth;
       const flightW = Math.max(1, xReceive - xInject);
 
-      ctx.fillStyle = "#0284c7";
+      ctx.fillStyle = t.flightFill;
       ctx.fillRect(xInject, y + 1, flightW, barH);
     });
   }
 
-  drawDualAxes(ctx, width, height, plotWidth, startCycle, endCycle, cycleSpan, clkNs) {
+  drawDualAxes(ctx, width, height, plotWidth, startCycle, endCycle, cycleSpan, clkNs, theme) {
+    const t = theme || getCanvasTheme();
     // Top Header Box (Nanoseconds)
-    ctx.fillStyle = "#0f172a";
+    ctx.fillStyle = t.headerBg;
     ctx.fillRect(0, 0, width, this.headerHeight);
-    ctx.strokeStyle = "#334155";
+    ctx.strokeStyle = t.axisLine;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, this.headerHeight);
@@ -891,7 +1006,7 @@ class PacketFlightCanvas {
 
     // Bottom Footer Box (BookSim2 Cycles)
     const footerY = height - this.footerHeight;
-    ctx.fillStyle = "#0f172a";
+    ctx.fillStyle = t.headerBg;
     ctx.fillRect(0, footerY, width, this.footerHeight);
     ctx.beginPath();
     ctx.moveTo(0, footerY);
@@ -899,13 +1014,13 @@ class PacketFlightCanvas {
     ctx.stroke();
 
     // Axis titles
-    ctx.fillStyle = "#38bdf8";
+    ctx.fillStyle = t.accent;
     ctx.font = "10px JetBrains Mono, monospace";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillText("Eje Superior: Tiempo Global (ns)", 10, this.headerHeight / 2);
 
-    ctx.fillStyle = "#f59e0b";
+    ctx.fillStyle = t.iterMarker;
     ctx.fillText("Eje Inferior: Ciclos BookSim2", 10, footerY + this.footerHeight / 2);
 
     // Ticks calculation
@@ -922,7 +1037,7 @@ class PacketFlightCanvas {
       const x = this.marginLeft + ((c - startCycle) / cycleSpan) * plotWidth;
 
       // Top Tick (ns)
-      ctx.fillStyle = "#94a3b8";
+      ctx.fillStyle = t.textSecondary;
       ctx.font = "10px JetBrains Mono, monospace";
       ctx.fillText(formatTimeNs(c * clkNs), x, this.headerHeight - 8);
 
@@ -930,7 +1045,7 @@ class PacketFlightCanvas {
       ctx.fillText(`${Math.round(c).toLocaleString()} c`, x, footerY + 18);
 
       // Vertical guide line
-      ctx.strokeStyle = "rgba(51, 65, 85, 0.25)";
+      ctx.strokeStyle = t.gridLine;
       ctx.beginPath();
       ctx.moveTo(x, this.headerHeight);
       ctx.lineTo(x, footerY);
@@ -1026,13 +1141,14 @@ class HybridPacketCanvas {
   drawHeaderAxis() {
     if (!this.headerCanvas) return;
     const { width, height, ctx } = setupHiDPICanvas(this.headerCanvas);
+    const tTheme = getCanvasTheme();
 
     // Background
-    ctx.fillStyle = "#0f172a";
+    ctx.fillStyle = tTheme.headerBg;
     ctx.fillRect(0, 0, width, height);
 
     // Bottom border
-    ctx.strokeStyle = "#334155";
+    ctx.strokeStyle = tTheme.axisLine;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, height - 0.5);
@@ -1055,7 +1171,7 @@ class HybridPacketCanvas {
 
     const firstTick = Math.ceil(this.viewStartNs / tickStep) * tickStep;
 
-    ctx.fillStyle = "#94a3b8";
+    ctx.fillStyle = tTheme.textSecondary;
     ctx.font = "10px JetBrains Mono, monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -1064,7 +1180,7 @@ class HybridPacketCanvas {
       const x = this.marginLeft + ((t - this.viewStartNs) / span) * plotWidth;
       if (x >= this.marginLeft && x <= width - this.marginRight) {
         // Tick mark
-        ctx.strokeStyle = "rgba(51, 65, 85, 0.6)";
+        ctx.strokeStyle = tTheme.tickMark;
         ctx.beginPath();
         ctx.moveTo(x, height - 6);
         ctx.lineTo(x, height);
@@ -1078,9 +1194,9 @@ class HybridPacketCanvas {
     // Crosshair badge in header
     if (this.crosshairX !== null && this.crosshairX >= this.marginLeft && this.crosshairX <= width - this.marginRight) {
       ctx.save();
-      ctx.fillStyle = "#38bdf8";
+      ctx.fillStyle = tTheme.crosshairBadgeBg;
       ctx.fillRect(this.crosshairX - 32, 8, 64, 18);
-      ctx.fillStyle = "#000";
+      ctx.fillStyle = tTheme.crosshairBadgeText;
       ctx.font = "bold 9px JetBrains Mono, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -1091,6 +1207,7 @@ class HybridPacketCanvas {
 
   drawVisibleSlice() {
     if (!this.canvas || !this.scrollContainer) return;
+    const tTheme = getCanvasTheme();
 
     const viewportH = 602;
     if (this.canvas.style.height !== `${viewportH}px`) {
@@ -1101,14 +1218,14 @@ class HybridPacketCanvas {
     this.canvas.style.cursor = "crosshair";
 
     // Clear background
-    ctx.fillStyle = "#090d16";
+    ctx.fillStyle = tTheme.bg;
     ctx.fillRect(0, 0, width, height);
 
     const packets = this.packetsData && this.packetsData.packets ? this.packetsData.packets : [];
     const totalPackets = packets.length;
 
     if (totalPackets === 0) {
-      ctx.fillStyle = "#64748b";
+      ctx.fillStyle = tTheme.textMuted;
       ctx.font = "12px JetBrains Mono, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -1149,40 +1266,40 @@ class HybridPacketCanvas {
 
       // Row background
       if (i === this.hoveredRowIdx) {
-        ctx.fillStyle = "rgba(56, 189, 248, 0.16)";
+        ctx.fillStyle = tTheme.hoverRowBg;
         ctx.fillRect(0, y, width, this.ROW_HEIGHT);
       } else if (i % 2 === 0) {
-        ctx.fillStyle = "rgba(255, 255, 255, 0.02)";
+        ctx.fillStyle = tTheme.altRowBg;
         ctx.fillRect(0, y, width, this.ROW_HEIGHT);
       }
 
       // Left label: PID & GPU Nodes
-      ctx.fillStyle = (i === this.hoveredRowIdx) ? "#38bdf8" : "#94a3b8";
+      ctx.fillStyle = (i === this.hoveredRowIdx) ? tTheme.accent : tTheme.textSecondary;
       ctx.font = "9px JetBrains Mono, monospace";
       ctx.textAlign = "right";
       ctx.textBaseline = "middle";
-      ctx.fillText(`#${p.pid} G${p.src}➔G${p.dst}`, this.marginLeft - 6, y + this.ROW_HEIGHT / 2);
+      ctx.fillText(`#${p.pid} G${p.src}->G${p.dst}`, this.marginLeft - 6, y + this.ROW_HEIGHT / 2);
 
       // Segment 1: Queueing Delay in orange
       const xStart = this.marginLeft + ((p.pkt_start_ns - this.viewStartNs) / span) * plotWidth;
       const xInject = this.marginLeft + ((p.pkt_inject_ns - this.viewStartNs) / span) * plotWidth;
       const queueW = Math.max(3, xInject - xStart);
 
-      ctx.fillStyle = "#e67e22";
+      ctx.fillStyle = tTheme.queueFill;
       ctx.fillRect(xStart, y + 3, queueW, barH);
 
       // Segment 2: NoC Flight in blue
       const xEnd = this.marginLeft + ((p.pkt_end_ns - this.viewStartNs) / span) * plotWidth;
       const flightW = Math.max(3, xEnd - xInject);
 
-      ctx.fillStyle = "#0284c7";
+      ctx.fillStyle = tTheme.flightFill;
       ctx.fillRect(xInject, y + 3, flightW, barH);
     }
 
     // Vertical crosshair guide
     if (this.crosshairX !== null && this.crosshairX >= this.marginLeft && this.crosshairX <= width - this.marginRight) {
       ctx.save();
-      ctx.strokeStyle = "rgba(56, 189, 248, 0.85)";
+      ctx.strokeStyle = tTheme.crosshair;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(this.crosshairX, 0);
@@ -1221,14 +1338,14 @@ class HybridPacketCanvas {
     this.tooltip.innerHTML = `
       <div class="tooltip-header">
         <span class="badge badge-scatter">PID #${pkt.pid}</span>
-        <span class="tooltip-gpu">GPU ${pkt.src} ➔ GPU ${pkt.dst}</span>
+        <span class="tooltip-gpu">GPU ${pkt.src} → GPU ${pkt.dst}</span>
       </div>
       <div class="tooltip-body">
         <div class="tooltip-row"><span>Operación / Tipo:</span> <strong>${pkt.op_type} Nº${pkt.op_idx || 1}</strong></div>
         <div class="tooltip-row"><span>Carga Útil:</span> <strong>${pkt.flits} flits (${bytes} bytes)</strong></div>
         <hr class="tooltip-divider">
-        <div class="tooltip-row"><span style="color:#e67e22;">■ Retardo en Cola NIC:</span> <strong>${Math.round(queueC).toLocaleString()} c (${formatSimUnit(queueC)})</strong></div>
-        <div class="tooltip-row"><span style="color:#38bdf8;">■ Vuelo NoC (Travesía):</span> <strong>${Math.round(flightC).toLocaleString()} c (${formatSimUnit(flightC)})</strong></div>
+        <div class="tooltip-row"><span style="color:var(--warning);font-weight:600;">Retardo en Cola NIC:</span> <strong>${Math.round(queueC).toLocaleString()} c (${formatSimUnit(queueC)})</strong></div>
+        <div class="tooltip-row"><span style="color:var(--accent);font-weight:600;">Vuelo NoC (Travesía):</span> <strong>${Math.round(flightC).toLocaleString()} c (${formatSimUnit(flightC)})</strong></div>
         <div class="tooltip-row"><span>Latencia de Paquete:</span> <strong class="highlight-val">${Math.round(totalC).toLocaleString()} c (${formatSimUnit(totalC)})</strong></div>
         <hr class="tooltip-divider">
         <div class="tooltip-row"><span>Ciclo / T Creación:</span> <code>${formatSimUnit(pkt.pkt_start_ns)}</code></div>

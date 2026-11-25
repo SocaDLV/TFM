@@ -108,6 +108,7 @@
    - 10.12. Refinamiento de Pestaña 4: Mapa de Calor Térmico en Enlaces/Flujos NoC y Tooltips Interactivos en Hover sobre Conexiones (Fase 4.5)
    - 10.13. Despliegue en Linux (`run_gui.sh`) y Validación End-to-End del Sistema (Fase 5)
    - 10.14. Optimización de Memoria y Escalabilidad para Simulaciones Masivas (16+ GPUs / DeepSeek-V3 BS=128)
+   - 10.15. Rediseño Minimalista (`LLMSimulator-ICNoC`) y Conmutador Dual Modo Claro / Oscuro
 
 ---
 
@@ -3709,6 +3710,23 @@ La batería de estrés concurrente sobre `deepseekV3_16dev_torus_bs128_skew0.6_2
 | **Ventana Detallada ($\le 2.500$ pkts, `mixtral_8dev_torus_bs128`)** | `total=1.953`, `returned=1.953`, `truncated=False` | 100% exacto sin muestreo |
 | **Paridad Exacta (`Compute` / `Transit` / `Stalls` / `Wall-Clock`)** | `15.847.776,2` / `16.631.736,6` / `3.112.331,9` / `35.591.844,7 ns` | Idéntico decimal a decimal a `analyze_traces.py` |
 | **Paridad de Red ($\lambda$ / `Avg_Flit_Lat` / `Avg_Pkt_Lat`)** | `0,1192 f/c/n` / `31.327,8 c` / `71.806,6 c` | Idéntico a `analyze_traces.py` |
+
+---
+
+## 10.15. Rediseño Minimalista (`LLMSimulator-ICNoC`) y Conmutador Dual Modo Claro / Oscuro
+
+Con el fin de dotar al Workbench de una estética técnica, densa en información y libre de distracciones visuales —inspirada en herramientas CAD y simuladores académicos de arquitectura como el simulador RISC-V de Haoziwan—, se rediseñó integralmente la capa de presentación estática (`LLMSimulator/gui/static/`) manteniendo inalterada la lógica del servidor, los *parsers* de trazas y el aislamiento de los scripts CLI y fuentes C++.
+
+### 1. Principios de Diseño Implementados (`styles.css`, `index.html`, `app.js`)
+- **Identidad y Cabecera Compacta (50 px):** Barra superior única con logotipo oficial de GitHub (Octocat clicable hacia [`https://github.com/SocaDLV/TFM`](https://github.com/SocaDLV/TFM)), título destacado en azul ultramarino (**`LLMSimulator-ICNoC`**, `#1d4ed8` en Modo Claro / `#60a5fa` en Modo Oscuro), cuatro pestañas planas con iconos SVG contenidos estrictamente (`15 px`) y borde inferior activo de `2 px` (`--accent`), píldora de estado de ejecución, conmutador de tema (`#btn-theme-toggle`) y acceso al modal de guía y créditos (`#btn-open-help`).
+- **Acabado «Clean Look» CAD / EDA y Jerarquía Visual:** Superficies diferenciadas con micro-sombras estructurales (`--bg-app: #f3f5f8` / `#090d16`, `--bg-surface: #ffffff` / `#111827`, `--bg-subtle: #f8fafc` / `#161f30`), radios armónicos (`6 px` en paneles/KPIs, `5 px` en controles/botones, `3 px` en insignias), selectores `<select>` con indicador SVG nativo y anillo `:focus-visible`, controles segmentados elevados en Pestaña 2, cabecera adhesiva en tablas de Pestaña 3 e inspector tabular de registros hardware en Pestaña 4.
+- **Contención Estricta de Formularios y Saneamiento de `#btn-run-sim` / Guardarraíles:** Uso de pistas `minmax(0, 1fr)` junto con `min-width: 0` y `text-overflow: ellipsis` para evitar desbordamientos horizontales en `<select>` (en especial `#cfg-routing`). Asimismo, se restauraron los valores iniciales admisibles en Pestaña 1 (`net_dims = "8"` para Torus, `batch_size = 32`, `output_len = 2`, `iter = 2`) y el despliegue explícito de `#guardrails-container` y `#btn-abort-sim`, garantizando que **`Ejecutar Co-Simulación`** arranque habilitado por defecto y bloquee únicamente ante configuraciones físicamente inválidas o simulaciones activas.
+- **Austeridad Tipográfica y Geométrica:** Eliminación completa de emojis decorativos, subtítulos redundantes y degradados/sombras pesadas; radios estrictos (`4px` en paneles y botones, `2px` en etiquetas e insignias) y alineación tabular monoespaciada (`font-variant-numeric: tabular-nums`) para métricas y marcas temporales.
+- **Preservación Funcional Total:** Se conservan los 4 módulos completos (Configuración y Guardarraíles, Resultados y Visualizador Híbrido con `#hybrid-unified-scroll` acotado, Historial/Comparador multi-simulación y Topología NoC + Inspector Microarquitectónico) junto con todos sus IDs DOM, atajos y paridad numérica CLI ↔ GUI. En Pestaña 4, además, la vista previa síncrona lee correctamente las dimensiones reales de red (`#cfg-net-dims`), skewness (`#cfg-skewness-input`), paralelismo tensorial (`#cfg-tp`) y canales virtuales (`#cfg-vcs`).
+
+### 2. Sistema Dual Light / Dark Mode con Repintado Reactivo de Canvas
+- **Variables Semánticas y Arranque sin Parpadeo:** [`styles.css`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/static/styles.css) define **Modo Claro técnico** por defecto (`:root`: fondo `#f8fafc`, tarjetas `#ffffff`, bordes `#e2e8f0`, acento `#2563eb`) y **Modo Oscuro** (`[data-theme="dark"]`: fondo `#0d1117`, tarjetas `#161b22`, bordes `#30363d`, acento `#3b82f6`). Un script inline en `<head>` de [`index.html`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/static/index.html) aplica el tema persistido en `localStorage` antes del primer pintado.
+- **Paleta Dinámica en HTML5 Canvas (`getCanvasTheme()`):** [`timeline_canvas.js`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/static/timeline_canvas.js) y [`topology_canvas.js`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/static/topology_canvas.js) consultan dinámicamente `window.getCanvasTheme()` en cada ciclo de `render()` (fondos, ejes, rejillas, marcas de iteración, *crosshair*, enlaces, halos y texto). Al pulsar `#btn-theme-toggle` en [`app.js`](file:///home/igilolt/Escritorio/TFM/LLMSimulator/gui/static/app.js), se actualizan el atributo `data-theme`, `localStorage` y las instancias activas de `ChronogramCanvas`, `PacketFlightCanvas`, `HybridSyncController` y `TopologyCanvas` al instante sin perder zoom ni posición de desplazamiento.
 
 ---
 

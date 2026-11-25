@@ -1,12 +1,12 @@
 model:
-  model_name: deepseekV3
+  model_name: mixtral
 
 system:
-  gpu_gen: H100
+  gpu_gen: B100
   nvlink_gen: 5
   infiniband_gen: 800
   num_node: 1
-  num_device: 16
+  num_device: 8
   processor_type: GPU
   distribution:
     expert_tensor_degree: 1
@@ -27,7 +27,7 @@ system:
     decode_mode: on
 
 serving:
-  max_batch_size: 128
+  max_batch_size: 32
   max_process_token: 0
 
 simulation:
@@ -35,8 +35,8 @@ simulation:
   input_len: 1024
   output_len: 2
   precision_byte: 1
-  skewness: 0.6
-  iter: 2
+  skewness: 0.0
+  iter: 1
   injection_rate: 0
   exit_out_of_memory: off
   mem_cap_limit: off
@@ -44,5 +44,5 @@ simulation:
 log:
   print_log: on
   export_gantt: off
-  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/deepseekV3_16dev_torus_bs128_skew0.6_20261125_202758/
-  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/deepseekV3_16dev_torus_bs128_skew0.6_20261125_202758/gantt/
+  output_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261126_002658/
+  gantt_directory: /home/igilolt/Escritorio/TFM/LLMSimulator/build/tmp_staging/mixtral_8dev_torus_bs32_20261126_002658/gantt/

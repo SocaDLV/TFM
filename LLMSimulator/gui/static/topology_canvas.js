@@ -320,16 +320,23 @@ class TopologyCanvas {
   }
 
   getNodeColor(val, minVal, maxVal) {
+    const theme = typeof window.getCanvasTheme === "function" ? window.getCanvasTheme() : null;
     if (maxVal <= minVal || isNaN(val)) {
-      return { fill: "#1e293b", stroke: "#0284c7", text: "#e2e8f0", ratio: 0 };
+      return {
+        fill: theme ? theme.nodeNeutralFill : "#1e293b",
+        stroke: theme ? theme.nodeNeutralStroke : "#0284c7",
+        text: theme ? theme.nodeNeutralText : "#e2e8f0",
+        ratio: 0
+      };
     }
 
     const t = Math.max(0, Math.min(1, (val - minVal) / (maxVal - minVal)));
     const heat = this.getHeatColor(t);
+    const coolStroke = (theme && !theme.isDark) ? "#0f766e" : "#bae6fd";
 
     return {
       fill: heat.rgb,
-      stroke: t > 0.66 ? "#fecaca" : (t > 0.33 ? "#fef08a" : "#bae6fd"),
+      stroke: t > 0.66 ? "#fecaca" : (t > 0.33 ? "#fef08a" : coolStroke),
       text: (t > 0.4 && t < 0.7) ? "#0f172a" : "#ffffff",
       ratio: t
     };
@@ -369,17 +376,18 @@ class TopologyCanvas {
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
+    const theme = typeof window.getCanvasTheme === "function" ? window.getCanvasTheme() : null;
 
     // Reset rendered edge bounding cache
     this.renderedEdges = [];
 
     // Clear background
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = "#090d16";
+    ctx.fillStyle = theme ? theme.bg : "#090d16";
     ctx.fillRect(0, 0, w, h);
 
     if (!this.data || !this.data.nodes || this.data.nodes.length === 0) {
-      ctx.fillStyle = "#64748b";
+      ctx.fillStyle = theme ? theme.textMuted : "#64748b";
       ctx.font = "14px JetBrains Mono, monospace";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -403,15 +411,15 @@ class TopologyCanvas {
     if (maxVal === -Infinity || maxVal <= minVal) maxVal = minVal + 1;
 
     // Render Layers
-    this.renderLegend(minVal, maxVal);
-    this.renderPhysicalLinks(links);
+    this.renderLegend(minVal, maxVal, theme);
+    this.renderPhysicalLinks(links, theme);
     if (this.showFlows && flows.length > 0) {
-      this.renderTrafficFlows(flows);
+      this.renderTrafficFlows(flows, theme);
     }
-    this.renderNodes(nodes, minVal, maxVal);
+    this.renderNodes(nodes, minVal, maxVal, theme);
   }
 
-  renderLegend(minVal, maxVal) {
+  renderLegend(minVal, maxVal, theme) {
     const ctx = this.ctx;
     const x = 20;
     const y = 16;
@@ -429,7 +437,7 @@ class TopologyCanvas {
     ctx.roundRect(x, y, barW, barH, 4);
     ctx.fill();
 
-    ctx.fillStyle = "#94a3b8";
+    ctx.fillStyle = theme ? theme.textSecondary : "#94a3b8";
     ctx.font = "10px JetBrains Mono, monospace";
     ctx.textAlign = "left";
     ctx.textBaseline = "bottom";
@@ -443,11 +451,12 @@ class TopologyCanvas {
     ctx.fillText(this.getMetricFormat(maxVal), x + barW, y + barH + 3);
   }
 
-  renderPhysicalLinks(links) {
+  renderPhysicalLinks(links, theme) {
     const ctx = this.ctx;
     const pos = this.nodePositions;
     const topo = (this.data.topology || "torus").toLowerCase();
     const hasData = Boolean(this.data && this.data.has_packet_data && !this.data.preview_mode);
+    const tTheme = theme || (typeof window.getCanvasTheme === "function" ? window.getCanvasTheme() : null);
 
     // Compute max link value for normalization
     let maxLinkVal = 0;
@@ -472,7 +481,7 @@ class TopologyCanvas {
          (this.hoveredEdge.data.src === l.dst && this.hoveredEdge.data.dst === l.src))
       );
 
-      let strokeColor = "#334155";
+      let strokeColor = tTheme ? tTheme.previewLink : "#334155";
       let lineWidth = 2.0;
       let ratio = 0;
 
@@ -483,7 +492,7 @@ class TopologyCanvas {
         strokeColor = heat.rgb;
         lineWidth = 2.0 + ratio * 5.5; // 2.0px to 7.5px
       } else {
-        strokeColor = isWrap ? "#a855f7" : "#38bdf8";
+        strokeColor = isWrap ? (tTheme ? tTheme.previewWrap : "#a855f7") : (tTheme ? tTheme.previewLink : "#38bdf8");
         lineWidth = isWrap ? 2.4 : 2.0;
       }
 
@@ -491,10 +500,10 @@ class TopologyCanvas {
 
       // Saturation glow or Hover highlight
       if (isHovered) {
-        ctx.strokeStyle = "#f8fafc";
+        ctx.strokeStyle = tTheme ? tTheme.hoverEdgeStroke : "#f8fafc";
         ctx.lineWidth = lineWidth + 2.5;
-        ctx.shadowColor = "rgba(248, 250, 252, 0.95)";
-        ctx.shadowBlur = 12;
+        ctx.shadowColor = (tTheme && !tTheme.isDark) ? "rgba(15, 23, 42, 0.35)" : "rgba(248, 250, 252, 0.95)";
+        ctx.shadowBlur = 10;
       } else if (hasData && ratio > 0.70) {
         ctx.strokeStyle = strokeColor;
         ctx.lineWidth = lineWidth;
@@ -553,7 +562,7 @@ class TopologyCanvas {
         });
 
         if (this.showLabels) {
-          ctx.fillStyle = isHovered ? "#ffffff" : (hasData ? strokeColor : "#c084fc");
+          ctx.fillStyle = isHovered ? (tTheme ? tTheme.textPrimary : "#ffffff") : (hasData ? strokeColor : (tTheme ? tTheme.previewWrap : "#c084fc"));
           ctx.font = "bold 9px JetBrains Mono, monospace";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
@@ -579,7 +588,7 @@ class TopologyCanvas {
         if (this.showLabels && links.length <= 16) {
           const mx = (p1.x + p2.x) / 2;
           const my = (p1.y + p2.y) / 2;
-          ctx.fillStyle = isHovered ? "#ffffff" : (hasData ? strokeColor : "#64748b");
+          ctx.fillStyle = isHovered ? (tTheme ? tTheme.textPrimary : "#ffffff") : (hasData ? strokeColor : (tTheme ? tTheme.textMuted : "#64748b"));
           ctx.font = "8px JetBrains Mono, monospace";
           ctx.textAlign = "center";
           ctx.textBaseline = "middle";
@@ -590,9 +599,10 @@ class TopologyCanvas {
     });
   }
 
-  renderTrafficFlows(flows) {
+  renderTrafficFlows(flows, theme) {
     const ctx = this.ctx;
     const pos = this.nodePositions;
+    const tTheme = theme || (typeof window.getCanvasTheme === "function" ? window.getCanvasTheme() : null);
     let maxFlowVal = 0;
     flows.forEach(f => {
       const v = this.getFlowValue(f);
@@ -628,18 +638,18 @@ class TopologyCanvas {
 
       let strokeColor = heat.rgb;
       if (focusId !== null) {
-        if (isOutgoing) strokeColor = "#fbbf24";
-        if (isIncoming) strokeColor = "#f43f5e";
+        if (isOutgoing) strokeColor = tTheme ? tTheme.flowOut : "#fbbf24";
+        if (isIncoming) strokeColor = tTheme ? tTheme.flowIn : "#f43f5e";
       }
 
       ctx.save();
 
       if (isHovered) {
-        strokeColor = "#f8fafc";
+        strokeColor = tTheme ? tTheme.hoverEdgeStroke : "#f8fafc";
         alpha = 1.0;
         lineW += 2.5;
-        ctx.shadowColor = "rgba(248, 250, 252, 0.95)";
-        ctx.shadowBlur = 12;
+        ctx.shadowColor = (tTheme && !tTheme.isDark) ? "rgba(15, 23, 42, 0.35)" : "rgba(248, 250, 252, 0.95)";
+        ctx.shadowBlur = 10;
       } else {
         ctx.shadowBlur = 0;
       }
@@ -697,9 +707,10 @@ class TopologyCanvas {
     });
   }
 
-  renderNodes(nodes, minVal, maxVal) {
+  renderNodes(nodes, minVal, maxVal, theme) {
     const ctx = this.ctx;
     const pos = this.nodePositions;
+    const tTheme = theme || (typeof window.getCanvasTheme === "function" ? window.getCanvasTheme() : null);
 
     nodes.forEach(n => {
       const p = pos[n.id];
@@ -716,7 +727,9 @@ class TopologyCanvas {
       if (isSelected || isHovered || color.ratio > 0.75) {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r + 6, 0, 2 * Math.PI);
-        ctx.fillStyle = isSelected ? "rgba(56, 189, 248, 0.35)" : (isHovered ? "rgba(255, 255, 255, 0.25)" : "rgba(239, 68, 68, 0.25)");
+        const selHalo = (tTheme && !tTheme.isDark) ? "rgba(37, 99, 235, 0.25)" : "rgba(59, 130, 246, 0.35)";
+        const hovHalo = (tTheme && !tTheme.isDark) ? "rgba(15, 23, 42, 0.14)" : "rgba(255, 255, 255, 0.25)";
+        ctx.fillStyle = isSelected ? selHalo : (isHovered ? hovHalo : "rgba(239, 68, 68, 0.25)");
         ctx.fill();
       }
 
@@ -726,7 +739,9 @@ class TopologyCanvas {
       ctx.fillStyle = color.fill;
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? "#38bdf8" : (isHovered ? "#ffffff" : color.stroke);
+      const selStroke = tTheme ? tTheme.nodeSelectedStroke : "#38bdf8";
+      const hovStroke = tTheme ? tTheme.nodeHoverHalo : "#ffffff";
+      ctx.strokeStyle = isSelected ? selStroke : (isHovered ? hovStroke : color.stroke);
       ctx.lineWidth = isSelected ? 3.0 : (isHovered ? 2.5 : 1.8);
       ctx.stroke();
 
@@ -745,7 +760,7 @@ class TopologyCanvas {
       // Expert Badge Below Node
       if (n.experts) {
         ctx.font = "8px JetBrains Mono, monospace";
-        ctx.fillStyle = "#94a3b8";
+        ctx.fillStyle = tTheme ? tTheme.textSecondary : "#94a3b8";
         let expStr = n.experts;
         if (expStr.length > 14) {
           expStr = expStr.replace(" + Shared", "+S").replace("Micro-Exp", "Exp");
@@ -874,13 +889,13 @@ class TopologyCanvas {
       </div>
       <div class="tooltip-body">
         <div class="tooltip-row"><span>Expertos:</span> <strong>${node.experts || '-'}</strong></div>
-        <div class="tooltip-row"><span>Carga RX:</span> <strong style="color:#ef4444;">${node.rx_share_pct.toFixed(1)}% (${node.rx_packets.toLocaleString()} pkts)</strong></div>
-        <div class="tooltip-row"><span>Carga TX:</span> <strong style="color:#38bdf8;">${node.tx_share_pct.toFixed(1)}% (${node.tx_packets.toLocaleString()} pkts)</strong></div>
+        <div class="tooltip-row"><span>Carga RX:</span> <strong style="color:var(--danger);">${node.rx_share_pct.toFixed(1)}% (${node.rx_packets.toLocaleString()} pkts)</strong></div>
+        <div class="tooltip-row"><span>Carga TX:</span> <strong style="color:var(--accent);">${node.tx_share_pct.toFixed(1)}% (${node.tx_packets.toLocaleString()} pkts)</strong></div>
         <div class="tooltip-row"><span>Retardo Cola NIC:</span> <strong>${node.avg_queueing_delay.toFixed(1)} ciclos</strong></div>
         <div class="tooltip-row"><span>Latencia Media NoC:</span> <strong>${node.avg_total_latency.toFixed(1)} ciclos</strong></div>
         <div class="tooltip-row"><span>Cómputo GPU:</span> <strong>${node.compute_us.toFixed(1)} µs</strong></div>
         <div class="tooltip-row"><span>Tránsito NoC:</span> <strong>${node.transit_us.toFixed(1)} µs</strong></div>
-        <div class="tooltip-row"><span>Stalls BSP:</span> <strong style="color:#f59e0b;">${node.stall_us.toFixed(1)} µs</strong></div>
+        <div class="tooltip-row"><span>Stalls BSP:</span> <strong style="color:var(--warning);">${node.stall_us.toFixed(1)} µs</strong></div>
       </div>
     `;
 
@@ -910,9 +925,9 @@ class TopologyCanvas {
         </div>
         <div class="tooltip-body">
           <div class="tooltip-row"><span>Tipo y Latencia Base:</span> <strong>${typeText}</strong></div>
-          <div class="tooltip-row"><span>Tráfico en Enlace:</span> <strong style="color:#ef4444;">${(l.packets || 0).toLocaleString()} pkts (${(l.flits || 0).toLocaleString()} flits)</strong></div>
+          <div class="tooltip-row"><span>Tráfico en Enlace:</span> <strong style="color:var(--danger);">${(l.packets || 0).toLocaleString()} pkts (${(l.flits || 0).toLocaleString()} flits)</strong></div>
           <div class="tooltip-row"><span>Cuota de Red:</span> <strong>${sharePct.toFixed(2)}% del clúster</strong></div>
-          <div class="tooltip-row"><span>Balance Direccional:</span> <strong style="color:#38bdf8;">GPU ${u}→${v}: ${txUtoV.toLocaleString()} | GPU ${v}→${u}: ${txVtoU.toLocaleString()}</strong></div>
+          <div class="tooltip-row"><span>Balance Direccional:</span> <strong style="color:var(--accent);">GPU ${u}→${v}: ${txUtoV.toLocaleString()} | GPU ${v}→${u}: ${txVtoU.toLocaleString()}</strong></div>
           <div class="tooltip-row"><span>Cola NIC Media:</span> <strong>${avgQ.toFixed(1)} ciclos</strong></div>
           <div class="tooltip-row"><span>Latencia Red Media:</span> <strong>${avgNet.toFixed(1)} ciclos</strong></div>
         </div>
@@ -934,11 +949,11 @@ class TopologyCanvas {
         </div>
         <div class="tooltip-body">
           <div class="tooltip-row"><span>Distancia Topológica:</span> <strong>${hops} salto(s)</strong></div>
-          <div class="tooltip-row"><span>Volumen Transferido:</span> <strong style="color:#f59e0b;">${(f.packets || 0).toLocaleString()} pkts (${(f.flits || 0).toLocaleString()} flits)</strong></div>
+          <div class="tooltip-row"><span>Volumen Transferido:</span> <strong style="color:var(--warning);">${(f.packets || 0).toLocaleString()} pkts (${(f.flits || 0).toLocaleString()} flits)</strong></div>
           <div class="tooltip-row"><span>Cuota de Tráfico:</span> <strong>${sharePct.toFixed(2)}% del tráfico</strong></div>
           <div class="tooltip-row"><span>Retardo en Cola NIC:</span> <strong>Media: ${avgQ.toFixed(1)} c | Pico: ${maxQ.toFixed(1)} c</strong></div>
           <div class="tooltip-row"><span>Vuelo / Contención NoC:</span> <strong>${avgNet.toFixed(1)} ciclos</strong></div>
-          <div class="tooltip-row"><span>Latencia Total Flujo:</span> <strong style="color:#ef4444;">${avgTot.toFixed(1)} ciclos</strong></div>
+          <div class="tooltip-row"><span>Latencia Total Flujo:</span> <strong style="color:var(--danger);">${avgTot.toFixed(1)} ciclos</strong></div>
         </div>
       `;
     }

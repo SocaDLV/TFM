@@ -1,106 +1,123 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-theme="light">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LLM-NoC Co-Simulation Workbench</title>
-  <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LLMSimulator-ICNoC</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("theme");
+        var theme = saved === "dark" || saved === "light" ? saved : "light";
+        document.documentElement.setAttribute("data-theme", theme);
+      } catch (e) {
+        document.documentElement.setAttribute("data-theme", "light");
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <!-- Header Superior -->
   <header class="app-header">
     <div class="header-left">
-      <div class="logo-icon">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="2" width="20" height="20" rx="4" />
-          <circle cx="7" cy="7" r="2" />
-          <circle cx="17" cy="7" r="2" />
-          <circle cx="7" cy="17" r="2" />
-          <circle cx="17" cy="17" r="2" />
-          <line x1="7" y1="9" x2="7" y2="15" />
-          <line x1="17" y1="9" x2="17" y2="15" />
-          <line x1="9" y1="7" x2="15" y2="7" />
-          <line x1="9" y1="17" x2="15" y2="17" />
+      <a href="https://github.com/SocaDLV/TFM" target="_blank" rel="noopener noreferrer" class="brand-link" title="Repositorio GitHub del Proyecto (SocaDLV/TFM)">
+        <svg class="brand-github-icon" viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/>
         </svg>
-      </div>
-      <div class="header-titles">
-        <h1>LLM-NoC Co-Simulation Workbench</h1>
-        <p class="subtitle">LLMSimulator + BookSim2 Cycle-Accurate Framework</p>
-      </div>
+        <span class="brand-title">LLMSimulator-ICNoC</span>
+      </a>
     </div>
+
+    <nav class="tabs-nav" aria-label="Navegación principal">
+      <button class="tab-btn active" data-tab="tab-config" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.85 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" />
+        </svg>
+        <span>Simulación</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-results" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 3v18h18" />
+          <path d="M7 15v3M12 10v8M17 6v12" />
+        </svg>
+        <span>Resultados</span>
+        <span id="tab2-badge" class="tab-badge-staging hidden">TMP</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-history" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="16" rx="1.5" />
+          <path d="M3 10h18M9 4v16" />
+        </svg>
+        <span>Historial y Comparativa</span>
+      </button>
+
+      <button class="tab-btn" data-tab="tab-topology" type="button">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="6" r="2.5" />
+          <circle cx="18" cy="6" r="2.5" />
+          <circle cx="6" cy="18" r="2.5" />
+          <circle cx="18" cy="18" r="2.5" />
+          <path d="M8.5 6h7M8.5 18h7M6 8.5v7M18 8.5v7" />
+        </svg>
+        <span>Topología NoC</span>
+      </button>
+    </nav>
 
     <div class="header-right">
       <div id="live-status-pill" class="status-pill status-idle">
         <span class="status-dot"></span>
-        <span id="live-status-text">Listo</span>
+        <span id="live-status-text">Sistema Listo</span>
       </div>
-      <button id="btn-open-help" class="btn-help">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-        Ayuda y Créditos
+
+      <button id="btn-theme-toggle" class="btn-header-tool" type="button" title="Alternar modo claro / oscuro">
+        <svg id="theme-toggle-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z" />
+        </svg>
+        <span id="theme-toggle-label">Oscuro</span>
+      </button>
+
+      <button id="btn-open-help" class="btn-header-tool" type="button" title="Ayuda y Créditos">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.5 9a2.5 2.5 0 0 1 5 .8c0 1.7-2.5 2.2-2.5 3.7" />
+          <circle cx="12" cy="17" r="0.6" fill="currentColor" />
+        </svg>
+        <span>Ayuda</span>
       </button>
     </div>
   </header>
 
-  <!-- Barra de Navegación por Pestañas -->
-  <nav class="tabs-nav">
-    <button class="tab-btn active" data-tab="tab-config">
-      <span class="tab-num">1</span>
-      <span>Nueva Simulación</span>
-      <span class="tab-tag">Configurador</span>
-    </button>
-    <button class="tab-btn" data-tab="tab-results">
-      <span class="tab-num">2</span>
-      <span>Resultados y Líneas de Tiempo</span>
-      <span id="tab2-badge" class="tab-badge-staging hidden">Staging</span>
-    </button>
-    <button class="tab-btn" data-tab="tab-history">
-      <span class="tab-num">3</span>
-      <span>Historial y Comparativa</span>
-      <span class="tab-tag">Fase 3</span>
-    </button>
-    <button class="tab-btn" data-tab="tab-topology">
-      <span class="tab-num">4</span>
-      <span>Topología NoC y Arquitectura</span>
-      <span class="tab-tag">Fase 4</span>
-    </button>
-  </nav>
-
-  <!-- Contenedor Principal de Pestañas -->
   <main class="main-content">
-    
-    <!-- PESTAÑA 1: NUEVA SIMULACIÓN (CONFIGURADOR) -->
+    <!-- ==================== PESTAÑA 1: CONFIGURACIÓN Y EJECUCIÓN ==================== -->
     <section id="tab-config" class="tab-pane active">
       <div class="config-grid">
-        
-        <!-- Tarjeta A: Modelo LLM y Carga de Trabajo -->
         <div class="card">
           <div class="card-header">
-            <div class="card-icon">🧠</div>
-            <div>
-              <h2>Modelo LLM y Carga de Trabajo</h2>
-              <p class="card-subtitle">Hiperparámetros de modelo, GPU y decodificación autorregresiva</p>
+            <div class="card-header-left">
+              <h2>Modelo y Carga de Trabajo</h2>
             </div>
+            <span class="badge badge-info">Workload</span>
           </div>
-
           <div class="card-body form-grid">
-            <!-- Modelo LLM -->
             <div class="form-group full-width">
-              <label for="cfg-model">Modelo de Lenguaje (LLM):</label>
+              <label for="cfg-model">Modelo LLM</label>
               <select id="cfg-model" class="form-control">
-                <option value="mixtral" selected>Mixtral 8x7B (Sparse MoE)</option>
+                <option value="mixtral">Mixtral 8x7B (Sparse MoE)</option>
                 <option value="deepseekV3">DeepSeek-V3 (Fine-Grained MoE + MLA)</option>
                 <option value="llama">LLaMA Dense (Baseline)</option>
               </select>
               <div id="model-desc-box" class="model-desc-box">
-                <!-- Se actualiza dinámicamente vía app.js -->
+                2 bloques Transformer · 8 expertos routed por capa (Top-2) · MoE Scatter/Gather + Ring-AllReduce.
               </div>
             </div>
 
-            <!-- Generación de GPU y Modo de Datos -->
             <div class="form-group">
-              <label for="cfg-gpu">Acelerador GPU:</label>
+              <label for="cfg-gpu">Acelerador GPU</label>
               <select id="cfg-gpu" class="form-control">
-                <option value="B100" selected>NVIDIA B100 (Blackwell 8 TB/s HBM3E)</option>
+                <option value="B100">NVIDIA B100 (Blackwell 8 TB/s HBM3E)</option>
                 <option value="H100">NVIDIA H100 (Hopper 3.35 TB/s HBM3)</option>
                 <option value="B200">NVIDIA B200 (Blackwell 8 TB/s HBM3E)</option>
                 <option value="A100">NVIDIA A100 (Ampere 2 TB/s HBM2e)</option>
@@ -108,66 +125,63 @@
             </div>
 
             <div class="form-group">
-              <label for="cfg-data-mode">Modo de Tráfico/Datos:</label>
+              <label for="cfg-data-mode">Modo de Carga</label>
               <select id="cfg-data-mode" class="form-control">
-                <option value="synthesis" selected>Síntesis (Uniform/Synthetic Tokens)</option>
+                <option value="synthesis">Síntesis (Uniform/Synthetic Tokens)</option>
                 <option value="analytical">Analítico (Determinista)</option>
               </select>
             </div>
 
-            <!-- Parámetros de Lote e Inferencia -->
             <div class="form-group">
-              <label for="cfg-batch-size">Batch Size (BS):</label>
-              <input type="number" id="cfg-batch-size" class="form-control" value="32" min="1" max="256">
+              <label for="cfg-batch-size">Batch Size</label>
+              <input id="cfg-batch-size" type="number" class="form-control" value="32" min="1" max="4096" />
+              <span class="field-hint">Tokens por iteración de decode.</span>
             </div>
 
             <div class="form-group">
-              <label for="cfg-input-len">Input Length (Prefill Tokens):</label>
-              <input type="number" id="cfg-input-len" class="form-control" value="1024" min="1" max="8192">
+              <label for="cfg-input-len">Input Seq Length</label>
+              <input id="cfg-input-len" type="number" class="form-control" value="1024" min="16" max="32768" />
             </div>
 
             <div class="form-group">
-              <label for="cfg-output-len">Output Length (Pasos Decode):</label>
-              <input type="number" id="cfg-output-len" class="form-control" value="2" min="1" max="100">
+              <label for="cfg-output-len">Output Seq Length</label>
+              <input id="cfg-output-len" type="number" class="form-control" value="2" min="1" max="8192" />
             </div>
 
             <div class="form-group">
-              <label for="cfg-iter">Iteraciones Estadísticas:</label>
-              <input type="number" id="cfg-iter" class="form-control" value="2" min="1" max="20">
-            </div>
-
-            <!-- Tensor Parallelism y Skewness -->
-            <div class="form-group">
-              <label for="cfg-tp">Tensor Parallelism (TP Degree):</label>
-              <input type="number" id="cfg-tp" class="form-control" value="1" min="1" max="16">
-              <span class="field-hint">División de capas densas y Ring-AllReduce</span>
+              <label for="cfg-iter">Iteraciones</label>
+              <input id="cfg-iter" type="number" class="form-control" value="2" min="1" max="20" />
+              <span class="field-hint">2 iteraciones permite separar warmup y steady-state.</span>
             </div>
 
             <div class="form-group">
-              <label for="cfg-skewness">Desbalanceo MoE (Skewness Zipfiano):</label>
+              <label for="cfg-tp">Tensor Parallelism (TP)</label>
+              <input id="cfg-tp" type="number" class="form-control" value="1" min="1" max="16" />
+            </div>
+
+            <div class="form-group full-width">
+              <label for="cfg-skewness-slider">
+                Skewness Zipf (<span id="skewness-label" class="highlight-val">0.0 (Distribución Uniforme de Tokens)</span>)
+              </label>
               <div class="slider-row">
-                <input type="range" id="cfg-skewness-slider" min="0.0" max="2.0" step="0.1" value="0.0" class="slider-control">
-                <input type="number" id="cfg-skewness-input" class="form-control num-sm" value="0.0" min="0.0" max="2.0" step="0.1">
+                <input id="cfg-skewness-slider" type="range" min="0.0" max="2.0" step="0.1" value="0.0" class="slider-control" />
+                <input id="cfg-skewness-input" type="number" min="0.0" max="2.0" step="0.1" value="0.0" class="form-control num-sm" />
               </div>
-              <span id="skewness-label" class="field-hint">0.0 (Distribución Uniforme de Tokens)</span>
+              <span class="field-hint">0.0 = routing uniforme · &gt;0.5 = concentración in-cast en expertos populares.</span>
             </div>
           </div>
         </div>
 
-        <!-- Tarjeta B: Arquitectura de Red NoC (BookSim2) -->
         <div class="card">
           <div class="card-header">
-            <div class="card-icon">🌐</div>
-            <div>
-              <h2>Arquitectura de Red NoC (BookSim2)</h2>
-              <p class="card-subtitle">Topología de conmutación, canales virtuales y enrutamiento a nivel de flit</p>
+            <div class="card-header-left">
+              <h2>Topología NoC BookSim2</h2>
             </div>
+            <span class="badge badge-neutral">Interconnect</span>
           </div>
-
           <div class="card-body form-grid">
-            <!-- Topología -->
-            <div class="form-group">
-              <label for="cfg-topology">Topología de Red:</label>
+            <div class="form-group full-width">
+              <label for="cfg-topology">Topología Base</label>
               <select id="cfg-topology" class="form-control">
                 <option value="torus" selected>Torus (Toro con Enlaces Wrap-Around)</option>
                 <option value="mesh">Mesh (Malla Regular o AnyNet Asimétrica)</option>
@@ -175,260 +189,220 @@
               </select>
             </div>
 
-            <!-- Dimensiones de Red -->
-            <div class="form-group">
-              <label for="cfg-net-dims">Dimensiones Espaciales (net_dims):</label>
-              <input type="text" id="cfg-net-dims" class="form-control" value="8" placeholder="ej. 8, o 4 2, o 2 2 2">
+            <div class="form-group full-width">
+              <label for="cfg-net-dims">Dimensiones NoC (net_dims)</label>
+              <input id="cfg-net-dims" type="text" class="form-control mono" value="8" placeholder="Ej: 8, 4 4, 2 2 2 (o 2 4 en Mesh AnyNet)" />
               <div class="dim-pills-row">
                 <span id="gpu-count-pill" class="badge-pill">8 GPUs en total</span>
-                <span id="anynet-note-pill" class="badge-pill badge-info hidden">AnyNet 2D Asimétrica</span>
+                <span id="anynet-note-pill" class="badge-pill badge-info hidden">AnyNet</span>
               </div>
             </div>
 
-            <!-- Algoritmo de Enrutamiento -->
             <div class="form-group">
-              <label for="cfg-routing">Algoritmo de Enrutamiento:</label>
+              <label for="cfg-routing">Algoritmo de Enrutamiento</label>
               <select id="cfg-routing" class="form-control">
-                <option value="dim_order" selected>dim_order (Dimension-Order Routing DOR)</option>
-                <option value="min_adapt">min_adapt (Mínimo Adaptativo por Congestión)</option>
-                <option value="min">min (Caminos Mínimos Dijkstra - AnyNet)</option>
+                <option value="dim_order" selected>dim_order (DOR)</option>
+                <option value="min_adapt">min_adapt (Adaptativo)</option>
+                <option value="min">min (Dijkstra - AnyNet)</option>
               </select>
-              <span class="field-hint">Función de selección de puertos en routers</span>
             </div>
 
-            <!-- Canales Virtuales -->
             <div class="form-group">
-              <label for="cfg-vcs">Canales Virtuales por Puerto (VCs):</label>
-              <input type="number" id="cfg-vcs" class="form-control" value="4" min="1" max="16">
-              <span class="field-hint">Torus exige al menos 2 VCs (Dateline routing)</span>
+              <label for="cfg-vcs">Virtual Channels (VCs)</label>
+              <input id="cfg-vcs" type="number" class="form-control" value="4" min="1" max="16" />
+              <span class="field-hint">Torus exige vcs &ge; 2 (Dateline).</span>
             </div>
 
-            <!-- Checkbox SIM_DEBUG_PIDS -->
             <div class="form-group full-width checkbox-card">
               <label class="checkbox-label">
-                <input type="checkbox" id="cfg-debug-pids" checked>
-                <span class="checkbox-custom"></span>
-                <div>
-                  <strong>Captura detallada de flits en vuelo (<code>SIM_DEBUG_PIDS="1"</code>)</strong>
-                  <p class="checkbox-subtext">Genera <code>packet_tracking_debug.csv</code> para análisis microarquitectural de colas e inspección ciclo a ciclo.</p>
-                </div>
+                <input id="cfg-debug-pids" type="checkbox" checked />
+                <span>Generar trazas granulares de paquetes (<code>--debug-pids</code>)</span>
               </label>
+              <span class="checkbox-subtext">Exporta <code>packet_tracking_debug.csv</code> para el visor de vuelo NoC, colas NIC y cálculo de λ.</span>
             </div>
           </div>
         </div>
-
       </div>
 
-      <!-- Contenedor de Guardarraíles y Avisos en Tiempo Real -->
-      <div id="guardrails-container" class="guardrails-area">
-        <!-- Inyectado dinámicamente por app.js -->
-      </div>
+      <div id="guardrails-container" class="guardrails-area hidden"></div>
 
-      <!-- Panel Inferior: Comando CLI y Consola en Vivo -->
       <div class="card bottom-console-card">
         <div class="command-preview-bar">
-          <div class="cmd-label">Comando CLI Equivalente:</div>
-          <code id="cmd-preview-text">python run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 4 --batch_size 32 --output_len 2 --iter 2</code>
-          <button id="btn-copy-cmd" class="btn-sm" title="Copiar al portapapeles">📋 Copiar</button>
+          <span class="cmd-label">CLI</span>
+          <code id="cmd-preview-text" class="mono">python run_sim.py --model mixtral --net_dims 8 --topology torus --vcs 4 --routing dim_order --batch_size 32 --input_len 1024 --output_len 2 --iter 2</code>
+          <button id="btn-copy-cmd" class="btn-outline btn-sm" type="button">Copiar</button>
         </div>
 
         <div class="action-buttons-row">
-          <button id="btn-run-sim" class="btn-primary">
-            <span class="btn-icon">🚀</span>
-            <span>Lanzar Co-Simulación</span>
-          </button>
-          <button id="btn-abort-sim" class="btn-danger" disabled>
-            <span class="btn-icon">🛑</span>
-            <span>Abortar</span>
-          </button>
-          
+          <button id="btn-run-sim" class="btn-primary" type="button">Ejecutar Co-Simulación</button>
+          <button id="btn-abort-sim" class="btn-danger" type="button" disabled>Abortar</button>
+
           <div class="exec-metrics">
-            <span id="exec-timer" class="metric-tag">⏱️ 00:00:00</span>
-            <span id="exec-progress-tag" class="metric-tag">Progreso: 0%</span>
+            <span id="exec-timer" class="metric-tag mono">00:00:00</span>
+            <span id="exec-progress-tag" class="metric-tag mono">Progreso: 0%</span>
           </div>
         </div>
 
-        <!-- Barra de Progreso Visual -->
         <div class="progress-bar-container">
-          <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%;"></div>
+          <div id="progress-bar-fill" class="progress-bar-fill"></div>
+          <span id="progress-detail-text" class="progress-detail-text">En espera</span>
         </div>
-        <div id="progress-detail-text" class="progress-detail-text">Listo para iniciar simulación.</div>
 
-        <!-- Consola Terminal Interactiva -->
         <div class="console-box">
-          <div class="console-header">
-            <div class="console-dots">
-              <span class="dot red"></span>
-              <span class="dot yellow"></span>
-              <span class="dot green"></span>
-              <span class="console-title">Consola de Simulación en Vivo (stdout/stderr)</span>
-            </div>
-            <div class="console-actions">
+          <div class="console-actions">
+            <span class="console-title-bar">Salida de Co-Simulación (stdout / stderr)</span>
+            <div class="console-actions-right">
               <label class="autoscroll-toggle">
-                <input type="checkbox" id="chk-autoscroll" checked>
-                <span>Auto-scroll</span>
+                <input id="chk-autoscroll" type="checkbox" checked />
+                <span>Autoscroll</span>
               </label>
-              <button id="btn-clear-console" class="btn-console-tool" title="Limpiar pantalla">🗑️ Limpiar</button>
+              <button id="btn-clear-console" class="btn-console-tool" type="button">Limpiar</button>
             </div>
           </div>
-          <pre id="console-output" class="console-output">Esperando el inicio de una nueva simulación...</pre>
+          <pre id="console-output" class="console-output">Listo para lanzar una co-simulación híbrida LLMSimulator + BookSim2.</pre>
         </div>
 
-        <!-- Toast de Notificación al Finalizar -->
         <div id="completion-toast" class="completion-toast hidden">
-          <div class="toast-content">
-            <div class="toast-icon">✅</div>
-            <div class="toast-text">
-              <strong>¡Simulación completada con éxito!</strong>
-              <p>Los datos han sido sellados en staging temporal. Haz clic para inspeccionar los resultados.</p>
-            </div>
+          <div class="toast-text">
+            <strong>Simulación completada</strong> — resultados disponibles en staging.
           </div>
-          <button id="btn-jump-results" class="btn-primary btn-sm">Ver Resultados (Pestaña 2) ➔</button>
+          <button id="btn-jump-results" class="btn-success btn-sm" type="button">Abrir Resultados</button>
         </div>
-
       </div>
     </section>
 
-    <!-- PESTAÑA 2: RESULTADOS Y LÍNEAS DE TIEMPO (FASE 2) -->
+    <!-- ==================== PESTAÑA 2: RESULTADOS Y TIMELINES ==================== -->
     <section id="tab-results" class="tab-pane">
-      <!-- Banner Contextual de Guardado Selectivo -->
-      <div id="staging-banner" class="staging-banner">
+      <div id="staging-banner" class="staging-banner hidden">
         <div class="staging-info">
-          <span id="staging-badge-pill" class="staging-badge">Área Temporal</span>
-          <span id="staging-folder-name" class="staging-name">Ninguna simulación activa</span>
-          <span id="staging-save-status" class="staging-unsaved">(No guardada)</span>
+          <span id="staging-badge-pill" class="staging-badge">STAGING</span>
+          <strong id="staging-folder-name" class="staging-name mono">--</strong>
+          <span id="staging-save-status" class="staging-saved-tag hidden">Guardada</span>
         </div>
+
         <div class="staging-actions">
-          <div class="unit-control-group" title="Selector de Unidad Global (1 GHz = 1 ciclo / ns)">
-            <button id="btn-unit-cycles" class="btn-unit-toggle active" data-unit="cycles">⏱️ Ciclos (1 GHz)</button>
-            <button id="btn-unit-time" class="btn-unit-toggle" data-unit="time">🕒 Tiempo (µs / ns)</button>
-          </div>
           <div class="iteration-control-group">
-            <label for="iteration-selector">Ámbito / Iteración:</label>
+            <label for="iteration-selector">Iteración:</label>
             <select id="iteration-selector" class="form-control select-sm">
-              <option value="last" selected>Última Iteración (Steady-State)</option>
+              <option value="last">Última Iteración (Steady-State)</option>
             </select>
           </div>
-          <input type="text" id="staging-custom-label" class="form-control staging-label-input" placeholder="Etiqueta opcional (ej: Torus TP=2 Baseline)">
-          <button id="btn-save-staging" class="btn-sm btn-success" disabled>💾 Guardar Simulación</button>
-          <button id="btn-discard-staging" class="btn-sm btn-outline-danger" disabled>🗑️ Descartar</button>
+
+          <div class="unit-control-group">
+            <span class="toolbar-label">Unidad:</span>
+            <div class="btn-group">
+              <button id="btn-unit-cycles" class="btn-unit-toggle active" data-unit="cycles" type="button">Ciclos</button>
+              <button id="btn-unit-time" class="btn-unit-toggle" data-unit="time" type="button">ns / µs</button>
+            </div>
+          </div>
+
+          <input id="staging-custom-label" type="text" class="form-control staging-label-input" placeholder="Etiqueta opcional..." />
+          <button id="btn-save-staging" class="btn-success btn-sm" type="button">Guardar</button>
+          <button id="btn-discard-staging" class="btn-outline-danger btn-sm" type="button">Descartar</button>
         </div>
       </div>
 
-      <!-- Tarjetas KPI Resumen (7 Métricas Arquitectónicas) -->
       <div class="kpi-grid">
         <div class="kpi-card">
-          <div class="kpi-label">Tiempo de Muro (Wall-Clock)</div>
-          <div id="kpi-wallclock" class="kpi-value">-- µs</div>
-          <div class="kpi-sub">Duración total de inferencia</div>
+          <span class="kpi-label">Wall-Clock Total</span>
+          <span id="kpi-wallclock" class="kpi-value">--</span>
+          <span class="kpi-sub">Fin de iteración</span>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Cómputo GPU</div>
-          <div id="kpi-compute" class="kpi-value">-- ns</div>
-          <div id="kpi-compute-sub" class="kpi-sub">-- % del tiempo total</div>
+          <span class="kpi-label">Cómputo GPU</span>
+          <span id="kpi-compute" class="kpi-value">--</span>
+          <span id="kpi-compute-sub" class="kpi-sub">--% del total</span>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Tránsito NoC Puro</div>
-          <div id="kpi-transit" class="kpi-value">-- ns</div>
-          <div id="kpi-transit-sub" class="kpi-sub">-- % del tiempo total</div>
+          <span class="kpi-label">Tránsito NoC</span>
+          <span id="kpi-transit" class="kpi-value">--</span>
+          <span id="kpi-transit-sub" class="kpi-sub">--% del total</span>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Stalls de Barrera</div>
-          <div id="kpi-stalls" class="kpi-value">-- ns</div>
-          <div id="kpi-stalls-sub" class="kpi-sub">-- % del tiempo total</div>
+          <span class="kpi-label">Stalls BSP</span>
+          <span id="kpi-stalls" class="kpi-value">--</span>
+          <span id="kpi-stalls-sub" class="kpi-sub">--% del total</span>
+        </div>
+        <div class="kpi-card highlight-card">
+          <span class="kpi-label">Tasa λ Activa</span>
+          <span id="kpi-lambda" class="kpi-value highlight-val">--</span>
+          <span class="kpi-sub">flits/ciclo/GPU</span>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Tasa Inyección Real (&lambda;)</div>
-          <div id="kpi-lambda" class="kpi-value">-- f/c/nodo</div>
-          <div class="kpi-sub">Tráfico efectivo inyectado</div>
+          <span class="kpi-label">Latencia Media Flit</span>
+          <span id="kpi-flit-lat" class="kpi-value">--</span>
+          <span class="kpi-sub">Inyección → Entrega</span>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">Latencia Media de Flit</div>
-          <div id="kpi-flit-lat" class="kpi-value">-- ciclos</div>
-          <div class="kpi-sub">BookSim2 NoC average</div>
-        </div>
-        <div class="kpi-card">
-          <div class="kpi-label">Total Paquetes / Flits</div>
-          <div id="kpi-total-pkts" class="kpi-value">-- pkts</div>
-          <div id="kpi-total-flits-sub" class="kpi-sub">-- flits transmitidos</div>
+          <span class="kpi-label">Paquetes / Flits</span>
+          <span id="kpi-total-pkts" class="kpi-value">--</span>
+          <span id="kpi-total-flits-sub" class="kpi-sub">-- flits</span>
         </div>
       </div>
 
-      <!-- Selector de Sub-vistas Interactivas -->
       <div class="subviews-nav">
-        <button id="btn-subview-chrono" class="subview-btn active">
-          <span>📊</span>
-          <span>Cronograma GPU Ciclo a Ciclo</span>
-        </button>
-        <button id="btn-subview-packets" class="subview-btn">
-          <span>🛰️</span>
-          <span>Visualizador de Paquetes NoC en Vuelo</span>
-        </button>
-        <button id="btn-subview-hybrid" class="subview-btn">
-          <span>⚡</span>
-          <span>Visualizador Híbrido (Sincronizado)</span>
-        </button>
+        <button id="btn-subview-chrono" class="subview-btn active" type="button">Cronograma GPU</button>
+        <button id="btn-subview-packets" class="subview-btn" type="button">Vuelo de Paquetes NoC</button>
+        <button id="btn-subview-hybrid" class="subview-btn" type="button">Visualizador Híbrido Split</button>
       </div>
 
-      <!-- Sub-vista A: Cronograma GPU Ciclo a Ciclo -->
-      <div id="subview-chrono-container" class="timeline-container-card">
+      <!-- SUBVISTA A: CRONOGRAMA GPU -->
+      <div id="subview-chrono-container" class="card timeline-container-card">
         <div class="timeline-toolbar">
           <div class="toolbar-left">
-            <span class="toolbar-label">Ventana:</span>
-            <div class="btn-group">
-              <button class="btn-preset btn-sm" data-preset="10">10 µs</button>
-              <button class="btn-preset btn-sm active" data-preset="20">20 µs</button>
-              <button class="btn-preset btn-sm" data-preset="50">50 µs</button>
-              <button class="btn-preset btn-sm" data-preset="100">100 µs</button>
-              <button class="btn-preset btn-sm" data-preset="250">250 µs</button>
-              <button class="btn-preset btn-sm" data-preset="all">Total</button>
+            <div class="toolbar-group">
+              <span class="toolbar-label">Ventana:</span>
+              <button class="btn-preset" data-preset="10" type="button">10k c</button>
+              <button class="btn-preset" data-preset="20" type="button">20k c</button>
+              <button class="btn-preset" data-preset="50" type="button">50k c</button>
+              <button class="btn-preset" data-preset="100" type="button">100k c</button>
+              <button class="btn-preset" data-preset="250" type="button">250k c</button>
+              <button class="btn-preset" data-preset="all" type="button">Todo</button>
             </div>
-            <div class="btn-group zoom-group">
-              <button id="btn-chrono-zoom-in" class="btn-sm" title="Acercar (Zoom In)">➕</button>
-              <button id="btn-chrono-zoom-out" class="btn-sm" title="Alejar (Zoom Out)">➖</button>
-              <button id="btn-chrono-zoom-reset" class="btn-sm" title="Restablecer">↺</button>
+            <div class="toolbar-group">
+              <button id="btn-chrono-zoom-in" class="btn-secondary btn-sm" type="button" title="Zoom In">Zoom +</button>
+              <button id="btn-chrono-zoom-out" class="btn-secondary btn-sm" type="button" title="Zoom Out">Zoom -</button>
+              <button id="btn-chrono-zoom-reset" class="btn-outline btn-sm" type="button">Reset</button>
             </div>
           </div>
           <div class="toolbar-right">
-            <span id="chrono-window-info" class="window-info-text">Ventana: -- µs</span>
+            <span id="chrono-window-info" class="window-info-text mono">Ventana: --</span>
           </div>
         </div>
 
-        <!-- Canvas Wrapper & Tooltip -->
+        <div class="canvas-legend">
+          <span class="legend-item"><i class="legend-dot dot-calc"></i> Cómputo GPU</span>
+          <span class="legend-item"><i class="legend-dot dot-scatter"></i> MoE Scatter</span>
+          <span class="legend-item"><i class="legend-dot dot-gather"></i> MoE Gather</span>
+          <span class="legend-item"><i class="legend-dot dot-allreduce"></i> AllReduce</span>
+          <span class="legend-item"><i class="legend-dot dot-stall"></i> Network Stall (BSP)</span>
+          <span class="legend-hint">Rueda: Zoom · Arrastrar: Pan</span>
+        </div>
+
         <div class="canvas-wrapper">
           <canvas id="chronogram-canvas" height="420"></canvas>
           <div id="chronogram-tooltip" class="timeline-tooltip hidden"></div>
         </div>
 
-        <!-- Scrubber Slider -->
         <div class="scrubber-row">
-          <span class="scrubber-label">Navegación Temporal:</span>
-          <input type="range" id="chronogram-scrubber" min="0" max="1000" value="0" class="slider-control">
-          <span id="chrono-scrubber-pos" class="scrubber-pos-text">0.00 µs</span>
-        </div>
-
-        <div class="canvas-legend">
-          <span class="legend-item"><span class="legend-dot dot-calc"></span> Cómputo / Atención (verde)</span>
-          <span class="legend-item"><span class="legend-dot dot-scatter"></span> MoE Scatter (azul)</span>
-          <span class="legend-item"><span class="legend-dot dot-gather"></span> MoE Gather (azul oscuro)</span>
-          <span class="legend-item"><span class="legend-dot dot-allreduce"></span> Ring-AllReduce (morado)</span>
-          <span class="legend-item"><span class="legend-dot dot-stall"></span> Stall de Sincronización (rojo)</span>
-          <span class="legend-hint">💡 Rueda de ratón para Zoom | Arrastra para Panorámica horizontal | Pasa el cursor para detalles</span>
+          <span class="scrubber-label">Línea temporal:</span>
+          <input id="chronogram-scrubber" type="range" min="0" max="1000" value="0" class="slider-control" />
+          <span id="chrono-scrubber-pos" class="scrubber-pos-text mono">0 c</span>
         </div>
       </div>
 
-      <!-- Sub-vista B: Visualizador de Paquetes NoC en Vuelo -->
-      <div id="subview-packets-container" class="timeline-container-card hidden">
+      <!-- SUBVISTA B: PAQUETES NOC -->
+      <div id="subview-packets-container" class="card timeline-container-card hidden">
         <div class="timeline-toolbar">
           <div class="toolbar-left">
-            <span class="toolbar-label">Régimen Congestión:</span>
-            <div class="btn-group">
-              <button id="btn-regime-free" class="btn-sm">Fase Libre</button>
-              <button id="btn-regime-medium" class="btn-sm">Congestión Media (P50)</button>
-              <button id="btn-regime-critical" class="btn-sm">Congestión Crítica (Pico)</button>
+            <div class="toolbar-group">
+              <span class="toolbar-label">Régimen:</span>
+              <button id="btn-regime-free" class="btn-secondary btn-sm" type="button">Libre (Mín. Cola)</button>
+              <button id="btn-regime-medium" class="btn-secondary btn-sm" type="button">Medio (Mediana)</button>
+              <button id="btn-regime-critical" class="btn-danger btn-sm" type="button">Crítico (Peor Cola)</button>
             </div>
-            <div class="limit-selector">
-              <label for="packets-limit-select">Paquetes:</label>
+            <div class="toolbar-group limit-selector">
+              <span class="toolbar-label">Paquetes:</span>
               <select id="packets-limit-select" class="form-control select-sm">
                 <option value="50">50</option>
                 <option value="100" selected>100</option>
@@ -438,344 +412,263 @@
             </div>
           </div>
           <div class="toolbar-right">
-            <span id="packets-page-info" class="window-info-text">Mostrando paquetes --</span>
+            <span id="packets-page-info" class="window-info-text mono">Mostrando 0 paquetes</span>
           </div>
         </div>
 
-        <!-- Canvas Wrapper & Tooltip -->
+        <div class="canvas-legend">
+          <span class="legend-item"><i class="legend-dot dot-queue"></i> Cola NIC (Ready → Inyección)</span>
+          <span class="legend-item"><i class="legend-dot dot-flight"></i> Vuelo NoC (Inyección → Entrega)</span>
+          <span class="legend-hint">Pasa el cursor sobre un paquete para ver ID, capa, ruta y desglose de latencia.</span>
+        </div>
+
         <div class="canvas-wrapper">
           <canvas id="packets-canvas" height="480"></canvas>
           <div id="packets-tooltip" class="timeline-tooltip hidden"></div>
         </div>
 
-        <!-- Scrubber Slider -->
         <div class="scrubber-row">
-          <span class="scrubber-label">Desplazamiento PID:</span>
-          <input type="range" id="packets-scrubber" min="0" max="1000" value="0" class="slider-control">
-          <span id="packets-scrubber-pos" class="scrubber-pos-text">PID #0</span>
-        </div>
-
-        <div class="canvas-legend">
-          <span class="legend-item"><span class="legend-dot dot-queue"></span> Retardo en Cola NIC (naranja)</span>
-          <span class="legend-item"><span class="legend-dot dot-flight"></span> Travesía NoC / Vuelo (azul)</span>
-          <span class="legend-hint">💡 Cada barra representa el ciclo de vida completo de un paquete (Creación ➔ Inyección ➔ Recepción)</span>
+          <span class="scrubber-label">Ventana de paquetes:</span>
+          <input id="packets-scrubber" type="range" min="0" max="1000" value="0" class="slider-control" />
+          <span id="packets-scrubber-pos" class="scrubber-pos-text mono">0%</span>
         </div>
       </div>
 
-      <!-- Sub-vista C: Visualizador Híbrido (Split-Screen Sincronizado) -->
-      <div id="subview-hybrid-container" class="timeline-container-card hidden">
+      <!-- SUBVISTA C: VISUALIZADOR HÍBRIDO SPLIT -->
+      <div id="subview-hybrid-container" class="card timeline-container-card hidden">
         <div class="timeline-toolbar">
           <div class="toolbar-left">
-            <span class="toolbar-label">Ventana Sincronizada:</span>
-            <div class="btn-group">
-              <button class="btn-hybrid-preset btn-sm" data-preset="10">10 µs</button>
-              <button class="btn-hybrid-preset btn-sm active" data-preset="20">20 µs</button>
-              <button class="btn-hybrid-preset btn-sm" data-preset="50">50 µs</button>
-              <button class="btn-hybrid-preset btn-sm" data-preset="100">100 µs</button>
-              <button class="btn-hybrid-preset btn-sm" data-preset="250">250 µs</button>
-              <button class="btn-hybrid-preset btn-sm" data-preset="all">Total</button>
+            <div class="toolbar-group">
+              <span class="toolbar-label">Ventana Síncrona:</span>
+              <button class="btn-hybrid-preset" data-preset="10" type="button">10k c</button>
+              <button class="btn-hybrid-preset active" data-preset="20" type="button">20k c</button>
+              <button class="btn-hybrid-preset" data-preset="50" type="button">50k c</button>
+              <button class="btn-hybrid-preset" data-preset="100" type="button">100k c</button>
+              <button class="btn-hybrid-preset" data-preset="250" type="button">250k c</button>
+              <button class="btn-hybrid-preset" data-preset="all" type="button">Todo</button>
             </div>
-            <div class="btn-group zoom-group">
-              <button id="btn-hybrid-zoom-in" class="btn-sm" title="Acercar (Zoom In)">➕</button>
-              <button id="btn-hybrid-zoom-out" class="btn-sm" title="Alejar (Zoom Out)">➖</button>
-              <button id="btn-hybrid-zoom-reset" class="btn-sm" title="Restablecer">↺</button>
+            <div class="toolbar-group">
+              <button id="btn-hybrid-zoom-in" class="btn-secondary btn-sm" type="button">Zoom +</button>
+              <button id="btn-hybrid-zoom-out" class="btn-secondary btn-sm" type="button">Zoom -</button>
+              <button id="btn-hybrid-zoom-reset" class="btn-outline btn-sm" type="button">Reset</button>
             </div>
-            <span id="hybrid-packet-badge" class="badge-pill badge-info">0 paquetes en ventana</span>
           </div>
           <div class="toolbar-right">
-            <span id="hybrid-window-info" class="window-info-text">Ventana: -- µs</span>
+            <span id="hybrid-window-info" class="window-info-text mono">Ventana: --</span>
+            <span id="hybrid-packet-badge" class="badge badge-info">0 paquetes</span>
           </div>
-        </div>
-
-        <!-- Unified Scrollable Hybrid Container: Bounded Height with Single Shared Vertical Scrollbar -->
-        <div id="hybrid-unified-scroll" class="hybrid-unified-scroll">
-          <!-- Columna Izquierda: Cronograma GPU (Sticky) -->
-          <div id="hybrid-left-pane" class="hybrid-left-pane">
-            <div class="split-pane-header">
-              <span class="split-pane-title">📊 Cronograma de Ejecución GPU (0..N-1)</span>
-              <span class="split-pane-sub">Cómputo GPU y Colectivas</span>
-            </div>
-            <canvas id="hybrid-chronogram-canvas" class="hybrid-chrono-canvas" height="602"></canvas>
-          </div>
-
-          <!-- Columna Derecha: Paquetes NoC en Vuelo (Virtualizado) -->
-          <div id="hybrid-right-pane" class="hybrid-right-pane">
-            <div id="hybrid-packets-sticky-header" class="hybrid-packets-sticky-header">
-              <canvas id="hybrid-packets-header-canvas" height="36"></canvas>
-              <span id="hybrid-packets-visible-info" class="hybrid-packets-visible-pill">Mostrando paquetes 0 de 0</span>
-            </div>
-            <div id="hybrid-packets-spacer" class="hybrid-packets-spacer">
-              <canvas id="hybrid-packets-canvas" class="hybrid-packets-viewport-canvas" height="602"></canvas>
-            </div>
-          </div>
-        </div>
-
-        <!-- Shared Tooltip (Fixed Overlay) -->
-        <div id="hybrid-tooltip" class="timeline-tooltip hidden"></div>
-
-        <!-- Unified Scrubber Slider -->
-        <div class="scrubber-row">
-          <span class="scrubber-label">Navegación Temporal Unificada:</span>
-          <input type="range" id="hybrid-scrubber" min="0" max="1000" value="0" class="slider-control">
-          <span id="hybrid-scrubber-pos" class="scrubber-pos-text">0.00 µs</span>
         </div>
 
         <div class="canvas-legend">
-          <span class="legend-item"><span class="legend-dot dot-calc"></span> Cómputo</span>
-          <span class="legend-item"><span class="legend-dot dot-scatter"></span> MoE Scatter</span>
-          <span class="legend-item"><span class="legend-dot dot-gather"></span> MoE Gather</span>
-          <span class="legend-item"><span class="legend-dot dot-allreduce"></span> AllReduce</span>
-          <span class="legend-item"><span class="legend-dot dot-stall"></span> Stall</span>
-          <span class="legend-item"><span class="legend-dot dot-queue"></span> Cola NIC</span>
-          <span class="legend-item"><span class="legend-dot dot-flight"></span> Vuelo NoC</span>
-          <span class="legend-hint">💡 Cursor vertical sincronizado | Zoom y desplazamiento acoplados en tiempo real</span>
+          <span class="legend-item"><i class="legend-dot dot-calc"></i> Cómputo</span>
+          <span class="legend-item"><i class="legend-dot dot-scatter"></i> Scatter</span>
+          <span class="legend-item"><i class="legend-dot dot-gather"></i> Gather</span>
+          <span class="legend-item"><i class="legend-dot dot-allreduce"></i> AllReduce</span>
+          <span class="legend-item"><i class="legend-dot dot-stall"></i> Stall</span>
+          <span class="legend-item"><i class="legend-dot dot-queue"></i> Cola NIC</span>
+          <span class="legend-item"><i class="legend-dot dot-flight"></i> Vuelo NoC</span>
+          <span class="legend-hint">Panel 50/50 síncrono con scroll vertical virtualizado y crosshair X común.</span>
+        </div>
+
+        <div class="canvas-wrapper">
+          <div id="hybrid-unified-scroll" class="hybrid-unified-scroll">
+            <div class="hybrid-left-pane">
+              <div class="split-pane-header">
+                <span class="split-pane-title">Cronograma GPU</span>
+                <span class="split-pane-sub">Estados por rango</span>
+              </div>
+              <canvas id="hybrid-chronogram-canvas" class="hybrid-chrono-canvas" height="602"></canvas>
+            </div>
+
+            <div class="hybrid-right-pane">
+              <div class="hybrid-packets-sticky-header">
+                <div class="split-pane-header">
+                  <span class="split-pane-title">Paquetes NoC en Vuelo</span>
+                  <span id="hybrid-packets-visible-info" class="hybrid-packets-visible-pill mono">0 paquetes</span>
+                </div>
+                <canvas id="hybrid-packets-header-canvas" height="36"></canvas>
+              </div>
+              <div id="hybrid-packets-spacer" class="hybrid-packets-spacer">
+                <canvas id="hybrid-packets-canvas" class="hybrid-packets-viewport-canvas" height="602"></canvas>
+              </div>
+            </div>
+          </div>
+          <div id="hybrid-tooltip" class="timeline-tooltip hidden"></div>
+        </div>
+
+        <div class="scrubber-row">
+          <span class="scrubber-label">Navegación temporal:</span>
+          <input id="hybrid-scrubber" type="range" min="0" max="1000" value="0" class="slider-control" />
+          <span id="hybrid-scrubber-pos" class="scrubber-pos-text mono">0 c</span>
         </div>
       </div>
-
     </section>
 
-    <!-- PESTAÑA 3: HISTORIAL Y COMPARATIVA (FASE 3) -->
+    <!-- ==================== PESTAÑA 3: HISTORIAL Y COMPARATIVA ==================== -->
     <section id="tab-history" class="tab-pane">
-      <!-- Panel Superior: Gestor de Simulaciones Guardadas -->
       <div class="card history-manager-card">
         <div class="card-header">
-          <div class="card-icon">📂</div>
-          <div>
-            <h2>Gestor de Historial de Simulaciones</h2>
-            <p class="card-subtitle">Exploración, catalogación y carga directa en los visores interactivos de la Pestaña 2</p>
+          <div class="card-header-left">
+            <h2>Catálogo de Simulaciones</h2>
+          </div>
+          <div class="history-toolbar">
+            <select id="history-filter-model" class="form-control select-sm">
+              <option value="all">Todos los Modelos</option>
+              <option value="mixtral">Mixtral 8x7B</option>
+              <option value="deepseekV3">DeepSeek-V3</option>
+              <option value="llama">LLaMA</option>
+            </select>
+            <select id="history-filter-topo" class="form-control select-sm">
+              <option value="all">Todas las Topologías</option>
+              <option value="torus">Torus</option>
+              <option value="mesh">Mesh</option>
+              <option value="ring">Ring</option>
+            </select>
+            <div class="search-group">
+              <input id="history-search-input" type="text" class="form-control input-sm" placeholder="Buscar simulación o etiqueta..." />
+            </div>
+            <button id="btn-refresh-history" class="btn-secondary btn-sm" type="button">Actualizar</button>
           </div>
         </div>
 
-        <div class="card-body">
-          <!-- Barra de Filtros y Búsqueda -->
-          <div class="history-toolbar">
-            <div class="toolbar-group">
-              <label for="history-filter-model">Modelo:</label>
-              <select id="history-filter-model" class="form-control select-sm">
-                <option value="all" selected>Todos los Modelos</option>
-                <option value="mixtral">Mixtral 8x7B</option>
-                <option value="deepseekV3">DeepSeek-V3</option>
-                <option value="llama">LLaMA</option>
-              </select>
-            </div>
-
-            <div class="toolbar-group">
-              <label for="history-filter-topo">Topología:</label>
-              <select id="history-filter-topo" class="form-control select-sm">
-                <option value="all" selected>Todas las Topologías</option>
-                <option value="torus">Torus</option>
-                <option value="mesh">Mesh</option>
-                <option value="ring">Ring</option>
-              </select>
-            </div>
-
-            <div class="toolbar-group search-group">
-              <label for="history-search-input">Búsqueda:</label>
-              <input type="text" id="history-search-input" class="form-control input-sm" placeholder="Buscar por carpeta, etiqueta o hiperparámetro...">
-            </div>
-
-            <div class="toolbar-actions">
-              <button id="btn-refresh-history" class="btn-sm" title="Refrescar catálogo">🔄 Actualizar Lista</button>
-            </div>
+        <div class="history-selection-bar">
+          <div class="selection-tools">
+            <button id="btn-select-all-history" class="btn-outline btn-sm" type="button">Seleccionar Todas</button>
+            <button id="btn-deselect-all-history" class="btn-outline btn-sm" type="button">Limpiar Selección</button>
+            <span id="history-selected-count" class="metric-tag mono">0 seleccionadas</span>
           </div>
+        </div>
 
-          <!-- Barra de Selección Masiva -->
-          <div class="history-selection-bar">
-            <div class="selection-status">
-              <span id="history-selected-count" class="badge-pill badge-info">0 simulaciones seleccionadas</span>
-            </div>
-            <div class="selection-tools">
-              <button id="btn-select-all-history" class="btn-link-sm">Seleccionar todas visibles</button>
-              <span class="divider-dot">•</span>
-              <button id="btn-deselect-all-history" class="btn-link-sm">Deseleccionar todas</button>
-            </div>
-          </div>
-
-          <!-- Tabla Interactiva de Simulaciones -->
-          <div class="table-responsive history-table-wrapper">
-            <table id="history-table" class="data-table">
-              <thead>
-                <tr>
-                  <th class="th-chk"><input type="checkbox" id="chk-select-all-history" title="Seleccionar todas las visibles"></th>
-                  <th class="th-folder">Carpeta y Etiqueta</th>
-                  <th class="th-model">Modelo</th>
-                  <th class="th-topo">Topología / GPUs</th>
-                  <th class="th-params">Hiperparámetros</th>
-                  <th class="th-date">Fecha Registro</th>
-                  <th class="th-actions">Acciones</th>
-                </tr>
-              </thead>
-              <tbody id="history-table-body">
-                <tr>
-                  <td colspan="7" class="table-empty-row">Cargando catálogo de simulaciones...</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th class="th-chk"><input id="chk-select-all-history" type="checkbox" title="Seleccionar todas" /></th>
+                <th>Simulación</th>
+                <th>Modelo</th>
+                <th>Topología</th>
+                <th>Carga / Skew</th>
+                <th>Fecha</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="history-table-body">
+              <tr>
+                <td colspan="7" class="table-empty-row">Cargando catálogo...</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <!-- Panel Inferior: Comparador Multi-Simulación Arbitrario -->
       <div class="card comparison-manager-card">
         <div class="card-header">
-          <div class="card-icon">📊</div>
-          <div>
-            <h2>Comparador Multi-Simulación Arbitrario</h2>
-            <p class="card-subtitle">Análisis comparativo macroscópico y microarquitectural de red con generación de figuras científicas</p>
+          <div class="card-header-left">
+            <h2>Análisis Comparativo</h2>
+          </div>
+          <div class="comparison-controls-bar">
+            <label class="checkbox-label-sm">
+              <input id="chk-semilog-saturation" type="checkbox" checked />
+              <span>Escala Semi-Log Saturación</span>
+            </label>
+            <button id="btn-run-comparison" class="btn-primary btn-sm" type="button" disabled>
+              <span id="btn-run-comparison-text">Comparar Seleccionadas</span>
+            </button>
+            <button id="btn-export-csv" class="btn-outline btn-sm" type="button" disabled>Exportar CSV</button>
+            <span id="comparison-status-tag" class="badge badge-neutral">Sin ejecutar</span>
           </div>
         </div>
 
         <div class="card-body">
-          <!-- Barra de Control de Comparativa -->
-          <div class="comparison-controls-bar">
-            <div class="controls-left">
-              <button id="btn-run-comparison" class="btn-primary" disabled>
-                <span class="btn-icon">📊</span>
-                <span id="btn-run-comparison-text">Generar Comparativa (0 seleccionadas)</span>
-              </button>
-              <label class="checkbox-label-sm">
-                <input type="checkbox" id="chk-semilog-saturation">
-                <span>Escala Semilogarítmica (Eje Y Saturación)</span>
-              </label>
-            </div>
-            <div class="controls-right">
-              <button id="btn-export-csv" class="btn-sm btn-outline" disabled title="Descargar datos tabulares en formato CSV">
-                <span>⬇️</span>
-                <span>Exportar Tabla CSV</span>
-              </button>
-              <span id="comparison-status-tag" class="metric-tag hidden">Generando gráficas...</span>
-            </div>
+          <div id="comparison-placeholder" class="placeholder-box">
+            Selecciona al menos 1 simulación de la tabla superior y pulsa <strong>Comparar Seleccionadas</strong>.
           </div>
 
-          <!-- Área de Resultados de Comparativa -->
-          <div id="comparison-results-area">
-            <div id="comparison-placeholder" class="placeholder-box">
-              <p><strong>Ninguna comparativa activa</strong></p>
-              <p>Selecciona una o más simulaciones en la tabla superior mediante los <em>checkboxes</em> y haz clic en <strong>"Generar Comparativa"</strong> para calcular la tabla numérica y las 3 gráficas científicas.</p>
+          <div id="comparison-content" class="hidden">
+            <div class="comparison-section">
+              <div class="section-title-row">
+                <h3>Métricas por Simulación</h3>
+                <span class="section-hint">Paridad numérica con <code>analyze_traces.py</code></span>
+              </div>
+              <div class="table-responsive">
+                <table id="comparison-metrics-table" class="data-table table-comparison">
+                  <thead>
+                    <tr>
+                      <th>Simulación / Etiqueta</th>
+                      <th>Modelo</th>
+                      <th>Topología</th>
+                      <th>GPUs</th>
+                      <th>Wall-Clock</th>
+                      <th>Cómputo</th>
+                      <th>Tránsito NoC</th>
+                      <th>Stalls Barrera</th>
+                      <th>Scatter</th>
+                      <th>Gather</th>
+                      <th>AllReduce</th>
+                      <th>Tasa Inyección (&lambda;)</th>
+                      <th>Latencia Flit</th>
+                      <th>Latencia Paquete</th>
+                      <th>Total Paquetes</th>
+                    </tr>
+                  </thead>
+                  <tbody id="comparison-metrics-body"></tbody>
+                </table>
+              </div>
             </div>
 
-            <div id="comparison-content" class="comparison-content hidden">
-              <!-- Sección A: Tabla Comparativa Numérica -->
-              <div class="comparison-section">
-                <div class="section-title-row">
-                  <h3>📋 Métricas Numéricas Comparadas (Última Iteración / Steady-State)</h3>
-                  <span class="section-hint">Valores medios por dispositivo normalizados</span>
+            <div class="comparison-gallery-grid">
+              <div class="chart-card">
+                <div class="chart-header">
+                  <span class="chart-title">Anatomía de Tiempo de Ejecución</span>
+                  <button class="btn-outline btn-sm btn-download-chart" data-chart="anatomia" type="button">Descargar PNG</button>
                 </div>
-                <div class="table-responsive">
-                  <table id="comparison-metrics-table" class="data-table table-comparison">
-                    <thead>
-                      <tr>
-                        <th>Simulación / Etiqueta</th>
-                        <th>Modelo</th>
-                        <th>Topología</th>
-                        <th>GPUs</th>
-                        <th>Wall-Clock</th>
-                        <th>Cómputo</th>
-                        <th>Tránsito NoC</th>
-                        <th>Stalls Barrera</th>
-                        <th>Scatter</th>
-                        <th>Gather</th>
-                        <th>AllReduce</th>
-                        <th>Tasa Inyección (&lambda;)</th>
-                        <th>Latencia Flit</th>
-                        <th>Latencia Paquete</th>
-                        <th>Total Paquetes</th>
-                      </tr>
-                    </thead>
-                    <tbody id="comparison-metrics-body">
-                      <!-- Filas inyectadas dinámicamente -->
-                    </tbody>
-                  </table>
+                <div class="chart-img-wrapper">
+                  <img id="chart-img-anatomia" class="chart-img" alt="Anatomía del tiempo" />
                 </div>
               </div>
 
-              <!-- Sección B: Galería de Gráficas Científicas -->
-              <div class="comparison-section">
-                <div class="section-title-row">
-                  <h3>📈 Figuras Científicas Comparativas</h3>
-                  <span class="section-hint">Generadas en memoria y listas para descarga individual</span>
+              <div class="chart-card">
+                <div class="chart-header">
+                  <span class="chart-title">Desglose por Primitiva Colectiva</span>
+                  <button class="btn-outline btn-sm btn-download-chart" data-chart="primitivas" type="button">Descargar PNG</button>
                 </div>
-
-                <div class="comparison-gallery-grid">
-                  <!-- Gráfica 1: Anatomía de Latencia -->
-                  <div class="chart-card">
-                    <div class="chart-header">
-                      <div class="chart-title">
-                        <strong>1. Anatomía de Latencia</strong>
-                        <span class="chart-sub">Cómputo vs. Tránsito de Red vs. Stalls de Sincronización</span>
-                      </div>
-                      <button class="btn-sm btn-download-chart" data-chart="anatomia" title="Descargar figura en PNG de alta resolución">⬇️ Descargar PNG</button>
-                    </div>
-                    <div class="chart-img-wrapper">
-                      <img id="chart-img-anatomia" src="" alt="Anatomía de Latencia" class="chart-img">
-                    </div>
-                  </div>
-
-                  <!-- Gráfica 2: Desglose Primitivas MoE -->
-                  <div class="chart-card">
-                    <div class="chart-header">
-                      <div class="chart-title">
-                        <strong>2. Desglose de Primitivas Colectivas</strong>
-                        <span class="chart-sub">MoE Scatter vs. MoE Gather vs. Ring-AllReduce</span>
-                      </div>
-                      <button class="btn-sm btn-download-chart" data-chart="primitivas" title="Descargar figura en PNG de alta resolución">⬇️ Descargar PNG</button>
-                    </div>
-                    <div class="chart-img-wrapper">
-                      <img id="chart-img-primitivas" src="" alt="Desglose Primitivas MoE" class="chart-img">
-                    </div>
-                  </div>
-
-                  <!-- Gráfica 3: Curva de Saturación de Red -->
-                  <div class="chart-card full-width-chart">
-                    <div class="chart-header">
-                      <div class="chart-title">
-                        <strong>3. Curva de Saturación de Red NoC (BookSim2)</strong>
-                        <span class="chart-sub">Latencia Media de Flit vs. Tasa Real de Inyección &lambda; (flits/ciclo/nodo)</span>
-                      </div>
-                      <button id="btn-download-saturacion" class="btn-sm btn-download-chart" data-chart="saturacion" title="Descargar figura en PNG de alta resolución">⬇️ Descargar PNG</button>
-                    </div>
-                    <div class="chart-img-wrapper">
-                      <img id="chart-img-saturacion" src="" alt="Curva de Saturación NoC" class="chart-img">
-                      <div id="saturacion-empty-notice" class="placeholder-box hidden">
-                        <p>ℹ️ Ninguna de las simulaciones seleccionadas dispone de archivo <code>packet_tracking_debug.csv</code>.</p>
-                        <p>Para generar la curva de saturación con nubes de dispersión, asegúrate de haber activado <code>SIM_DEBUG_PIDS="1"</code> en la simulación.</p>
-                      </div>
-                    </div>
-                  </div>
+                <div class="chart-img-wrapper">
+                  <img id="chart-img-primitivas" class="chart-img" alt="Desglose de primitivas" />
                 </div>
               </div>
 
+              <div class="chart-card full-width-chart">
+                <div class="chart-header">
+                  <span class="chart-title">Curva de Saturación NoC (λ Activa vs Latencia)</span>
+                  <button class="btn-outline btn-sm btn-download-chart" data-chart="saturacion" type="button">Descargar PNG</button>
+                </div>
+                <div class="chart-img-wrapper">
+                  <img id="chart-img-saturacion" class="chart-img" alt="Curva de saturación NoC" />
+                  <div id="saturacion-empty-notice" class="placeholder-box hidden">
+                    No hay trazas <code>packet_tracking_debug.csv</code> disponibles en las simulaciones seleccionadas.
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- PESTAÑA 4: TOPOLOGÍA NOC Y ARQUITECTURA -->
+    <!-- ==================== PESTAÑA 4: TOPOLOGÍA NOC Y ARQUITECTURA ==================== -->
     <section id="tab-topology" class="tab-pane">
-      
-      <!-- Barra Superior de Control de la Pestaña 4 -->
       <div class="card topo-control-card">
         <div class="topo-toolbar">
           <div class="topo-toolbar-left">
-            <div class="topo-target-badge">
-              <span class="label">Simulación activa:</span>
-              <strong id="topo-sim-label">(Ninguna cargada - Modo Vista Previa)</strong>
-            </div>
-            <button id="btn-topo-sync-preview" class="btn-secondary btn-sm" title="Proyecta los parámetros seleccionados en la Pestaña 1">
-              🔄 Vista Previa (Config Pestaña 1)
-            </button>
-            <button id="btn-topo-load-active" class="btn-primary btn-sm" title="Carga la simulación activa de la Pestaña 2">
-              📊 Cargar Simulación Activa
-            </button>
+            <span id="topo-sim-label" class="topo-target-badge">Modo: Vista Previa</span>
+            <button id="btn-topo-sync-preview" class="btn-secondary btn-sm" type="button">Sincronizar con Config</button>
+            <button id="btn-topo-load-active" class="btn-primary btn-sm" type="button">Cargar Simulación Activa</button>
           </div>
-
           <div class="topo-toolbar-right">
-            <!-- Métrica del Mapa de Calor -->
             <div class="topo-control-group">
-              <label for="topo-metric-select">Métrica Heatmap:</label>
-              <select id="topo-metric-select" class="form-control form-control-sm">
-                <option value="rx_share" selected>Tráfico Recibido (% RX - In-Cast Hotspots)</option>
+              <label for="topo-metric-select">Métrica:</label>
+              <select id="topo-metric-select" class="form-control select-sm">
+                <option value="rx_share">Tráfico Recibido (% RX - In-Cast Hotspots)</option>
                 <option value="tx_share">Tráfico Emitido (% TX)</option>
                 <option value="rx_pkts">Volumen Total RX (Paquetes)</option>
                 <option value="tx_pkts">Volumen Total TX (Paquetes)</option>
@@ -784,294 +677,237 @@
                 <option value="stall_time">Tiempo de Bloqueo (Stalls BSP)</option>
               </select>
             </div>
-
-            <!-- Filtro de Colectiva -->
             <div class="topo-control-group">
-              <label for="topo-op-filter">Fase Colectiva:</label>
-              <select id="topo-op-filter" class="form-control form-control-sm">
-                <option value="all" selected>Todas las Colectivas</option>
+              <label for="topo-op-filter">Colectiva:</label>
+              <select id="topo-op-filter" class="form-control select-sm">
+                <option value="all">Todas las Colectivas</option>
                 <option value="Scatter">MoE Scatter (Tokens a Expertos)</option>
                 <option value="Gather">MoE Gather (Retorno de Activaciones)</option>
                 <option value="AllReduce">Ring-AllReduce (Capas Densas / TP)</option>
               </select>
             </div>
-
-            <!-- Filtro de Iteración -->
             <div class="topo-control-group">
-              <label for="topo-iter-select">Iteración:</label>
-              <select id="topo-iter-select" class="form-control form-control-sm">
-                <option value="last" selected>Última Iteración (Steady-State)</option>
+              <label for="topo-iter-select">Ventana:</label>
+              <select id="topo-iter-select" class="form-control select-sm">
+                <option value="last">Última Iteración (Steady-State)</option>
                 <option value="all">Simulación Completa</option>
               </select>
             </div>
-
-            <!-- Checkboxes de Flujos y Etiquetas -->
             <div class="topo-toggles">
-              <label class="toggle-label" title="Superpone aristas dirigidas ponderadas por volumen">
-                <input type="checkbox" id="topo-toggle-flows" checked>
-                <span>Flujos (Src ➔ Dst)</span>
-              </label>
-              <label class="toggle-label" title="Muestra etiquetas de latencia de enlace (1c, 2c wrap)">
-                <input type="checkbox" id="topo-toggle-labels" checked>
-                <span>Latencias Enlaces</span>
-              </label>
+              <label class="toggle-label"><input id="topo-toggle-flows" type="checkbox" checked /><span>Flujos</span></label>
+              <label class="toggle-label"><input id="topo-toggle-labels" type="checkbox" checked /><span>Etiquetas</span></label>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- Layout Principal: 70% Mapa Topológico / 30% Inspector de Nodo -->
       <div class="topo-main-grid">
-        
-        <!-- Panel Izquierdo: Lienzo Topológico Vectorial -->
         <div class="card topo-canvas-card">
-          <div class="card-header topo-canvas-header">
-            <div>
-              <h3 id="topo-graph-title">Grafo de Red NoC y Mapa de Calor</h3>
-              <p id="topo-graph-sub" class="card-subtitle">Estructura física de routers y distribución de carga en tiempo real</p>
+          <div class="topo-canvas-header">
+            <div class="card-header-left">
+              <h3 id="topo-graph-title">Mapa Topológico NoC</h3>
+              <span id="topo-graph-sub" class="section-hint">Topología y heatmap por nodo/enlace</span>
             </div>
-            <div id="topo-meta-tags" class="topo-meta-tags">
-              <!-- Píldoras informativas (Topología, Nodos, VCs, etc.) -->
-            </div>
+            <div id="topo-meta-tags" class="topo-meta-tags"></div>
           </div>
-          <div class="card-body topo-canvas-body">
-            <div id="topology-canvas-wrapper" class="topology-canvas-wrapper">
+          <div class="topo-canvas-body">
+            <div class="topology-canvas-wrapper">
               <canvas id="topology-canvas"></canvas>
               <div id="topology-tooltip" class="timeline-tooltip hidden"></div>
             </div>
           </div>
         </div>
 
-        <!-- Panel Derecho: Inspector Microarquitectural de Nodo -->
         <div class="card topo-inspector-card">
           <div class="card-header">
-            <div class="card-icon">🔍</div>
-            <div>
-              <h3 id="inspector-node-title">Inspector de Nodo</h3>
-              <p class="card-subtitle">Ficha microarquitectural y desglose de flujos</p>
+            <div class="card-header-left">
+              <h2>Inspector de Nodo</h2>
             </div>
+            <span id="inspector-node-title" class="badge badge-info">Global</span>
           </div>
-          <div class="card-body">
-            <div id="inspector-node-content">
-              <div class="inspector-prompt">
-                <p>Haz clic o pasa el ratón sobre cualquier nodo GPU/Router en el mapa para inspeccionar sus métricas de tráfico, cola NIC y flujos de comunicación.</p>
-              </div>
+          <div id="inspector-node-content" class="node-inspector-content">
+            <div class="inspector-prompt">
+              Haz clic sobre cualquier GPU del grafo para inspeccionar su carga RX/TX, retardo en cola, stalls BSP y principales flujos Src → Dst.
             </div>
           </div>
         </div>
-
       </div>
 
-      <!-- Sección Inferior: Inspector Comparativo de Arquitecturas Transformer -->
       <div class="card topo-models-card">
         <div class="card-header">
-          <div class="card-icon">⚡</div>
-          <div>
-            <h3>Inspector Comparativo de Modelos LLM (Flujo Interno de Capa y Huella en Red)</h3>
-            <p class="card-subtitle">Diferencias clave entre Mixtral 8x7B (Sparse MoE), DeepSeek-V3 (Fine-Grained MoE + MLA) y LLaMA (Denso Baseline)</p>
+          <div class="card-header-left">
+            <h2>Arquitectura Analítica de Modelos LLM</h2>
           </div>
+          <span class="badge badge-neutral">Reference Specs</span>
         </div>
-        <div class="card-body">
-          <div class="transformer-inspector-grid">
-            
-            <!-- Tarjeta 1: Mixtral 8x7B -->
-            <div class="transformer-card">
-              <div class="transformer-header">
-                <span class="badge badge-calc">Mixtral 8x7B</span>
-                <span class="transformer-tag">Sparse MoE (Top-2)</span>
+
+        <div class="card-body transformer-inspector-grid">
+          <div class="transformer-card">
+            <div class="transformer-header">
+              <h3>Mixtral 8x7B</h3>
+              <span class="transformer-tag">Sparse MoE · Top-2</span>
+            </div>
+            <div class="transformer-body">
+              <div class="transformer-kpis">
+                <span><strong>2</strong> Capas (Trazas)</span>
+                <span><strong>8</strong> Expertos</span>
+                <span><strong>d_model = 4096</strong></span>
               </div>
-              <div class="transformer-body">
-                <div class="flow-step">
-                  <span class="step-num">1</span>
-                  <div class="step-info">
-                    <strong>Atención GQA (Grouped-Query)</strong>
-                    <span>32 cabezas Q, 8 pares KV | $d_{\text{model}} = 4096$</span>
-                  </div>
+              <div class="flow-step">
+                <span class="step-num">1</span>
+                <div class="step-info">
+                  <strong>Atención (GQA 32q/8kv) + AllReduce</strong>
+                  <span>Cómputo local QKV/FlashAttn y sincronización Ring-AllReduce si TP &gt; 1.</span>
                 </div>
-                <div class="flow-step">
-                  <span class="step-num">2</span>
-                  <div class="step-info">
-                    <strong>Router Softmax Top-2</strong>
-                    <span>Elige 2 de 8 expertos por token | Desbalance si $\text{skew} > 0$</span>
-                  </div>
+              </div>
+              <div class="flow-step network-step">
+                <span class="step-num">2</span>
+                <div class="step-info">
+                  <strong>MoE Scatter (Dispatch All-to-All)</strong>
+                  <span>Despacho de activaciones hacia GPUs destino según Zipf + TP.</span>
                 </div>
-                <div class="flow-step network-step">
-                  <span class="step-num">3</span>
-                  <div class="step-info">
-                    <strong>MoE Scatter (Unicast en Red)</strong>
-                    <span>288 Bytes/token (9 flits de 32B) $\rightarrow$ GPU destino</span>
-                  </div>
+              </div>
+              <div class="flow-step">
+                <span class="step-num">3</span>
+                <div class="step-info">
+                  <strong>Expert FFN (SwiGLU, d_ff = 14336)</strong>
+                  <span>GEMM paralelo por tokens asignados (~176 MB/experto).</span>
                 </div>
-                <div class="flow-step">
-                  <span class="step-num">4</span>
-                  <div class="step-info">
-                    <strong>Expert FFN SwiGLU</strong>
-                    <span>1 experto por GPU (en clúster de 8 GPUs) | $176\text{ MB/experto}$</span>
-                  </div>
-                </div>
-                <div class="flow-step network-step">
-                  <span class="step-num">5</span>
-                  <div class="step-info">
-                    <strong>MoE Gather (Retorno Unicast)</strong>
-                    <span>Devuelve activaciones procesadas a la GPU origen</span>
-                  </div>
-                </div>
-                <div class="transformer-kpis">
-                  <div><span>Tokens Activos:</span> <strong>2 de 8 (25%)</strong></div>
-                  <div><span>Carga en Red:</span> <strong>Simétrica en Scatter/Gather</strong></div>
-                  <div><span>TP Support:</span> <strong>AllReduce en Atención ($TP>1$)</strong></div>
+              </div>
+              <div class="flow-step network-step">
+                <span class="step-num">4</span>
+                <div class="step-info">
+                  <strong>MoE Gather (Combine All-to-All)</strong>
+                  <span>Retorno ponderado de activaciones y barrera BSP de capa.</span>
                 </div>
               </div>
             </div>
+          </div>
 
-            <!-- Tarjeta 2: DeepSeek-V3 -->
-            <div class="transformer-card highlight-card">
-              <div class="transformer-header">
-                <span class="badge badge-scatter">DeepSeek-V3</span>
-                <span class="transformer-tag">Fine-Grained MoE + MLA</span>
+          <div class="transformer-card">
+            <div class="transformer-header">
+              <h3>DeepSeek-V3</h3>
+              <span class="transformer-tag">Fine-Grained MoE + MLA</span>
+            </div>
+            <div class="transformer-body">
+              <div class="transformer-kpis">
+                <span><strong>27</strong> Bloques MoE</span>
+                <span><strong>256</strong> Expertos (Top-8)</span>
+                <span><strong>d_model = 7168</strong></span>
               </div>
-              <div class="transformer-body">
-                <div class="flow-step">
-                  <span class="step-num">1</span>
-                  <div class="step-info">
-                    <strong>Atención MLA (Multi-Head Latent)</strong>
-                    <span>Compresión latente KV a 512 dim ($576\text{ B/token}$ en KV cache)</span>
-                  </div>
+              <div class="flow-step">
+                <span class="step-num">1</span>
+                <div class="step-info">
+                  <strong>Multi-Head Latent Attention (MLA)</strong>
+                  <span>Compresión de caché KV en vector latente de rango bajo (576 B/token).</span>
                 </div>
-                <div class="flow-step">
-                  <span class="step-num">2</span>
-                  <div class="step-info">
-                    <strong>Router Top-8 (256 Micro-Expertos)</strong>
-                    <span>Granularidad fina: 8 de 256 expertos enrutados</span>
-                  </div>
+              </div>
+              <div class="flow-step network-step">
+                <span class="step-num">2</span>
+                <div class="step-info">
+                  <strong>Fine-Grained MoE Scatter (Top-8 / 256)</strong>
+                  <span>Fan-out masivo hacia 256 expertos distribuidos con Shared Expert paralelo.</span>
                 </div>
-                <div class="flow-step network-step">
-                  <span class="step-num">3</span>
-                  <div class="step-info">
-                    <strong>Scatter en FP8 (Mitad de Ancho de Banda)</strong>
-                    <span>Tokens transmitidos en precisión reducida de 8 bits</span>
-                  </div>
+              </div>
+              <div class="flow-step">
+                <span class="step-num">3</span>
+                <div class="step-info">
+                  <strong>Routed + Shared Expert FFN</strong>
+                  <span>MLP fino (d_ff = 2048 por experto) ejecutado tras recepción completa.</span>
                 </div>
-                <div class="flow-step">
-                  <span class="step-num">4</span>
-                  <div class="step-info">
-                    <strong>32 Micro-Expertos/GPU + 1 Shared Expert</strong>
-                    <span>Shared Expert se evalúa localmente (cero comunicación NoC)</span>
-                  </div>
-                </div>
-                <div class="flow-step network-step">
-                  <span class="step-num">5</span>
-                  <div class="step-info">
-                    <strong>Gather en BF16 (2x Tráfico de Retorno)</strong>
-                    <span>Acumulación en 16 bits para preservar precisión numérica</span>
-                  </div>
-                </div>
-                <div class="transformer-kpis">
-                  <div><span>Tokens Activos:</span> <strong>8 de 256 (3.1%)</strong></div>
-                  <div><span>Asimetría Red:</span> <strong>Gather transmite el doble que Scatter</strong></div>
-                  <div><span>Hibridación:</span> <strong>Capas 0–2 densas, 3–59 MoE</strong></div>
+              </div>
+              <div class="flow-step network-step">
+                <span class="step-num">4</span>
+                <div class="step-info">
+                  <strong>MoE Gather y Sincronización Final</strong>
+                  <span>In-cast sensible a skew &gt; 0 y barrera BSP entre capas.</span>
                 </div>
               </div>
             </div>
+          </div>
 
-            <!-- Tarjeta 3: LLaMA (Denso) -->
-            <div class="transformer-card">
-              <div class="transformer-header">
-                <span class="badge badge-neutral">LLaMA 3</span>
-                <span class="transformer-tag">Arquitectura Densa (Baseline)</span>
+          <div class="transformer-card">
+            <div class="transformer-header">
+              <h3>LLaMA Dense</h3>
+              <span class="transformer-tag">Baseline Denso · TP / DP</span>
+            </div>
+            <div class="transformer-body">
+              <div class="transformer-kpis">
+                <span><strong>32</strong> Capas Densas</span>
+                <span><strong>0</strong> Expertos MoE</span>
+                <span><strong>d_model = 4096</strong></span>
               </div>
-              <div class="transformer-body">
-                <div class="flow-step">
-                  <span class="step-num">1</span>
-                  <div class="step-info">
-                    <strong>Atención MHA / GQA Estándar</strong>
-                    <span>Proyecciones densas $Q, K, V$ sin compresión latente</span>
-                  </div>
+              <div class="flow-step">
+                <span class="step-num">1</span>
+                <div class="step-info">
+                  <strong>Atención Multi-Cabeza + AllReduce</strong>
+                  <span>Cómputo uniforme entre rangos sin desbalanceo de enrutamiento.</span>
                 </div>
-                <div class="flow-step">
-                  <span class="step-num">2</span>
-                  <div class="step-info">
-                    <strong>Sin Enrutamiento MoE (Todos los Tokens)</strong>
-                    <span>100% de los parámetros activados en cada paso de inferencia</span>
-                  </div>
+              </div>
+              <div class="flow-step network-step">
+                <span class="step-num">2</span>
+                <div class="step-info">
+                  <strong>Ring-AllReduce (TP &gt; 1)</strong>
+                  <span>Tráfico determinista en anillo para reducción parcial de proyecciones.</span>
                 </div>
-                <div class="flow-step">
-                  <span class="step-num">3</span>
-                  <div class="step-info">
-                    <strong>FFN Denso Monolítico (SwiGLU)</strong>
-                    <span>Capa de alimentación hacia adelante masiva compartida</span>
-                  </div>
-                </div>
-                <div class="flow-step network-step">
-                  <span class="step-num">4</span>
-                  <div class="step-info">
-                    <strong>Comunicación Exclusiva por Tensor Parallelism</strong>
-                    <span>Sin Scatter ni Gather. Solo Ring-AllReduce si $TP > 1$</span>
-                  </div>
-                </div>
-                <div class="transformer-kpis">
-                  <div><span>Tokens Activos:</span> <strong>100% (Parámetros Densos)</strong></div>
-                  <div><span>Tráfico NoC:</span> <strong>0 flits MoE (Tráfico homogéneo TP)</strong></div>
-                  <div><span>Memoria KV:</span> <strong>Lineal completa según contexto</strong></div>
+              </div>
+              <div class="flow-step">
+                <span class="step-num">3</span>
+                <div class="step-info">
+                  <strong>FFN SwiGLU Denso</strong>
+                  <span>Sin despacho Scatter/Gather entre nodos; referencia pura para comparación.</span>
                 </div>
               </div>
             </div>
-
           </div>
         </div>
       </div>
-
     </section>
-
   </main>
 
-  <!-- Modal de Ayuda y Créditos -->
+  <!-- ==================== MODAL DE AYUDA Y CRÉDITOS ==================== -->
   <div id="help-modal" class="modal-overlay hidden">
     <div class="modal-card">
       <div class="modal-header">
         <div class="modal-title-row">
-          <span class="modal-icon">ℹ️</span>
-          <h3>Acerca de LLM-NoC Co-Simulation Workbench</h3>
+          <h2>LLMSimulator-ICNoC — Guía y Créditos</h2>
         </div>
-        <button id="btn-close-modal" class="modal-close-btn">&times;</button>
+        <button id="btn-close-modal" class="modal-close-btn" type="button">&times;</button>
       </div>
-
       <div class="modal-body">
         <div class="credit-section">
-          <h4>🎓 Autor y Trabajo de Fin de Máster (TFM)</h4>
-          <p><strong>Autor / Investigador:</strong> SocaDLV</p>
-          <p><strong>Repositorio Oficial:</strong> <a href="https://github.com/SocaDLV/TFM" target="_blank" rel="noopener noreferrer">https://github.com/SocaDLV/TFM</a></p>
-          <p><strong>Institución Académica:</strong> Universitat Politècnica de València (UPV)</p>
-          <p><strong>Marco Científico:</strong> Co-simulación ciclo a ciclo de inferencia distribuida de LLMs (Mixtral 8x7B, DeepSeek-V3) con modelado de red NoC a nivel de flit mediante un Oráculo BSP con Causalidad Cuádruple.</p>
+          <h3>Autoría del Trabajo Fin de Máster (TFM)</h3>
+          <p>
+            Entorno de co-simulación ciclo-precisa, parser de trazas e interfaz web desarrollados por
+            <strong><a href="https://github.com/SocaDLV/TFM" target="_blank" rel="noopener noreferrer">SocaDLV</a></strong>
+            (<a href="https://github.com/SocaDLV/TFM" target="_blank" rel="noopener noreferrer">github.com/SocaDLV/TFM</a>)
+            en el marco del Máster en Ingeniería de Computadores y Redes — <strong>Universitat Politècnica de València (UPV)</strong>.
+          </p>
         </div>
 
         <div class="credit-section">
-          <h4>🏛️ Reconocimientos y Proyectos Base</h4>
+          <h3>Motores Base Integrados</h3>
           <ul>
-            <li>
-              <strong>LLMSimulator:</strong> Desarrollado por el laboratorio <em>SCALE (Seoul National University)</em>. Proporciona el modelado computacional y de memoria GPU (Roofline, atención MLA, GQA, MoE).
-            </li>
-            <li>
-              <strong>BookSim2:</strong> Desarrollado por el <em>Stanford Concurrent VLSI Architecture Group</em> (Bill Dally et al.). Proporciona la simulación microarquitectural ciclo a ciclo del router de canales virtuales (`IQRouter`), topologías directas (Toro, Malla, AnyNet) y control de flujo por créditos.
-            </li>
+            <li><strong>LLMSimulator:</strong> Simulador de cargas de trabajo Transformer/MoE (computación HBM/FLOPS y modelado de colectivas), originalmente desarrollado por SCALE Lab (Seoul National University).</li>
+            <li><strong>BookSim2:</strong> Simulador ciclo-preciso de redes en chip (NoC) e interconexión por flits, originalmente desarrollado en Stanford University (Concurrent VLSI Architecture Group).</li>
           </ul>
         </div>
 
         <div class="credit-section">
-          <h4>💡 Innovaciones del Co-Simulador</h4>
-          <p>Integración de colectivas de red (MoEScatter, MoEGather, Ring-AllReduce) en BookSim2, preservación de asincronía y causalidad temporal cuádruple, soporte para Mallas 2D asimétricas mediante AnyNet, seguimiento exhaustivo de paquetes (<code>[TRACK_PID]</code>) y trazabilidad completa de ciclo de vida.</p>
+          <h3>Paridad Matemática CLI ↔ GUI</h3>
+          <p>
+            Todas las métricas (Wall-Clock, Cómputo, Tránsito, Stalls BSP, tasa de inyección activa λ y latencia media de flit) comparten las mismas fórmulas y parsers que <code>analyze_traces.py</code>, <code>plot_cronograma.py</code> y <code>plot_packet_tracking.py</code>.
+          </p>
         </div>
       </div>
-
       <div class="modal-footer">
-        <button id="btn-modal-ok" class="btn-primary btn-sm">Cerrar</button>
+        <button id="btn-modal-ok" class="btn-primary btn-sm" type="button">Cerrar</button>
       </div>
     </div>
   </div>
 
-  <script src="timeline_canvas.js"></script>
-  <script src="topology_canvas.js"></script>
-  <script src="app.js"></script>
+  <script src="/timeline_canvas.js"></script>
+  <script src="/topology_canvas.js"></script>
+  <script src="/app.js"></script>
 </body>
 </html>
-
